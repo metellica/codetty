@@ -96,14 +96,18 @@ func (h *Hub) HandleConn(conn *websocket.Conn) {
 			}
 			sess.WriteOutput(payload)
 
-			// In fullscreen mode, forward raw output to the fullscreen writer
+			// In fullscreen mode, forward raw output to the fullscreen writer.
+			// Skip program.Send entirely — bubbletea's event loop is blocked
+			// inside tea.Exec and its msgs channel is unbuffered, so Send
+			// would block forever.
 			h.fsMu.RLock()
+			inFullscreen := h.fullscreenID != ""
 			if h.fullscreenID == sess.ID && h.fsWriter != nil {
 				h.fsWriter.Write(payload)
 			}
 			h.fsMu.RUnlock()
 
-			if h.program != nil {
+			if h.program != nil && !inFullscreen {
 				h.program.Send(ScreenUpdateMsg{ID: sess.ID, Data: payload})
 			}
 		}
