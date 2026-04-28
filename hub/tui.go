@@ -67,7 +67,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch msg.Type {
-		case tea.KeyCtrlQ:
+		case tea.KeyCtrlC, tea.KeyCtrlQ:
 			return m, tea.Quit
 		case tea.KeyTab:
 			if len(m.sessions) > 0 {
@@ -200,7 +200,8 @@ func (m *Model) gridView() string {
 				contentH = 1
 			}
 
-			content := renderScreen(sess.Screen(), contentW, contentH)
+			contentLines, _, _ := sess.RenderANSI(contentW, contentH)
+			content := strings.Join(contentLines, "\n")
 			title := fmt.Sprintf("[%d] %s", idx+1, sess.Title)
 			focused := idx == m.selected
 			if focused {
@@ -215,7 +216,7 @@ func (m *Model) gridView() string {
 
 	grid := lipgloss.JoinVertical(lipgloss.Left, rowViews...)
 	help := statusBarStyle.Width(m.width).Render(
-		fmt.Sprintf("Tab/Shift+Tab: switch  F1: fullscreen  Ctrl+Q: quit  clients: %d", n),
+		fmt.Sprintf("Tab/Shift+Tab: switch  F1: fullscreen  Ctrl+C: quit  clients: %d", n),
 	)
 	return lipgloss.JoinVertical(lipgloss.Left, grid, help)
 }
@@ -261,59 +262,19 @@ func renderPanel(title, content string, totalW, contentH int, focused bool) stri
 
 	var body strings.Builder
 	for _, l := range lines {
-		runes := []rune(l)
-		pad := innerW - len(runes)
+		visW := lipgloss.Width(l)
+		pad := innerW - visW
 		if pad < 0 {
-			l = string(runes[:innerW])
+			// Content already correct width from RenderANSI; show as-is
 			pad = 0
-		} else {
-			l = l + strings.Repeat(" ", pad)
 		}
-		body.WriteString(bc.Render("│") + l + bc.Render("│") + "\n")
+		body.WriteString(bc.Render("│") + l + strings.Repeat(" ", pad) + bc.Render("│") + "\n")
 	}
 
 	// Bottom border
 	bottom := bc.Render("╰" + strings.Repeat("─", innerW) + "╯")
 
 	return top + "\n" + body.String() + bottom
-}
-
-func renderScreen(screen string, w, h int) string {
-	lines := strings.Split(screen, "\n")
-
-	// Find last non-blank line (where content actually is)
-	lastContent := 0
-	for i, l := range lines {
-		if strings.TrimRight(l, " \x00") != "" {
-			lastContent = i
-		}
-	}
-	if lastContent+1 < len(lines) {
-		lastContent++
-	}
-
-	start := lastContent - h + 1
-	if start < 0 {
-		start = 0
-	}
-	end := start + h
-	if end > len(lines) {
-		end = len(lines)
-	}
-	lines = lines[start:end]
-
-	var sb strings.Builder
-	for i, l := range lines {
-		if i > 0 {
-			sb.WriteRune('\n')
-		}
-		runes := []rune(l)
-		if len(runes) > w {
-			runes = runes[:w]
-		}
-		sb.WriteString(string(runes))
-	}
-	return sb.String()
 }
 
 // keyToBytes converts a bubbletea KeyMsg to raw terminal bytes for PTY input.

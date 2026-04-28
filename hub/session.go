@@ -1,11 +1,21 @@
 package hub
 
 import (
+	"fmt"
 	"io"
+	"strings"
 
 	"codetty/protocol"
 
 	"github.com/hinshun/vt10x"
+)
+
+// vt10x Glyph.Mode flags (unexported in vt10x package)
+const (
+	glyphReverse   = 1 << 0
+	glyphUnderline = 1 << 1
+	glyphBold      = 1 << 2
+	glyphItalic    = 1 << 4
 )
 
 // ClientSession represents one connected terminal client.
@@ -41,6 +51,153 @@ func (s *ClientSession) WriteOutput(data []byte) {
 // vt10x.String() handles its own locking internally.
 func (s *ClientSession) Screen() string {
 	return s.term.String()
+}
+
+// RenderANSI renders the terminal screen with ANSI colors and cursor.
+// Returns exactly h lines, each of visual width w, with ANSI color codes.
+// Also returns the cursor position relative to the visible area (-1,-1 if not visible).
+func (s *ClientSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
+	s.term.Lock()
+	defer s.term.Unlock()
+
+	cols, rows := s.term.Size()
+	cursor := s.term.Cursor()
+	curVisible := s.term.CursorVisible()
+
+	// Find last non-blank row
+	lastContent := 0
+	for y := 0; y < rows; y++ {
+		blank := true
+		for x := 0; x < cols; x++ {
+			g := s.term.Cell(x, y)
+			if g.Char != 0 && g.Char != ' ' {
+				blank = false
+				break
+			}
+		}
+		if !blank {
+			lastContent = y
+		}
+	}
+	if lastContent+1 < rows {
+		lastContent++
+	}
+
+	startY := lastContent - h + 1
+	if startY < 0 {
+		startY = 0
+	}
+	endY := startY + h
+	if endY > rows {
+		endY = rows
+	}
+
+	// Cursor relative to visible area
+	curX, curY = -1, -1
+	if curVisible && cursor.Y >= startY && cursor.Y < endY {
+		curX = cursor.X
+		curY = cursor.Y - startY
+	}
+
+	lines = make([]string, h)
+	for i := 0; i < h; i++ {
+		y := startY + i
+		if y >= rows {
+			lines[i] = strings.Repeat(" ", w)
+			continue
+		}
+		lines[i] = s.renderLine(y, w, cols, curVisible && y == cursor.Y, cursor.X)
+	}
+	return lines, curX, curY
+}
+
+// renderLine renders one row of the terminal with ANSI colors.
+func (s *ClientSession) renderLine(y, w, cols int, hasCursor bool, cursorX int) string {
+	var sb strings.Builder
+	sb.Grow(w * 4) // rough estimate
+
+	var prevFG, prevBG vt10x.Color = vt10x.DefaultFG, vt10x.DefaultBG
+	var prevMode int16
+	needReset := false
+
+	for x := 0; x < w; x++ {
+		var g vt10x.Glyph
+		if x < cols {
+			g = s.term.Cell(x, y)
+		}
+		if g.Char == 0 {
+			g.Char = ' '
+		}
+
+		isCursor := hasCursor && x == cursorX
+
+		fg, bg, mode := g.FG, g.BG, g.Mode
+		if isCursor {
+			// Show cursor as reverse video
+			mode |= glyphReverse
+		}
+
+		if fg != prevFG || bg != prevBG || mode != prevMode || (needReset && (fg != vt10x.DefaultFG || bg != vt10x.DefaultBG || mode != 0)) {
+			sb.WriteString(ansiAttrs(fg, bg, mode))
+			prevFG, prevBG, prevMode = fg, bg, mode
+			needReset = fg != vt10x.DefaultFG || bg != vt10x.DefaultBG || mode != 0
+		}
+
+		sb.WriteRune(g.Char)
+	}
+
+	if needReset {
+		sb.WriteString("\033[0m")
+	}
+	return sb.String()
+}
+
+// ansiAttrs builds an SGR escape sequence for the given attributes.
+func ansiAttrs(fg, bg vt10x.Color, mode int16) string {
+	var parts []string
+	parts = append(parts, "0") // reset first
+
+	if mode&glyphBold != 0 {
+		parts = append(parts, "1")
+	}
+	if mode&glyphItalic != 0 {
+		parts = append(parts, "3")
+	}
+	if mode&glyphUnderline != 0 {
+		parts = append(parts, "4")
+	}
+	if mode&glyphReverse != 0 {
+		parts = append(parts, "7")
+	}
+
+	if fg != vt10x.DefaultFG {
+		parts = append(parts, fgColor(fg))
+	}
+	if bg != vt10x.DefaultBG {
+		parts = append(parts, bgColor(bg))
+	}
+
+	return fmt.Sprintf("\033[%sm", strings.Join(parts, ";"))
+}
+
+func fgColor(c vt10x.Color) string {
+	if c < 8 {
+		return fmt.Sprintf("%d", 30+c)
+	}
+	if c < 16 {
+		return fmt.Sprintf("%d", 90+c-8)
+	}
+	return fmt.Sprintf("38;5;%d", c)
+}
+
+func bgColor(c vt10x.Color) string {
+	if c < 8 {
+		return fmt.Sprintf("%d", 40+c)
+	}
+	if c < 16 {
+		return fmt.Sprintf("%d", 100+c-8)
+	}
+	return fmt.Sprintf("48;5;%d", c)
 }
 
 // SendInput sends keyboard input to the remote client.
