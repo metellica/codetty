@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -30,8 +31,10 @@ func main() {
 
 	// Determine terminal size
 	cols, rows := uint16(220), uint16(50)
-	if xterm.IsTerminal(int(os.Stdin.Fd())) {
-		w, h, err := xterm.GetSize(int(os.Stdin.Fd()))
+	fd := int(os.Stdin.Fd())
+	isTTY := xterm.IsTerminal(fd)
+	if isTTY {
+		w, h, err := xterm.GetSize(fd)
 		if err == nil {
 			cols, rows = uint16(w), uint16(h)
 		}
@@ -55,33 +58,60 @@ func main() {
 	doneCh := make(chan error, 1)
 	go func() { doneCh <- cmd.Wait() }()
 
+	// Local terminal: raw mode for interactive use
+	if isTTY {
+		oldState, err := xterm.MakeRaw(fd)
+		if err == nil {
+			defer xterm.Restore(fd, oldState)
+		}
+	}
+
+	// Local stdin → PTY (always, not just for TTY)
+	go func() { io.Copy(ptmx, os.Stdin) }()
+
+	// Single PTY reader → local stdout + hub channel
+	outputCh := make(chan []byte, 256)
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 {
+				os.Stdout.Write(buf[:n])
+				cp := make([]byte, n)
+				copy(cp, buf[:n])
+				select {
+				case outputCh <- cp:
+				default: // drop if hub not keeping up
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
 	// Run connection loop (reconnects on failure)
-	go connectionLoop(*serverURL, *clientID, title, cols, rows, ptmx, doneCh)
+	go connectionLoop(*serverURL, *clientID, title, cols, rows, ptmx, outputCh, doneCh)
 
 	// Wait for process exit or signal
 	select {
 	case <-sigCh:
-		log.Println("received signal, shutting down")
 	case err := <-doneCh:
 		if err != nil {
 			log.Printf("command exited: %v", err)
-		} else {
-			log.Println("command exited normally")
 		}
 	}
 }
 
-func connectionLoop(serverURL, clientID, title string, cols, rows uint16, ptmx *os.File, done <-chan error) {
+func connectionLoop(serverURL, clientID, title string, cols, rows uint16, ptmx *os.File, outputCh <-chan []byte, done <-chan error) {
 	delay := time.Second
 	maxDelay := 30 * time.Second
 
 	for {
-		err := runConnection(serverURL, clientID, title, cols, rows, ptmx, done)
+		err := runConnection(serverURL, clientID, title, cols, rows, ptmx, outputCh, done)
 		if err == nil {
 			return
 		}
-
-		log.Printf("connection lost: %v, reconnecting in %v", err, delay)
 
 		select {
 		case <-done:
@@ -96,14 +126,13 @@ func connectionLoop(serverURL, clientID, title string, cols, rows uint16, ptmx *
 	}
 }
 
-func runConnection(serverURL, clientID, title string, cols, rows uint16, ptmx *os.File, done <-chan error) error {
+func runConnection(serverURL, clientID, title string, cols, rows uint16, ptmx *os.File, outputCh <-chan []byte, done <-chan error) error {
 	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
 
-	// Register with hub
 	regMsg, err := protocol.EncodeRegister(protocol.RegisterPayload{
 		ID:    clientID,
 		Title: title,
@@ -117,24 +146,25 @@ func runConnection(serverURL, clientID, title string, cols, rows uint16, ptmx *o
 		return fmt.Errorf("send register: %w", err)
 	}
 
-	log.Printf("connected to %s as %s", serverURL, clientID)
-
 	errCh := make(chan error, 2)
+	stopCh := make(chan struct{})
+	defer close(stopCh)
 
-	// PTY output → hub
+	// Output channel → hub
 	go func() {
-		buf := make([]byte, 4096)
 		for {
-			n, err := ptmx.Read(buf)
-			if n > 0 {
-				msg := protocol.EncodeOutput(buf[:n])
+			select {
+			case data, ok := <-outputCh:
+				if !ok {
+					errCh <- nil
+					return
+				}
+				msg := protocol.EncodeOutput(data)
 				if werr := conn.WriteMessage(websocket.BinaryMessage, msg); werr != nil {
 					errCh <- fmt.Errorf("write output: %w", werr)
 					return
 				}
-			}
-			if err != nil {
-				errCh <- nil // PTY closed = clean exit
+			case <-stopCh:
 				return
 			}
 		}

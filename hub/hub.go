@@ -1,8 +1,8 @@
 package hub
 
 import (
+	"io"
 	"log"
-	"os"
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -28,6 +28,7 @@ type Hub struct {
 
 	fsMu         sync.RWMutex
 	fullscreenID string
+	fsWriter     io.Writer
 }
 
 func New() *Hub {
@@ -41,10 +42,11 @@ func (h *Hub) SetProgram(p *tea.Program) {
 }
 
 // SetFullscreen sets which session is currently displayed in fullscreen mode.
-// Pass empty string to exit fullscreen.
-func (h *Hub) SetFullscreen(id string) {
+// Pass empty string and nil writer to exit fullscreen.
+func (h *Hub) SetFullscreen(id string, w io.Writer) {
 	h.fsMu.Lock()
 	h.fullscreenID = id
+	h.fsWriter = w
 	h.fsMu.Unlock()
 }
 
@@ -94,10 +96,12 @@ func (h *Hub) HandleConn(conn *websocket.Conn) {
 			}
 			sess.WriteOutput(payload)
 
-			// In fullscreen mode, also write raw output directly to stdout
-			if h.GetFullscreenID() == sess.ID {
-				os.Stdout.Write(payload)
+			// In fullscreen mode, forward raw output to the fullscreen writer
+			h.fsMu.RLock()
+			if h.fullscreenID == sess.ID && h.fsWriter != nil {
+				h.fsWriter.Write(payload)
 			}
+			h.fsMu.RUnlock()
 
 			if h.program != nil {
 				h.program.Send(ScreenUpdateMsg{ID: sess.ID, Data: payload})

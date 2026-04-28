@@ -4,6 +4,8 @@ import (
 	"io"
 	"os"
 	"time"
+
+	xterm "golang.org/x/term"
 )
 
 // fullscreenHandler implements tea.ExecCommand. When bubbletea runs it
@@ -21,14 +23,38 @@ func (f *fullscreenHandler) SetStdout(w io.Writer) { f.stdout = w }
 func (f *fullscreenHandler) SetStderr(w io.Writer) {}
 
 // Run proxies raw input from the hub's terminal to the remote session.
-// Output is handled by Hub.HandleConn writing to os.Stdout when
-// fullscreen is active. Blocks until the user presses ESC-ESC or Ctrl+A.
+// Output is forwarded by Hub.HandleConn to the fullscreen writer.
+// Blocks until the user presses ESC-ESC or Ctrl+A.
 func (f *fullscreenHandler) Run() error {
-	// Tell the hub we're in fullscreen so HandleConn writes to stdout
-	f.hub.SetFullscreen(f.session.ID)
-	defer f.hub.SetFullscreen("")
+	stdout := f.stdout
+	if stdout == nil {
+		stdout = os.Stdout
+	}
 
-	stdin := os.Stdin
+	// Tell the hub we're in fullscreen so HandleConn forwards output here
+	f.hub.SetFullscreen(f.session.ID, stdout)
+	defer f.hub.SetFullscreen("", nil)
+
+	// Raw mode so individual keystrokes are forwarded immediately
+	fd := int(os.Stdin.Fd())
+	if xterm.IsTerminal(fd) {
+		oldState, err := xterm.MakeRaw(fd)
+		if err == nil {
+			defer xterm.Restore(fd, oldState)
+		}
+	}
+
+	// Clear screen and show current terminal content
+	stdout.Write([]byte("\033[2J\033[H"))
+	screen := f.session.Screen()
+	if screen != "" {
+		stdout.Write([]byte(screen))
+	}
+
+	stdin := f.stdin
+	if stdin == nil {
+		stdin = os.Stdin
+	}
 
 	buf := make([]byte, 4096)
 	var lastEsc time.Time
