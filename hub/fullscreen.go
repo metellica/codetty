@@ -3,6 +3,7 @@ package hub
 import (
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	xterm "golang.org/x/term"
@@ -44,11 +45,13 @@ func (f *fullscreenHandler) Run() error {
 		}
 	}
 
-	// Clear screen and show current terminal content
+	// Clear screen and show current terminal content.
+	// MakeRaw disables OPOST so \n won't translate to \r\n;
+	// replace manually for correct display.
 	stdout.Write([]byte("\033[2J\033[H"))
 	screen := f.session.Screen()
 	if screen != "" {
-		stdout.Write([]byte(screen))
+		stdout.Write([]byte(strings.ReplaceAll(screen, "\n", "\r\n")))
 	}
 
 	stdin := f.stdin
