@@ -9,21 +9,13 @@ import (
 )
 
 var (
-	panelStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240"))
-
-	focusedPanelStyle = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("86"))
-
 	titleStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("86")).Bold(true)
+			Foreground(lipgloss.Color("86")).Bold(true)
 
 	statusBarStyle = lipgloss.NewStyle().
-		Background(lipgloss.Color("235")).
-		Foreground(lipgloss.Color("250")).
-		Padding(0, 1)
+			Background(lipgloss.Color("235")).
+			Foreground(lipgloss.Color("250")).
+			Padding(0, 1)
 )
 
 // Model is the bubbletea model for the hub TUI.
@@ -65,47 +57,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case ScreenUpdateMsg:
-		// No state update needed; screen content comes from vt10x on render
+		// Re-render happens automatically; vt10x content read in View()
 
 	case exitFullscreenMsg:
 		m.fullscreen = false
-		if m.selected < len(m.sessions) {
-			panelW, panelH := m.panelSize()
-			m.sessions[m.selected].SendResize(uint16(panelW), uint16(panelH))
-		}
 
 	case tea.KeyMsg:
 		if m.fullscreen {
 			return m, nil
 		}
-		switch msg.String() {
-		case "q", "ctrl+c":
+		switch msg.Type {
+		case tea.KeyCtrlQ:
 			return m, tea.Quit
-		case "tab", "l", "right":
+		case tea.KeyTab:
 			if len(m.sessions) > 0 {
 				m.selected = (m.selected + 1) % len(m.sessions)
 			}
-		case "shift+tab", "h", "left":
+		case tea.KeyShiftTab:
 			if len(m.sessions) > 0 {
 				m.selected = (m.selected - 1 + len(m.sessions)) % len(m.sessions)
 			}
-		case "j", "down":
-			if len(m.sessions) > 0 {
-				cols := m.gridCols()
-				next := m.selected + cols
-				if next < len(m.sessions) {
-					m.selected = next
-				}
-			}
-		case "k", "up":
-			if len(m.sessions) > 0 {
-				cols := m.gridCols()
-				next := m.selected - cols
-				if next >= 0 {
-					m.selected = next
-				}
-			}
-		case "enter", "f":
+		case tea.KeyF1:
 			if len(m.sessions) > 0 {
 				m.fullscreen = true
 				sess := m.sessions[m.selected]
@@ -117,6 +89,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Exec(handler, func(err error) tea.Msg {
 					return exitFullscreenMsg{}
 				})
+			}
+		default:
+			// Forward all other keys to the selected session
+			if m.selected < len(m.sessions) {
+				raw := keyToBytes(msg)
+				if len(raw) > 0 {
+					m.sessions[m.selected].SendInput(raw)
+				}
 			}
 		}
 	}
@@ -139,6 +119,7 @@ func (m *Model) View() string {
 	return m.gridView()
 }
 
+// gridCols picks column count giving panel aspect ratio closest to 3:1.
 func (m *Model) gridCols() int {
 	n := len(m.sessions)
 	if n <= 1 {
@@ -150,7 +131,6 @@ func (m *Model) gridCols() int {
 		usableH = 1
 	}
 
-	// Pick column count that gives panel aspect ratio closest to 3:1 (horizontal)
 	bestCols := 1
 	bestDist := 999.0
 	for c := 1; c <= n; c++ {
@@ -179,17 +159,17 @@ func (m *Model) gridCols() int {
 func (m *Model) panelSize() (int, int) {
 	n := len(m.sessions)
 	if n == 0 {
-		return m.width - 4, m.height - 4
+		return m.width, m.height - 2
 	}
 	cols := m.gridCols()
 	rows := (n + cols - 1) / cols
-	panelW := (m.width / cols) - 2
-	panelH := ((m.height - 2) / rows) - 2
-	if panelW < 10 {
-		panelW = 10
+	panelW := m.width / cols
+	panelH := (m.height - 1) / rows // -1 for status bar
+	if panelW < 14 {
+		panelW = 14
 	}
-	if panelH < 3 {
-		panelH = 3
+	if panelH < 5 {
+		panelH = 5
 	}
 	return panelW, panelH
 }
@@ -206,22 +186,28 @@ func (m *Model) gridView() string {
 		for c := 0; c < cols; c++ {
 			idx := r*cols + c
 			if idx >= n {
-				colViews = append(colViews, strings.Repeat(" ", panelW+4))
+				colViews = append(colViews, strings.Repeat(" ", panelW))
 				continue
 			}
 			sess := m.sessions[idx]
-			content := renderScreen(sess.Screen(), panelW, panelH-1)
-			title := fmt.Sprintf(" [%d] %s ", idx+1, sess.Title)
-
-			style := panelStyle
-			if idx == m.selected {
-				style = focusedPanelStyle
-				title = fmt.Sprintf(" ▶ [%d] %s ", idx+1, sess.Title)
+			// Content area is inside the border: 2 chars for left/right, 2 lines for top/bottom
+			contentW := panelW - 2
+			contentH := panelH - 2
+			if contentW < 1 {
+				contentW = 1
+			}
+			if contentH < 1 {
+				contentH = 1
 			}
 
-			panel := style.Width(panelW).Height(panelH).Render(
-				titleStyle.Render(title) + "\n" + content,
-			)
+			content := renderScreen(sess.Screen(), contentW, contentH)
+			title := fmt.Sprintf("[%d] %s", idx+1, sess.Title)
+			focused := idx == m.selected
+			if focused {
+				title = fmt.Sprintf("▶ [%d] %s", idx+1, sess.Title)
+			}
+
+			panel := renderPanel(title, content, panelW, contentH, focused)
 			colViews = append(colViews, panel)
 		}
 		rowViews = append(rowViews, lipgloss.JoinHorizontal(lipgloss.Top, colViews...))
@@ -229,9 +215,67 @@ func (m *Model) gridView() string {
 
 	grid := lipgloss.JoinVertical(lipgloss.Left, rowViews...)
 	help := statusBarStyle.Width(m.width).Render(
-		fmt.Sprintf("Tab/←→/↑↓: navigate  Enter/f: fullscreen  q: quit  clients: %d", n),
+		fmt.Sprintf("Tab/Shift+Tab: switch  F1: fullscreen  Ctrl+Q: quit  clients: %d", n),
 	)
 	return lipgloss.JoinVertical(lipgloss.Left, grid, help)
+}
+
+// renderPanel draws a bordered panel with the title embedded in the top border.
+//
+//	╭─ title ─────────╮
+//	│ content          │
+//	╰─────────────────╯
+func renderPanel(title, content string, totalW, contentH int, focused bool) string {
+	borderColor := lipgloss.Color("240")
+	titleColor := lipgloss.Color("250")
+	if focused {
+		borderColor = lipgloss.Color("86")
+		titleColor = lipgloss.Color("86")
+	}
+
+	bc := lipgloss.NewStyle().Foreground(borderColor)
+	tc := lipgloss.NewStyle().Foreground(titleColor).Bold(true)
+
+	innerW := totalW - 2
+	if innerW < 0 {
+		innerW = 0
+	}
+
+	// Top border: ╭─ title ──────╮
+	titleRendered := tc.Render(title)
+	titleVisW := lipgloss.Width(titleRendered)
+	rightPad := innerW - 2 - titleVisW - 1 // "─ " + title + " " + pad + nothing before ╮
+	if rightPad < 0 {
+		rightPad = 0
+	}
+	top := bc.Render("╭─") + " " + titleRendered + " " + bc.Render(strings.Repeat("─", rightPad)+"╮")
+
+	// Content lines
+	lines := strings.Split(content, "\n")
+	for len(lines) < contentH {
+		lines = append(lines, "")
+	}
+	if len(lines) > contentH {
+		lines = lines[:contentH]
+	}
+
+	var body strings.Builder
+	for _, l := range lines {
+		runes := []rune(l)
+		pad := innerW - len(runes)
+		if pad < 0 {
+			l = string(runes[:innerW])
+			pad = 0
+		} else {
+			l = l + strings.Repeat(" ", pad)
+		}
+		body.WriteString(bc.Render("│") + l + bc.Render("│") + "\n")
+	}
+
+	// Bottom border
+	bottom := bc.Render("╰" + strings.Repeat("─", innerW) + "╯")
+
+	return top + "\n" + body.String() + bottom
 }
 
 func renderScreen(screen string, w, h int) string {
@@ -244,12 +288,10 @@ func renderScreen(screen string, w, h int) string {
 			lastContent = i
 		}
 	}
-	// Include one extra line after content (likely cursor/prompt line)
 	if lastContent+1 < len(lines) {
 		lastContent++
 	}
 
-	// Show h lines ending at lastContent
 	start := lastContent - h + 1
 	if start < 0 {
 		start = 0
@@ -272,6 +314,51 @@ func renderScreen(screen string, w, h int) string {
 		sb.WriteString(string(runes))
 	}
 	return sb.String()
+}
+
+// keyToBytes converts a bubbletea KeyMsg to raw terminal bytes for PTY input.
+func keyToBytes(msg tea.KeyMsg) []byte {
+	k := tea.Key(msg)
+	switch k.Type {
+	case tea.KeyRunes:
+		b := []byte(string(k.Runes))
+		if k.Alt {
+			b = append([]byte{0x1b}, b...)
+		}
+		return b
+	case tea.KeySpace:
+		return []byte{' '}
+	case tea.KeyEnter:
+		return []byte{'\r'}
+	case tea.KeyBackspace:
+		return []byte{0x7f}
+	case tea.KeyEsc:
+		return []byte{0x1b}
+	case tea.KeyUp:
+		return []byte("\x1b[A")
+	case tea.KeyDown:
+		return []byte("\x1b[B")
+	case tea.KeyRight:
+		return []byte("\x1b[C")
+	case tea.KeyLeft:
+		return []byte("\x1b[D")
+	case tea.KeyDelete:
+		return []byte("\x1b[3~")
+	case tea.KeyHome:
+		return []byte("\x1b[H")
+	case tea.KeyEnd:
+		return []byte("\x1b[F")
+	case tea.KeyPgUp:
+		return []byte("\x1b[5~")
+	case tea.KeyPgDown:
+		return []byte("\x1b[6~")
+	default:
+		// Ctrl+A through Ctrl+Z: type values 1-26 map directly to bytes
+		if k.Type >= 1 && k.Type <= 26 {
+			return []byte{byte(k.Type)}
+		}
+		return nil
+	}
 }
 
 // Tea messages
