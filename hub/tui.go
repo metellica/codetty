@@ -144,10 +144,36 @@ func (m *Model) gridCols() int {
 	if n <= 1 {
 		return 1
 	}
-	if n <= 4 {
-		return 2
+
+	usableH := m.height - 2
+	if usableH < 1 {
+		usableH = 1
 	}
-	return 3
+
+	// Pick column count that gives panel aspect ratio closest to 3:1 (horizontal)
+	bestCols := 1
+	bestDist := 999.0
+	for c := 1; c <= n; c++ {
+		if c > 4 {
+			break
+		}
+		r := (n + c - 1) / c
+		pw := m.width / c
+		ph := usableH / r
+		if ph < 4 || pw < 20 {
+			continue
+		}
+		ratio := float64(pw) / float64(ph)
+		dist := ratio - 3.0
+		if dist < 0 {
+			dist = -dist
+		}
+		if dist < bestDist {
+			bestDist = dist
+			bestCols = c
+		}
+	}
+	return bestCols
 }
 
 func (m *Model) panelSize() (int, int) {
@@ -210,9 +236,30 @@ func (m *Model) gridView() string {
 
 func renderScreen(screen string, w, h int) string {
 	lines := strings.Split(screen, "\n")
-	if len(lines) > h {
-		lines = lines[len(lines)-h:]
+
+	// Find last non-blank line (where content actually is)
+	lastContent := 0
+	for i, l := range lines {
+		if strings.TrimRight(l, " \x00") != "" {
+			lastContent = i
+		}
 	}
+	// Include one extra line after content (likely cursor/prompt line)
+	if lastContent+1 < len(lines) {
+		lastContent++
+	}
+
+	// Show h lines ending at lastContent
+	start := lastContent - h + 1
+	if start < 0 {
+		start = 0
+	}
+	end := start + h
+	if end > len(lines) {
+		end = len(lines)
+	}
+	lines = lines[start:end]
+
 	var sb strings.Builder
 	for i, l := range lines {
 		if i > 0 {
