@@ -2,7 +2,6 @@ package hub
 
 import (
 	"fmt"
-	"io"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -230,20 +229,3 @@ func renderScreen(screen string, w, h int) string {
 
 // Tea messages
 type exitFullscreenMsg struct{}
-
-// fullscreenHandler stub — replaced in Task 6 with hub/fullscreen.go
-type fullscreenHandler struct {
-	session *ClientSession
-	hub     *Hub
-	stdin   io.Reader
-	stdout  io.Writer
-}
-
-func (f *fullscreenHandler) SetStdin(r io.Reader)  { f.stdin = r }
-func (f *fullscreenHandler) SetStdout(w io.Writer) { f.stdout = w }
-func (f *fullscreenHandler) SetStderr(w io.Writer) {}
-
-func (f *fullscreenHandler) Run() error {
-	// Stub — replaced in Task 6
-	return nil
-}
