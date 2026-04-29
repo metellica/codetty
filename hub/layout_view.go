@@ -80,23 +80,34 @@ func (m *Model) focusBigView() string {
 		return m.gridView()
 	}
 
+	status := m.statusBar(n)
+	statusH := renderedLineCount(status)
+	if statusH > m.height {
+		status = constrainRenderedLineCount(status, m.height)
+		statusH = renderedLineCount(status)
+	}
+	availableH := m.height - statusH
+	if availableH < 0 {
+		availableH = 0
+	}
+
 	var layout string
 	if m.width >= 120 {
-		layout = m.focusBigWideView(sessions)
+		layout = m.focusBigWideView(sessions, availableH)
 	} else {
-		layout = m.focusBigNarrowView(sessions)
+		layout = m.focusBigNarrowView(sessions, availableH)
 	}
-	status := m.statusBar(n)
 	if layout == "" {
 		return status
 	}
 	return lipgloss.JoinVertical(lipgloss.Left, layout, status)
 }
 
-func (m *Model) focusBigWideView(sessions []*ClientSession) string {
-	availableH := m.height - 1
+func (m *Model) focusBigWideView(sessions []*ClientSession, availableH int) string {
+	primary := sessions[m.selected]
+	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
 	if availableH < minPanelH {
-		availableH = minPanelH
+		return m.renderFocusBigSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
 	}
 
 	mainW := m.width * 7 / 10
@@ -109,8 +120,6 @@ func (m *Model) focusBigWideView(sessions []*ClientSession) string {
 		mainW = minPanelW
 	}
 
-	primary := sessions[m.selected]
-	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
 	mainPanel := m.renderFocusBigSessionPanel(primary, mainTitle, mainW, availableH-2, true)
 
 	secondaryCount := len(sessions) - 1
@@ -142,12 +151,7 @@ func (m *Model) focusBigWideView(sessions []*ClientSession) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, mainPanel, side)
 }
 
-func (m *Model) focusBigNarrowView(sessions []*ClientSession) string {
-	availableH := m.height - renderedLineCount(m.statusBar(len(sessions)))
-	if availableH < 0 {
-		availableH = 0
-	}
-
+func (m *Model) focusBigNarrowView(sessions []*ClientSession, availableH int) string {
 	primary := sessions[m.selected]
 	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
 	if availableH < minPanelH*2 {
@@ -231,6 +235,21 @@ func renderedLineCount(s string) int {
 		return 0
 	}
 	return len(strings.Split(trimmed, "\n"))
+}
+
+func constrainRenderedLineCount(s string, maxLines int) string {
+	if maxLines <= 0 {
+		return ""
+	}
+	trimmed := strings.TrimRight(s, "\n")
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) <= maxLines {
+		return trimmed
+	}
+	return strings.Join(lines[:maxLines], "\n")
 }
 
 func morePanel(hidden, panelW, contentH int) string {

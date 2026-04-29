@@ -349,6 +349,80 @@ func TestModel_FocusBigViewUsesLayoutOrder(t *testing.T) {
 	}
 }
 
+func TestModel_FocusBigWideThresholdStaysWithinHeight(t *testing.T) {
+	m := NewModel(New())
+	m.width = 120
+	m.height = 24
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+		NewClientSession("gamma", "gamma", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "MAIN [1]") {
+		t.Fatalf("wide focus-big threshold view should render selected session as primary, got:\n%s", view)
+	}
+	if got := renderedHeight(view); got > m.height {
+		t.Fatalf("wide focus-big threshold view height = %d, want <= %d\n%s", got, m.height, view)
+	}
+	if got := renderedMaxWidth(view); got > m.width {
+		t.Fatalf("wide focus-big threshold view width = %d, want <= %d\n%s", got, m.width, view)
+	}
+}
+
+func TestModel_FocusBigWideTinyHeightStaysWithinHeight(t *testing.T) {
+	for _, height := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("height_%d", height), func(t *testing.T) {
+			m := NewModel(New())
+			m.width = 140
+			m.height = height
+			m.layout.mode = layoutFocusBig
+			m.selected = 0
+			m.sessions = []*ClientSession{
+				NewClientSession("alpha", "alpha", 80, 24, nil),
+				NewClientSession("beta", "beta", 80, 24, nil),
+			}
+			m.layout.syncSessions(m.sessions)
+
+			view := stripANSI(m.View())
+			if got := renderedHeight(view); got > m.height {
+				t.Fatalf("wide focus-big tiny-height view height = %d, want <= %d\n%s", got, m.height, view)
+			}
+			if got := renderedMaxWidth(view); got > m.width {
+				t.Fatalf("wide focus-big tiny-height view width = %d, want <= %d\n%s", got, m.width, view)
+			}
+		})
+	}
+}
+
+func TestModel_FocusBigWideThresholdStatusOnlyStaysWithinHeight(t *testing.T) {
+	m := NewModel(New())
+	m.width = 120
+	m.height = 1
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+
+	view := stripANSI(m.View())
+	if strings.Contains(view, "MAIN [1]") || strings.Contains(view, "[2] beta") {
+		t.Fatalf("wide focus-big status-only view should not render body panels, got:\n%s", view)
+	}
+	if got := renderedHeight(view); got > m.height {
+		t.Fatalf("wide focus-big status-only view height = %d, want <= %d\n%s", got, m.height, view)
+	}
+	if got := renderedMaxWidth(view); got > m.width {
+		t.Fatalf("wide focus-big status-only view width = %d, want <= %d\n%s", got, m.width, view)
+	}
+}
+
 func TestModel_FocusBigWideManySessionsStaysWithinHeight(t *testing.T) {
 	m := NewModel(New())
 	m.width = 140
