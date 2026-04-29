@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -20,7 +21,7 @@ import (
 
 func main() {
 	serverURL := flag.String("server", "ws://localhost:8080/ws", "hub WebSocket URL")
-	clientID := flag.String("id", mustHostname(), "client identifier")
+	clientID := flag.String("id", defaultID(), "client identifier")
 	flag.Parse()
 
 	args := flag.Args()
@@ -204,7 +205,11 @@ func runConnection(serverURL, clientID, title string, cols, rows uint16, ptmx *o
 	}
 }
 
-func mustHostname() string {
+func defaultID() string {
+	dir, err := os.Getwd()
+	if err == nil && dir != "" {
+		return filepath.Base(dir)
+	}
 	h, _ := os.Hostname()
 	if h == "" {
 		return "unknown"
