@@ -23,6 +23,7 @@ type Model struct {
 	hub        *Hub
 	sessions   []*ClientSession
 	selected   int
+	layout     layoutState
 	fullscreen bool
 	width      int
 	height     int
@@ -49,11 +50,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ClientConnectedMsg:
 		m.sessions = m.hub.Sessions()
+		m.layout.syncSessions(m.sessions)
+		ordered := m.orderedSessions()
+		if m.selected >= len(ordered) {
+			m.selected = max(0, len(ordered)-1)
+		}
 
 	case ClientDisconnectedMsg:
 		m.sessions = m.hub.Sessions()
-		if m.selected >= len(m.sessions) {
-			m.selected = max(0, len(m.sessions)-1)
+		m.layout.syncSessions(m.sessions)
+		ordered := m.orderedSessions()
+		if m.selected >= len(ordered) {
+			m.selected = max(0, len(ordered)-1)
 		}
 
 	case ScreenUpdateMsg:
@@ -101,6 +109,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) orderedSessions() []*ClientSession {
+	return m.layout.orderedSessions(m.sessions)
+}
+
 func (m *Model) View() string {
 	if len(m.sessions) == 0 {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
@@ -119,39 +131,7 @@ func (m *Model) View() string {
 
 // gridCols picks column count giving panel aspect ratio closest to 3:1.
 func (m *Model) gridCols() int {
-	n := len(m.sessions)
-	if n <= 1 {
-		return 1
-	}
-
-	usableH := m.height - 2
-	if usableH < 1 {
-		usableH = 1
-	}
-
-	bestCols := 1
-	bestDist := 999.0
-	for c := 1; c <= n; c++ {
-		if c > 4 {
-			break
-		}
-		r := (n + c - 1) / c
-		pw := m.width / c
-		ph := usableH / r
-		if ph < 4 || pw < 20 {
-			continue
-		}
-		ratio := float64(pw) / float64(ph)
-		dist := ratio - 3.0
-		if dist < 0 {
-			dist = -dist
-		}
-		if dist < bestDist {
-			bestDist = dist
-			bestCols = c
-		}
-	}
-	return bestCols
+	return m.layout.gridCols(len(m.sessions), m.width, m.height)
 }
 
 func (m *Model) panelSize() (int, int) {
