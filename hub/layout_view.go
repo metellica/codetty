@@ -23,7 +23,7 @@ func (m *Model) panelSize(n, cols, availableH int) (int, int) {
 	if panelW < minPanelW {
 		panelW = minPanelW
 	}
-	if panelH < 5 {
+	if availableH >= rows*5 && panelH < 5 {
 		panelH = 5
 	}
 	return panelW, panelH
@@ -38,6 +38,9 @@ func (m *Model) gridView() string {
 		return constrainRenderedLineCount(status, m.height)
 	}
 	availableH := m.height - statusH
+	if availableH <= 0 {
+		return constrainRenderedLineCount(status, m.height)
+	}
 	cols := m.layout.gridCols(n, m.width, m.height)
 	rows := (n + cols - 1) / cols
 	panelW, panelH := m.panelSize(n, cols, availableH)
