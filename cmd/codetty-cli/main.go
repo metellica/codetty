@@ -68,7 +68,11 @@ func main() {
 	}
 
 	// Local stdin → PTY (always, not just for TTY)
-	go func() { io.Copy(ptmx, os.Stdin) }()
+	go func() {
+		if err := copyLocalInput(ptmx, os.Stdin); err != nil {
+			log.Printf("local input copy stopped: %v", err)
+		}
+	}()
 
 	// Single PTY reader → local stdout + hub channel
 	outputCh := make(chan []byte, 256)
@@ -215,4 +219,83 @@ func defaultID() string {
 		return "unknown"
 	}
 	return h
+}
+
+func copyLocalInput(dst io.Writer, src io.Reader) error {
+	buf := make([]byte, 4096)
+	var filter focusEventFilter
+	for {
+		n, err := src.Read(buf)
+		if n > 0 {
+			filtered := filter.Filter(buf[:n])
+			if len(filtered) > 0 {
+				if _, werr := dst.Write(filtered); werr != nil {
+					return werr
+				}
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				if pending := filter.Flush(); len(pending) > 0 {
+					if _, werr := dst.Write(pending); werr != nil {
+						return werr
+					}
+				}
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+type focusEventFilter struct {
+	pending []byte
+}
+
+func (f *focusEventFilter) Filter(data []byte) []byte {
+	out := make([]byte, 0, len(data))
+	for _, b := range data {
+		switch len(f.pending) {
+		case 0:
+			if b == 0x1b {
+				f.pending = append(f.pending, b)
+			} else {
+				out = append(out, b)
+			}
+		case 1:
+			if b == '[' {
+				f.pending = append(f.pending, b)
+			} else {
+				out = append(out, f.pending...)
+				f.pending = f.pending[:0]
+				if b == 0x1b {
+					f.pending = append(f.pending, b)
+				} else {
+					out = append(out, b)
+				}
+			}
+		case 2:
+			if b == 'I' || b == 'O' {
+				f.pending = f.pending[:0]
+				continue
+			}
+			out = append(out, f.pending...)
+			f.pending = f.pending[:0]
+			if b == 0x1b {
+				f.pending = append(f.pending, b)
+			} else {
+				out = append(out, b)
+			}
+		}
+	}
+	return out
+}
+
+func (f *focusEventFilter) Flush() []byte {
+	if len(f.pending) == 0 {
+		return nil
+	}
+	out := append([]byte(nil), f.pending...)
+	f.pending = f.pending[:0]
+	return out
 }
