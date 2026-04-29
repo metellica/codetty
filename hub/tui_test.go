@@ -4,6 +4,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +14,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gorilla/websocket"
 )
+
+var ansiEscapeRE = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func modelTestClient(t *testing.T, h *Hub, id, title string) (*websocket.Conn, []*ClientSession) {
 	t.Helper()
@@ -89,6 +93,10 @@ func assertNoTestMessage(t *testing.T, conn *websocket.Conn) {
 	}
 }
 
+func stripANSI(s string) string {
+	return ansiEscapeRE.ReplaceAllString(s, "")
+}
+
 func TestModel_UsesCtrlAPrefixForHubCommands(t *testing.T) {
 	h := New()
 	m := NewModel(h)
@@ -119,6 +127,113 @@ func TestModel_UsesCtrlAPrefixForHubCommands(t *testing.T) {
 	if m.selected != 1 {
 		t.Fatalf("Ctrl+A n should select next session, got %d", m.selected)
 	}
+}
+
+func TestModel_PrefixFixedColsAndAuto(t *testing.T) {
+	m := NewModel(New())
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+	if cmd != nil {
+		t.Fatal("Ctrl+A should enter prefix mode without returning a command")
+	}
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if cmd != nil {
+		t.Fatal("Ctrl+A 2 should not return a command")
+	}
+	if m.layout.mode != layoutFixedGrid {
+		t.Fatalf("Ctrl+A 2 mode = %s, want fixed", m.layout.modeName())
+	}
+	if m.layout.fixedCols != 2 {
+		t.Fatalf("Ctrl+A 2 fixedCols = %d, want 2", m.layout.fixedCols)
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+	if cmd != nil {
+		t.Fatal("Ctrl+A should enter prefix mode without returning a command")
+	}
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if cmd != nil {
+		t.Fatal("Ctrl+A a should not return a command")
+	}
+	if m.layout.mode != layoutAutoGrid {
+		t.Fatalf("Ctrl+A a mode = %s, want auto", m.layout.modeName())
+	}
+	if m.layout.fixedCols != 0 {
+		t.Fatalf("Ctrl+A a fixedCols = %d, want 0", m.layout.fixedCols)
+	}
+}
+
+func TestModel_GridViewUsesLayoutOrder(t *testing.T) {
+	a := NewClientSession("a", "first", 80, 24, nil)
+	b := NewClientSession("b", "second", 80, 24, nil)
+	m := NewModel(New())
+	m.width = 120
+	m.height = 20
+	m.sessions = []*ClientSession{a, b}
+	m.layout.order = []string{"b", "a"}
+
+	view := stripANSI(m.gridView())
+	secondIndex := strings.Index(view, "second")
+	firstIndex := strings.Index(view, "first")
+	if secondIndex < 0 {
+		t.Fatalf("gridView missing ordered first title %q in:\n%s", "second", view)
+	}
+	if firstIndex < 0 {
+		t.Fatalf("gridView missing ordered second title %q in:\n%s", "first", view)
+	}
+	if secondIndex > firstIndex {
+		t.Fatalf("gridView rendered raw order; second title index %d after first title index %d in:\n%s", secondIndex, firstIndex, view)
+	}
+}
+
+func TestModel_ReorderedGridFocusMatchesForwardingTarget(t *testing.T) {
+	h := New()
+	connA, _ := modelTestClient(t, h, "a", "session-a")
+	connB, _ := modelTestClient(t, h, "b", "session-b")
+
+	m := NewModel(h)
+	m.width = 120
+	m.height = 20
+	m.sessions = h.Sessions()
+	m.layout.syncSessions(m.sessions)
+	m.selected = 0
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+	if cmd != nil {
+		t.Fatal("Ctrl+A should enter prefix mode without returning a command")
+	}
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'l'}})
+	if cmd != nil {
+		t.Fatal("Ctrl+A l should not return a command")
+	}
+	assertLayoutOrder(t, m.layout.order, []string{"b", "a"})
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1 after moving session-a later", m.selected)
+	}
+
+	view := stripANSI(m.gridView())
+	if !strings.Contains(view, "session-b") || !strings.Contains(view, "session-a") {
+		t.Fatalf("gridView missing session titles after reorder:\n%s", view)
+	}
+	if !strings.Contains(view, "▶ [2] session-a") {
+		t.Fatalf("gridView should visibly focus session-a after reorder, got:\n%s", view)
+	}
+	if strings.Contains(view, "▶ [2] session-b") || strings.Contains(view, "▶ [1] session-b") {
+		t.Fatalf("gridView focused session-b, but input target should be session-a:\n%s", view)
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd != nil {
+		t.Fatal("normal key should be forwarded without returning a command")
+	}
+	msgType, payload := readTestMessage(t, connA)
+	if msgType != protocol.MsgInput {
+		t.Fatalf("expected input message for session-a, got type %q", msgType)
+	}
+	if string(payload) != "x" {
+		t.Fatalf("expected session-a payload %q, got %q", "x", payload)
+	}
+	assertNoTestMessage(t, connB)
 }
 
 func TestModel_PrefixGridCommandPreservesGridPreference(t *testing.T) {
