@@ -254,6 +254,84 @@ func TestModel_FocusBigNarrowViewUsesSelectedAsPrimary(t *testing.T) {
 	}
 }
 
+func TestModel_FocusBigNarrowTinyHeightStaysWithinHeight(t *testing.T) {
+	m := NewModel(New())
+	m.width = 80
+	m.height = 5
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "MAIN [1] alpha") {
+		t.Fatalf("narrow focus-big view should render selected session as primary, got:\n%s", view)
+	}
+	if strings.Contains(view, "[2] beta") || strings.Contains(view, "more") {
+		t.Fatalf("narrow focus-big tiny-height view should not render secondaries, got:\n%s", view)
+	}
+	if got := renderedHeight(view); got > m.height {
+		t.Fatalf("narrow focus-big tiny-height view height = %d, want <= %d\n%s", got, m.height, view)
+	}
+	if got := renderedMaxWidth(view); got > m.width {
+		t.Fatalf("narrow focus-big tiny-height view width = %d, want <= %d\n%s", got, m.width, view)
+	}
+}
+
+func TestModel_FocusBigNarrowOneLineBodyStaysWithinHeight(t *testing.T) {
+	m := NewModel(New())
+	m.width = 80
+	m.height = 3
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "MAIN [1] alpha") {
+		t.Fatalf("narrow focus-big view should render selected session as primary, got:\n%s", view)
+	}
+	if strings.Contains(view, "[2] beta") || strings.Contains(view, "more") {
+		t.Fatalf("narrow focus-big one-line-body view should not render secondaries, got:\n%s", view)
+	}
+	if got := renderedHeight(view); got > m.height {
+		t.Fatalf("narrow focus-big one-line-body view height = %d, want <= %d\n%s", got, m.height, view)
+	}
+	if got := renderedMaxWidth(view); got > m.width {
+		t.Fatalf("narrow focus-big one-line-body view width = %d, want <= %d\n%s", got, m.width, view)
+	}
+}
+
+func TestModel_FocusBigNarrowNoBodyStaysWithinHeight(t *testing.T) {
+	m := NewModel(New())
+	m.width = 80
+	m.height = 2
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+
+	view := stripANSI(m.View())
+	if strings.Contains(view, "[2] beta") || strings.Contains(view, "more") {
+		t.Fatalf("narrow focus-big no-body view should not render secondaries, got:\n%s", view)
+	}
+	if got := renderedHeight(view); got > m.height {
+		t.Fatalf("narrow focus-big no-body view height = %d, want <= %d\n%s", got, m.height, view)
+	}
+	if got := renderedMaxWidth(view); got > m.width {
+		t.Fatalf("narrow focus-big no-body view width = %d, want <= %d\n%s", got, m.width, view)
+	}
+}
+
 func TestModel_FocusBigViewUsesLayoutOrder(t *testing.T) {
 	a := NewClientSession("a", "alpha", 80, 24, nil)
 	b := NewClientSession("b", "beta", 80, 24, nil)
@@ -298,6 +376,9 @@ func TestModel_FocusBigWideManySessionsStaysWithinHeight(t *testing.T) {
 	if got := renderedHeight(view); got > m.height {
 		t.Fatalf("wide focus-big view height = %d, want <= %d\n%s", got, m.height, view)
 	}
+	if got := renderedMaxWidth(view); got > m.width {
+		t.Fatalf("wide focus-big view width = %d, want <= %d\n%s", got, m.width, view)
+	}
 }
 
 func TestModel_FocusBigNarrowManySessionsStaysWithinWidth(t *testing.T) {
@@ -326,6 +407,9 @@ func TestModel_FocusBigNarrowManySessionsStaysWithinWidth(t *testing.T) {
 	}
 	if got := renderedMaxWidth(view); got > m.width {
 		t.Fatalf("narrow focus-big view width = %d, want <= %d\n%s", got, m.width, view)
+	}
+	if got := renderedHeight(view); got > m.height {
+		t.Fatalf("narrow focus-big view height = %d, want <= %d\n%s", got, m.height, view)
 	}
 }
 

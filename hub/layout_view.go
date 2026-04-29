@@ -86,7 +86,11 @@ func (m *Model) focusBigView() string {
 	} else {
 		layout = m.focusBigNarrowView(sessions)
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, layout, m.statusBar(n))
+	status := m.statusBar(n)
+	if layout == "" {
+		return status
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, layout, status)
 }
 
 func (m *Model) focusBigWideView(sessions []*ClientSession) string {
@@ -139,28 +143,29 @@ func (m *Model) focusBigWideView(sessions []*ClientSession) string {
 }
 
 func (m *Model) focusBigNarrowView(sessions []*ClientSession) string {
-	availableH := m.height - 1
-	if availableH < 4 {
-		availableH = 4
-	}
-
-	mainPanelH := availableH * 65 / 100
-	if mainPanelH < 3 {
-		mainPanelH = 3
-	}
-	if mainPanelH > availableH-1 {
-		mainPanelH = availableH - 1
+	availableH := m.height - renderedLineCount(m.statusBar(len(sessions)))
+	if availableH < 0 {
+		availableH = 0
 	}
 
 	primary := sessions[m.selected]
 	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
+	if availableH < minPanelH*2 {
+		return m.renderFocusBigSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
+	}
+
+	mainPanelH := availableH * 65 / 100
+	if mainPanelH < minPanelH {
+		mainPanelH = minPanelH
+	}
+	if maxMainH := availableH - minPanelH; mainPanelH > maxMainH {
+		mainPanelH = maxMainH
+	}
+
 	mainPanel := m.renderFocusBigSessionPanel(primary, mainTitle, m.width, mainPanelH-2, true)
 
 	secondaryCount := len(sessions) - 1
 	secondaryH := availableH - mainPanelH
-	if secondaryH < minPanelH {
-		secondaryH = minPanelH
-	}
 	visible, hidden := fitSecondaryCount(m.width, minPanelW, secondaryCount)
 	renderedSlots := visible
 	if hidden > 0 && m.width >= minPanelW {
@@ -220,6 +225,14 @@ func distributedSlotSize(total, slots, index int) int {
 	return size
 }
 
+func renderedLineCount(s string) int {
+	trimmed := strings.TrimRight(s, "\n")
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.Split(trimmed, "\n"))
+}
+
 func morePanel(hidden, panelW, contentH int) string {
 	label := fmt.Sprintf("+%d more", hidden)
 	if contentH < 1 {
@@ -230,6 +243,27 @@ func morePanel(hidden, panelW, contentH int) string {
 
 func (m *Model) renderFocusBigSessionPanel(sess *ClientSession, title string, panelW, contentH int, focused bool) string {
 	return m.renderSessionPanel(sess, fitPanelTitle(title, panelW), panelW, contentH, focused)
+}
+
+func (m *Model) renderFocusBigSessionPanelWithOuterHeight(sess *ClientSession, title string, panelW, panelH int, focused bool) string {
+	if panelH <= 0 {
+		return ""
+	}
+	if panelH == 1 {
+		return truncateToWidth(title, panelW)
+	}
+	contentH := panelH - 2
+	contentW := panelW - 2
+	if contentW < 1 {
+		contentW = 1
+	}
+
+	content := ""
+	if contentH > 0 {
+		contentLines, _, _ := sess.RenderANSI(contentW, contentH)
+		content = strings.Join(contentLines, "\n")
+	}
+	return renderPanel(fitPanelTitle(title, panelW), content, panelW, contentH, focused)
 }
 
 func fitPanelTitle(title string, panelW int) string {
