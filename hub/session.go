@@ -65,6 +65,8 @@ func (s *ClientSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 	curVisible := s.term.CursorVisible()
 
 	// Find last non-blank row
+	// Find first and last non-blank rows
+	firstContent := -1
 	lastContent := 0
 	for y := 0; y < rows; y++ {
 		blank := true
@@ -76,6 +78,9 @@ func (s *ClientSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 			}
 		}
 		if !blank {
+			if firstContent < 0 {
+				firstContent = y
+			}
 			lastContent = y
 		}
 	}
@@ -83,9 +88,16 @@ func (s *ClientSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 		lastContent++
 	}
 
-	startY := lastContent - h + 1
-	if startY < 0 {
+	// If first row has content, it's likely a full-screen TUI app — show from top.
+	// Otherwise (shell with prompt at bottom), show the bottom portion.
+	var startY int
+	if firstContent <= 0 {
 		startY = 0
+	} else {
+		startY = lastContent - h + 1
+		if startY < 0 {
+			startY = 0
+		}
 	}
 	endY := startY + h
 	if endY > rows {

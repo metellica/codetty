@@ -67,14 +67,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch msg.Type {
-		case tea.KeyCtrlC, tea.KeyCtrlQ:
+		case tea.KeyCtrlQ:
 			return m, tea.Quit
-		case tea.KeyTab:
-			if len(m.sessions) > 0 {
+		case tea.KeyCtrlN:
+			// Next panel
+			if len(m.sessions) > 1 {
 				m.selected = (m.selected + 1) % len(m.sessions)
 			}
-		case tea.KeyShiftTab:
-			if len(m.sessions) > 0 {
+		case tea.KeyCtrlP:
+			// Previous panel
+			if len(m.sessions) > 1 {
 				m.selected = (m.selected - 1 + len(m.sessions)) % len(m.sessions)
 			}
 		case tea.KeyF1:
@@ -216,7 +218,7 @@ func (m *Model) gridView() string {
 
 	grid := lipgloss.JoinVertical(lipgloss.Left, rowViews...)
 	help := statusBarStyle.Width(m.width).Render(
-		fmt.Sprintf("Tab/Shift+Tab: switch  F1: fullscreen  Ctrl+C: quit  clients: %d", n),
+		fmt.Sprintf("Ctrl+N/P: switch  F1: fullscreen  Ctrl+Q: quit  clients: %d", n),
 	)
 	return lipgloss.JoinVertical(lipgloss.Left, grid, help)
 }
