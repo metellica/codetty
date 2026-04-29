@@ -8,6 +8,7 @@ const (
 	// cli → hub
 	MsgRegister MsgType = 'r'
 	MsgOutput   MsgType = 'o'
+	MsgReplay   MsgType = 'R' // buffered PTY output for screen recovery
 
 	// hub → cli
 	MsgInput  MsgType = 'i'
@@ -42,6 +43,10 @@ func DecodeRegister(data []byte) (RegisterPayload, error) {
 
 func EncodeOutput(data []byte) []byte {
 	return append([]byte{byte(MsgOutput)}, data...)
+}
+
+func EncodeReplay(data []byte) []byte {
+	return append([]byte{byte(MsgReplay)}, data...)
 }
 
 func EncodeInput(data []byte) []byte {

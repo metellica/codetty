@@ -66,6 +66,17 @@ func TestEncodeInput(t *testing.T) {
 	}
 }
 
+func TestEncodeReplay(t *testing.T) {
+	data := []byte("hello\x1b[32mworld\x1b[0m")
+	encoded := EncodeReplay(data)
+	if MsgType(encoded[0]) != MsgReplay {
+		t.Fatalf("expected type %c, got %c", MsgReplay, encoded[0])
+	}
+	if string(encoded[1:]) != string(data) {
+		t.Fatalf("payload mismatch: got %q, want %q", encoded[1:], data)
+	}
+}
+
 func TestParseType(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -77,6 +88,7 @@ func TestParseType(t *testing.T) {
 		{"output", []byte("ohello"), MsgOutput, true},
 		{"input", []byte("ikey"), MsgInput, true},
 		{"resize", []byte("s{\"cols\":80}"), MsgResize, true},
+		{"replay", []byte("Rhello"), MsgReplay, true},
 		{"empty", []byte{}, 0, false},
 	}
 	for _, tt := range tests {
