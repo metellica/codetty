@@ -759,6 +759,29 @@ func TestModel_GridViewStatusBarTinyHeightStaysWithinHeight(t *testing.T) {
 	}
 }
 
+func TestModel_GridViewFixedColsTinyHeightStaysWithinHeight(t *testing.T) {
+	m := NewModel(New())
+	m.width = 80
+	m.height = 6
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+		NewClientSession("gamma", "gamma", 80, 24, nil),
+		NewClientSession("delta", "delta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+	m.layout.mode = layoutFixedGrid
+	m.layout.fixedCols = 2
+
+	view := stripANSI(m.gridView())
+	if got := renderedMaxWidth(view); got > m.width {
+		t.Fatalf("fixed-cols tiny-height grid view width = %d, want <= %d\n%s", got, m.width, view)
+	}
+	if got := renderedHeight(view); got > m.height {
+		t.Fatalf("fixed-cols tiny-height grid view height = %d, want <= %d\n%s", got, m.height, view)
+	}
+}
+
 func TestModel_ReorderedGridFocusMatchesForwardingTarget(t *testing.T) {
 	h := New()
 	connA, _ := modelTestClient(t, h, "a", "session-a")

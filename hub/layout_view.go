@@ -44,9 +44,30 @@ func (m *Model) gridView() string {
 	cols := m.layout.gridCols(n, m.width, m.height)
 	rows := (n + cols - 1) / cols
 	panelW, panelH := m.panelSize(n, cols, availableH)
+	if panelH < 1 {
+		panelH = 1
+	}
+	visibleRows := rows
+	if visibleRows*panelH > availableH {
+		visibleRows = availableH / panelH
+	}
+	if visibleRows < 1 {
+		return status
+	}
+	startRow := 0
+	if visibleRows < rows && m.selected >= 0 && m.selected < n {
+		selectedRow := m.selected / cols
+		if selectedRow >= visibleRows {
+			startRow = selectedRow - visibleRows + 1
+		}
+		if startRow+visibleRows > rows {
+			startRow = rows - visibleRows
+		}
+	}
 
 	var rowViews []string
-	for r := 0; r < rows; r++ {
+	for displayRow := 0; displayRow < visibleRows; displayRow++ {
+		r := startRow + displayRow
 		var colViews []string
 		for c := 0; c < cols; c++ {
 			idx := r*cols + c
@@ -55,25 +76,13 @@ func (m *Model) gridView() string {
 				continue
 			}
 			sess := sessions[idx]
-			// Content area is inside the border: 2 chars for left/right, 2 lines for top/bottom
-			contentW := panelW - 2
-			contentH := panelH - 2
-			if contentW < 1 {
-				contentW = 1
-			}
-			if contentH < 1 {
-				contentH = 1
-			}
-
-			contentLines, _, _ := sess.RenderANSI(contentW, contentH)
-			content := strings.Join(contentLines, "\n")
 			title := fmt.Sprintf("[%d] %s", idx+1, sess.Title)
 			focused := idx == m.selected
 			if focused {
 				title = fmt.Sprintf("▶ [%d] %s", idx+1, sess.Title)
 			}
 
-			panel := renderPanel(title, content, panelW, contentH, focused)
+			panel := m.renderSessionPanelWithOuterHeight(sess, title, panelW, panelH, focused)
 			colViews = append(colViews, panel)
 		}
 		rowViews = append(rowViews, lipgloss.JoinHorizontal(lipgloss.Top, colViews...))
@@ -111,7 +120,7 @@ func (m *Model) focusBigView() string {
 	if n == 1 {
 		primary := sessions[m.selected]
 		mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
-		layout := m.renderFocusBigSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
+		layout := m.renderSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
 		if layout == "" {
 			return status
 		}
@@ -134,7 +143,7 @@ func (m *Model) focusBigWideView(sessions []*ClientSession, availableH int) stri
 	primary := sessions[m.selected]
 	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
 	if availableH < minPanelH {
-		return m.renderFocusBigSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
+		return m.renderSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
 	}
 
 	mainW := m.width * 7 / 10
@@ -182,7 +191,7 @@ func (m *Model) focusBigNarrowView(sessions []*ClientSession, availableH int) st
 	primary := sessions[m.selected]
 	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
 	if availableH < minPanelH*2 {
-		return m.renderFocusBigSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
+		return m.renderSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
 	}
 
 	mainPanelH := availableH * 65 / 100
@@ -318,7 +327,7 @@ func (m *Model) renderFocusBigSessionPanel(sess *ClientSession, title string, pa
 	return m.renderSessionPanel(sess, fitPanelTitle(title, panelW), panelW, contentH, focused)
 }
 
-func (m *Model) renderFocusBigSessionPanelWithOuterHeight(sess *ClientSession, title string, panelW, panelH int, focused bool) string {
+func (m *Model) renderSessionPanelWithOuterHeight(sess *ClientSession, title string, panelW, panelH int, focused bool) string {
 	if panelH <= 0 {
 		return ""
 	}
