@@ -67,7 +67,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch msg.Type {
-		case tea.KeyCtrlQ:
+		case tea.KeyCtrlBackslash:
 			return m, tea.Quit
 		case tea.KeyCtrlCloseBracket:
 			// Next panel (Ctrl+])
@@ -214,7 +214,7 @@ func (m *Model) gridView() string {
 
 	grid := lipgloss.JoinVertical(lipgloss.Left, rowViews...)
 	help := statusBarStyle.Width(m.width).Render(
-		fmt.Sprintf("Ctrl+]: switch  Ctrl+F: fullscreen  Ctrl+Q: quit  clients: %d", n),
+		fmt.Sprintf("Ctrl+]: switch  Ctrl+F: fullscreen  Ctrl+\\: quit  clients: %d", n),
 	)
 	return lipgloss.JoinVertical(lipgloss.Left, grid, help)
 }
