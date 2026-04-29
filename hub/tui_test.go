@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"codetty/protocol"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/gorilla/websocket"
 )
 
@@ -95,6 +97,25 @@ func assertNoTestMessage(t *testing.T, conn *websocket.Conn) {
 
 func stripANSI(s string) string {
 	return ansiEscapeRE.ReplaceAllString(s, "")
+}
+
+func renderedHeight(s string) int {
+	trimmed := strings.TrimRight(s, "\n")
+	if trimmed == "" {
+		return 0
+	}
+	return len(strings.Split(trimmed, "\n"))
+}
+
+func renderedMaxWidth(s string) int {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	maxWidth := 0
+	for _, line := range lines {
+		if width := lipgloss.Width(line); width > maxWidth {
+			maxWidth = width
+		}
+	}
+	return maxWidth
 }
 
 func TestModel_UsesCtrlAPrefixForHubCommands(t *testing.T) {
@@ -247,6 +268,93 @@ func TestModel_FocusBigViewUsesLayoutOrder(t *testing.T) {
 	view := stripANSI(m.View())
 	if !strings.Contains(view, "MAIN [1] beta") {
 		t.Fatalf("focus-big view should use ordered sessions for primary, got:\n%s", view)
+	}
+}
+
+func TestModel_FocusBigWideManySessionsStaysWithinHeight(t *testing.T) {
+	m := NewModel(New())
+	m.width = 140
+	m.height = 24
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+	for i := 0; i < 30; i++ {
+		m.sessions = append(m.sessions, NewClientSession(
+			fmt.Sprintf("session-%02d", i+1),
+			fmt.Sprintf("s%02d", i+1),
+			80,
+			24,
+			nil,
+		))
+	}
+	m.layout.syncSessions(m.sessions)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "MAIN [1]") {
+		t.Fatalf("wide focus-big view should render selected session as primary, got:\n%s", view)
+	}
+	if !strings.Contains(view, "+") || !strings.Contains(view, "more") {
+		t.Fatalf("wide focus-big view should show a more indicator when secondaries are hidden, got:\n%s", view)
+	}
+	if got := renderedHeight(view); got > m.height {
+		t.Fatalf("wide focus-big view height = %d, want <= %d\n%s", got, m.height, view)
+	}
+}
+
+func TestModel_FocusBigNarrowManySessionsStaysWithinWidth(t *testing.T) {
+	m := NewModel(New())
+	m.width = 80
+	m.height = 24
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+	for i := 0; i < 20; i++ {
+		m.sessions = append(m.sessions, NewClientSession(
+			fmt.Sprintf("session-%02d", i+1),
+			fmt.Sprintf("s%02d", i+1),
+			80,
+			24,
+			nil,
+		))
+	}
+	m.layout.syncSessions(m.sessions)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "MAIN [1]") {
+		t.Fatalf("narrow focus-big view should render selected session as primary, got:\n%s", view)
+	}
+	if !strings.Contains(view, "+") || !strings.Contains(view, "more") {
+		t.Fatalf("narrow focus-big view should show a more indicator when secondaries are hidden, got:\n%s", view)
+	}
+	if got := renderedMaxWidth(view); got > m.width {
+		t.Fatalf("narrow focus-big view width = %d, want <= %d\n%s", got, m.width, view)
+	}
+}
+
+func TestModel_FocusBigNarrowLongTitlesStayWithinWidth(t *testing.T) {
+	m := NewModel(New())
+	m.width = 80
+	m.height = 24
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+	for i := 0; i < 20; i++ {
+		m.sessions = append(m.sessions, NewClientSession(
+			fmt.Sprintf("session-%02d", i+1),
+			fmt.Sprintf("session-%02d-with-a-very-long-title-that-must-not-expand-the-focus-big-panel", i+1),
+			80,
+			24,
+			nil,
+		))
+	}
+	m.layout.syncSessions(m.sessions)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "MAIN [1]") {
+		t.Fatalf("narrow focus-big view should render selected session as primary, got:\n%s", view)
+	}
+	if !strings.Contains(view, "+") || !strings.Contains(view, "more") {
+		t.Fatalf("narrow focus-big view should show a more indicator when secondaries are hidden, got:\n%s", view)
+	}
+	if got := renderedMaxWidth(view); got > m.width {
+		t.Fatalf("narrow focus-big view with long titles width = %d, want <= %d\n%s", got, m.width, view)
 	}
 }
 

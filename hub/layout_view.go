@@ -7,6 +7,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+const (
+	minPanelW = 14
+	minPanelH = 3
+)
+
 func (m *Model) panelSize(n, cols int) (int, int) {
 	if n == 0 || cols <= 0 {
 		return m.width, m.height - 2
@@ -14,8 +19,8 @@ func (m *Model) panelSize(n, cols int) (int, int) {
 	rows := (n + cols - 1) / cols
 	panelW := m.width / cols
 	panelH := (m.height - 1) / rows // -1 for status bar
-	if panelW < 14 {
-		panelW = 14
+	if panelW < minPanelW {
+		panelW = minPanelW
 	}
 	if panelH < 5 {
 		panelH = 5
@@ -86,38 +91,47 @@ func (m *Model) focusBigView() string {
 
 func (m *Model) focusBigWideView(sessions []*ClientSession) string {
 	availableH := m.height - 1
-	if availableH < 3 {
-		availableH = 3
+	if availableH < minPanelH {
+		availableH = minPanelH
 	}
 
 	mainW := m.width * 7 / 10
 	sideW := m.width - mainW
-	if sideW < 14 {
-		sideW = 14
+	if sideW < minPanelW {
+		sideW = minPanelW
 		mainW = m.width - sideW
 	}
-	if mainW < 14 {
-		mainW = 14
+	if mainW < minPanelW {
+		mainW = minPanelW
 	}
 
 	primary := sessions[m.selected]
 	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
-	mainPanel := m.renderSessionPanel(primary, mainTitle, mainW, availableH-2, true)
+	mainPanel := m.renderFocusBigSessionPanel(primary, mainTitle, mainW, availableH-2, true)
 
-	secondaries := make([]string, 0, len(sessions)-1)
 	secondaryCount := len(sessions) - 1
-	baseH := availableH / secondaryCount
-	extraH := availableH % secondaryCount
+	visible, hidden := fitSecondaryCount(availableH, minPanelH, secondaryCount)
+	renderedSlots := visible
+	if hidden > 0 && availableH >= minPanelH {
+		renderedSlots++
+	}
+	secondaries := make([]string, 0, renderedSlots)
+	slotIndex := 0
 	for idx, sess := range sessions {
 		if idx == m.selected {
 			continue
 		}
-		panelH := baseH
-		if len(secondaries) < extraH {
-			panelH++
+		if len(secondaries) >= visible {
+			break
 		}
+		panelH := distributedSlotSize(availableH, renderedSlots, slotIndex)
 		title := fmt.Sprintf("[%d] %s", idx+1, sess.Title)
-		secondaries = append(secondaries, m.renderSessionPanel(sess, title, sideW, panelH-2, false))
+		secondaries = append(secondaries, m.renderFocusBigSessionPanel(sess, title, sideW, panelH-2, false))
+		slotIndex++
+	}
+	if hidden > 0 && renderedSlots > 0 {
+		panelH := distributedSlotSize(availableH, renderedSlots, slotIndex)
+		secondaries = append(secondaries, morePanel(hidden, sideW, panelH-2))
 	}
 
 	side := lipgloss.JoinVertical(lipgloss.Left, secondaries...)
@@ -140,30 +154,106 @@ func (m *Model) focusBigNarrowView(sessions []*ClientSession) string {
 
 	primary := sessions[m.selected]
 	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
-	mainPanel := m.renderSessionPanel(primary, mainTitle, m.width, mainPanelH-2, true)
+	mainPanel := m.renderFocusBigSessionPanel(primary, mainTitle, m.width, mainPanelH-2, true)
 
 	secondaryCount := len(sessions) - 1
 	secondaryH := availableH - mainPanelH
-	if secondaryH < 3 {
-		secondaryH = 3
+	if secondaryH < minPanelH {
+		secondaryH = minPanelH
 	}
-	baseW := m.width / secondaryCount
-	extraW := m.width % secondaryCount
-	secondaries := make([]string, 0, secondaryCount)
+	visible, hidden := fitSecondaryCount(m.width, minPanelW, secondaryCount)
+	renderedSlots := visible
+	if hidden > 0 && m.width >= minPanelW {
+		renderedSlots++
+	}
+	secondaries := make([]string, 0, renderedSlots)
+	slotIndex := 0
 	for idx, sess := range sessions {
 		if idx == m.selected {
 			continue
 		}
-		panelW := baseW
-		if len(secondaries) < extraW {
-			panelW++
+		if len(secondaries) >= visible {
+			break
 		}
+		panelW := distributedSlotSize(m.width, renderedSlots, slotIndex)
 		title := fmt.Sprintf("[%d] %s", idx+1, sess.Title)
-		secondaries = append(secondaries, m.renderSessionPanel(sess, title, panelW, secondaryH-2, false))
+		secondaries = append(secondaries, m.renderFocusBigSessionPanel(sess, title, panelW, secondaryH-2, false))
+		slotIndex++
+	}
+	if hidden > 0 && renderedSlots > 0 {
+		panelW := distributedSlotSize(m.width, renderedSlots, slotIndex)
+		secondaries = append(secondaries, morePanel(hidden, panelW, secondaryH-2))
 	}
 
 	secondaryRow := lipgloss.JoinHorizontal(lipgloss.Top, secondaries...)
 	return lipgloss.JoinVertical(lipgloss.Left, mainPanel, secondaryRow)
+}
+
+func fitSecondaryCount(total, minSize, count int) (visible int, hidden int) {
+	if count <= 0 {
+		return 0, 0
+	}
+	if total < minSize {
+		return 0, count
+	}
+
+	maxSlots := total / minSize
+	if count <= maxSlots {
+		return count, 0
+	}
+	if maxSlots == 1 {
+		return 0, count
+	}
+	visible = maxSlots - 1
+	hidden = count - visible
+	return visible, hidden
+}
+
+func distributedSlotSize(total, slots, index int) int {
+	if slots <= 0 {
+		return 0
+	}
+	size := total / slots
+	if index < total%slots {
+		size++
+	}
+	return size
+}
+
+func morePanel(hidden, panelW, contentH int) string {
+	label := fmt.Sprintf("+%d more", hidden)
+	if contentH < 1 {
+		contentH = 1
+	}
+	return renderPanel(fitPanelTitle(label, panelW), truncateToWidth(label, panelW-2), panelW, contentH, false)
+}
+
+func (m *Model) renderFocusBigSessionPanel(sess *ClientSession, title string, panelW, contentH int, focused bool) string {
+	return m.renderSessionPanel(sess, fitPanelTitle(title, panelW), panelW, contentH, focused)
+}
+
+func fitPanelTitle(title string, panelW int) string {
+	return truncateToWidth(title, panelW-5)
+}
+
+func truncateToWidth(s string, maxW int) string {
+	if maxW <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= maxW {
+		return s
+	}
+	var b strings.Builder
+	width := 0
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if width+rw > maxW {
+			break
+		}
+		b.WriteRune(r)
+		width += rw
+	}
+	return b.String()
 }
 
 func (m *Model) renderSessionPanel(sess *ClientSession, title string, panelW, contentH int, focused bool) string {
