@@ -13,13 +13,13 @@ const (
 	minPanelH = 3
 )
 
-func (m *Model) panelSize(n, cols int) (int, int) {
+func (m *Model) panelSize(n, cols, availableH int) (int, int) {
 	if n == 0 || cols <= 0 {
-		return m.width, m.height - 2
+		return m.width, availableH
 	}
 	rows := (n + cols - 1) / cols
 	panelW := m.width / cols
-	panelH := (m.height - 1) / rows // -1 for status bar
+	panelH := availableH / rows
 	if panelW < minPanelW {
 		panelW = minPanelW
 	}
@@ -32,9 +32,15 @@ func (m *Model) panelSize(n, cols int) (int, int) {
 func (m *Model) gridView() string {
 	sessions := m.orderedSessions()
 	n := len(sessions)
+	status := m.statusBar(n)
+	statusH := renderedLineCount(status)
+	if statusH > m.height {
+		return constrainRenderedLineCount(status, m.height)
+	}
+	availableH := m.height - statusH
 	cols := m.layout.gridCols(n, m.width, m.height)
 	rows := (n + cols - 1) / cols
-	panelW, panelH := m.panelSize(n, cols)
+	panelW, panelH := m.panelSize(n, cols, availableH)
 
 	var rowViews []string
 	for r := 0; r < rows; r++ {
@@ -71,7 +77,10 @@ func (m *Model) gridView() string {
 	}
 
 	grid := lipgloss.JoinVertical(lipgloss.Left, rowViews...)
-	return lipgloss.JoinVertical(lipgloss.Left, grid, m.statusBar(n))
+	if grid == "" {
+		return status
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, grid, status)
 }
 
 func (m *Model) focusBigView() string {
@@ -395,14 +404,14 @@ func (m *Model) renderSessionPanel(sess *ClientSession, title string, panelW, co
 }
 
 func (m *Model) statusBar(n int) string {
-	return statusBarStyle.Width(m.width).Render(m.statusHelp(n))
-}
-
-func (m *Model) focusBigStatusBar(n int) string {
 	if m.width < 5 {
 		return truncateToWidth(m.statusHelp(n), m.width)
 	}
-	return constrainRenderedWidth(m.statusBar(n), m.width)
+	return constrainRenderedWidth(statusBarStyle.Width(m.width).Render(m.statusHelp(n)), m.width)
+}
+
+func (m *Model) focusBigStatusBar(n int) string {
+	return m.statusBar(n)
 }
 
 func (m *Model) statusHelp(n int) string {
