@@ -69,17 +69,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Type {
 		case tea.KeyCtrlQ:
 			return m, tea.Quit
-		case tea.KeyCtrlN:
-			// Next panel
+		case tea.KeyCtrlCloseBracket:
+			// Next panel (Ctrl+])
 			if len(m.sessions) > 1 {
 				m.selected = (m.selected + 1) % len(m.sessions)
 			}
-		case tea.KeyCtrlP:
-			// Previous panel
-			if len(m.sessions) > 1 {
-				m.selected = (m.selected - 1 + len(m.sessions)) % len(m.sessions)
-			}
-		case tea.KeyF1:
+		case tea.KeyCtrlF:
+			// Fullscreen selected panel
 			if len(m.sessions) > 0 {
 				m.fullscreen = true
 				sess := m.sessions[m.selected]
@@ -218,7 +214,7 @@ func (m *Model) gridView() string {
 
 	grid := lipgloss.JoinVertical(lipgloss.Left, rowViews...)
 	help := statusBarStyle.Width(m.width).Render(
-		fmt.Sprintf("Ctrl+N/P: switch  F1: fullscreen  Ctrl+Q: quit  clients: %d", n),
+		fmt.Sprintf("Ctrl+]: switch  Ctrl+F: fullscreen  Ctrl+Q: quit  clients: %d", n),
 	)
 	return lipgloss.JoinVertical(lipgloss.Left, grid, help)
 }
@@ -315,9 +311,35 @@ func keyToBytes(msg tea.KeyMsg) []byte {
 		return []byte("\x1b[5~")
 	case tea.KeyPgDown:
 		return []byte("\x1b[6~")
+	case tea.KeyF1:
+		return []byte("\x1bOP")
+	case tea.KeyF2:
+		return []byte("\x1bOQ")
+	case tea.KeyF3:
+		return []byte("\x1bOR")
+	case tea.KeyF4:
+		return []byte("\x1bOS")
+	case tea.KeyF5:
+		return []byte("\x1b[15~")
+	case tea.KeyF6:
+		return []byte("\x1b[17~")
+	case tea.KeyF7:
+		return []byte("\x1b[18~")
+	case tea.KeyF8:
+		return []byte("\x1b[19~")
+	case tea.KeyF9:
+		return []byte("\x1b[20~")
+	case tea.KeyF10:
+		return []byte("\x1b[21~")
+	case tea.KeyF11:
+		return []byte("\x1b[23~")
+	case tea.KeyF12:
+		return []byte("\x1b[24~")
+	case tea.KeyTab:
+		return []byte{'\t'}
 	default:
-		// Ctrl+A through Ctrl+Z: type values 1-26 map directly to bytes
-		if k.Type >= 1 && k.Type <= 26 {
+		// Ctrl+A through Ctrl+_ (type values 1-31 map to control bytes)
+		if k.Type >= 1 && k.Type <= 31 {
 			return []byte{byte(k.Type)}
 		}
 		return nil
