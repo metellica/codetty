@@ -3,6 +3,7 @@ package hub
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,4 +128,48 @@ func TestHub_ReconnectReplaces(t *testing.T) {
 
 	c1.Close()
 	c2.Close()
+}
+
+func TestHub_ReplayRestoresScreen(t *testing.T) {
+	h := New()
+
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := testUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		h.HandleConn(conn)
+	}))
+	defer s.Close()
+
+	clientConn, _, err := websocket.DefaultDialer.Dial("ws"+s.URL[4:], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer clientConn.Close()
+
+	// Register session
+	regMsg, _ := protocol.EncodeRegister(protocol.RegisterPayload{
+		ID: "replay-test", Title: "test", Cols: 80, Rows: 24,
+	})
+	clientConn.WriteMessage(websocket.BinaryMessage, regMsg)
+	time.Sleep(100 * time.Millisecond)
+
+	// Send replay data (simulates buffered PTY output)
+	replayData := []byte("restored content\r\nline two")
+	clientConn.WriteMessage(websocket.BinaryMessage, protocol.EncodeReplay(replayData))
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify screen was restored
+	sess := h.Session("replay-test")
+	if sess == nil {
+		t.Fatal("session not found")
+	}
+	screen := sess.Screen()
+	if !strings.Contains(screen, "restored content") {
+		t.Fatalf("screen should contain 'restored content', got:\n%s", screen)
+	}
+	if !strings.Contains(screen, "line two") {
+		t.Fatalf("screen should contain 'line two', got:\n%s", screen)
+	}
 }

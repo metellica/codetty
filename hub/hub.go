@@ -90,6 +90,20 @@ func (h *Hub) HandleConn(conn *websocket.Conn) {
 			sess = NewClientSession(p.ID, p.Title, p.Cols, p.Rows, writer)
 			h.addSession(sess)
 
+		case protocol.MsgReplay:
+			if sess == nil {
+				return
+			}
+			sess.WriteOutput(payload)
+			if h.program != nil {
+				h.fsMu.RLock()
+				inFullscreen := h.fullscreenID != ""
+				h.fsMu.RUnlock()
+				if !inFullscreen {
+					h.program.Send(ScreenUpdateMsg{ID: sess.ID, Data: nil})
+				}
+			}
+
 		case protocol.MsgOutput:
 			if sess == nil {
 				return
