@@ -74,7 +74,10 @@ func main() {
 		}
 	}()
 
-	// Single PTY reader → local stdout + hub channel
+	// Ring buffer for replay on reconnect (256KB)
+	replayBuf := NewRingBuffer(256 * 1024)
+
+	// Single PTY reader → local stdout + hub channel + replay buffer
 	outputCh := make(chan []byte, 256)
 	go func() {
 		buf := make([]byte, 4096)
@@ -84,6 +87,7 @@ func main() {
 				os.Stdout.Write(buf[:n])
 				cp := make([]byte, n)
 				copy(cp, buf[:n])
+				replayBuf.Write(cp)
 				select {
 				case outputCh <- cp:
 				default: // drop if hub not keeping up
@@ -96,7 +100,7 @@ func main() {
 	}()
 
 	// Run connection loop (reconnects on failure)
-	go connectionLoop(*serverURL, *clientID, title, cols, rows, ptmx, outputCh, doneCh)
+	go connectionLoop(*serverURL, *clientID, title, cols, rows, ptmx, outputCh, doneCh, replayBuf)
 
 	// Wait for process exit or signal
 	select {
@@ -108,12 +112,12 @@ func main() {
 	}
 }
 
-func connectionLoop(serverURL, clientID, title string, cols, rows uint16, ptmx *os.File, outputCh <-chan []byte, done <-chan error) {
+func connectionLoop(serverURL, clientID, title string, cols, rows uint16, ptmx *os.File, outputCh <-chan []byte, done <-chan error, replayBuf *RingBuffer) {
 	delay := time.Second
 	maxDelay := 30 * time.Second
 
 	for {
-		err := runConnection(serverURL, clientID, title, cols, rows, ptmx, outputCh, done)
+		err := runConnection(serverURL, clientID, title, cols, rows, ptmx, outputCh, done, replayBuf)
 		if err == nil {
 			return
 		}
@@ -131,7 +135,7 @@ func connectionLoop(serverURL, clientID, title string, cols, rows uint16, ptmx *
 	}
 }
 
-func runConnection(serverURL, clientID, title string, cols, rows uint16, ptmx *os.File, outputCh <-chan []byte, done <-chan error) error {
+func runConnection(serverURL, clientID, title string, cols, rows uint16, ptmx *os.File, outputCh <-chan []byte, done <-chan error, replayBuf *RingBuffer) error {
 	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
@@ -149,6 +153,14 @@ func runConnection(serverURL, clientID, title string, cols, rows uint16, ptmx *o
 	}
 	if err := conn.WriteMessage(websocket.BinaryMessage, regMsg); err != nil {
 		return fmt.Errorf("send register: %w", err)
+	}
+
+	// Send buffered output for screen restore
+	if replay := replayBuf.Bytes(); len(replay) > 0 {
+		msg := protocol.EncodeReplay(replay)
+		if err := conn.WriteMessage(websocket.BinaryMessage, msg); err != nil {
+			return fmt.Errorf("send replay: %w", err)
+		}
 	}
 
 	errCh := make(chan error, 2)
