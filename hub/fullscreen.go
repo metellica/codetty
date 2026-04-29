@@ -1,9 +1,9 @@
 package hub
 
 import (
+	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	xterm "golang.org/x/term"
@@ -32,9 +32,9 @@ func (f *fullscreenHandler) Run() error {
 		stdout = os.Stdout
 	}
 
-	// Tell the hub we're in fullscreen so HandleConn forwards output here
-	f.hub.SetFullscreen(f.session.ID, stdout)
-	defer f.hub.SetFullscreen("", nil)
+	f.hub.fsMu.Lock()
+	f.hub.fullscreenID = f.session.ID
+	f.hub.fsWriter = stdout
 
 	// Raw mode so individual keystrokes are forwarded immediately
 	fd := int(os.Stdin.Fd())
@@ -45,14 +45,9 @@ func (f *fullscreenHandler) Run() error {
 		}
 	}
 
-	// Clear screen and show current terminal content.
-	// MakeRaw disables OPOST so \n won't translate to \r\n;
-	// replace manually for correct display.
-	stdout.Write([]byte("\033[2J\033[H"))
-	screen := f.session.Screen()
-	if screen != "" {
-		stdout.Write([]byte(strings.ReplaceAll(screen, "\n", "\r\n")))
-	}
+	f.writeSnapshot(stdout)
+	f.hub.fsMu.Unlock()
+	defer f.hub.SetFullscreen("", nil)
 
 	stdin := f.stdin
 	if stdin == nil {
@@ -84,5 +79,44 @@ func (f *fullscreenHandler) Run() error {
 		}
 
 		f.session.SendInput(data)
+	}
+}
+
+func (f *fullscreenHandler) writeSnapshot(stdout io.Writer) {
+	stdout.Write([]byte("\033[2J\033[H"))
+
+	cols, rows := int(f.session.Cols), int(f.session.Rows)
+	if cols <= 0 || rows <= 0 {
+		return
+	}
+
+	snapshot := f.session.SnapshotANSI(cols, rows)
+	stdout.Write([]byte("\033[?7l"))
+	for y, line := range snapshot.lines {
+		fmt.Fprintf(stdout, "\033[%d;1H%s", y+1, line)
+	}
+	if snapshot.wrapEnabled {
+		stdout.Write([]byte("\033[?7h"))
+	} else {
+		stdout.Write([]byte("\033[?7l"))
+	}
+	curX, curY := snapshot.cursorX, snapshot.cursorY
+	if curX < 0 {
+		curX = 0
+	}
+	if curY < 0 {
+		curY = 0
+	}
+	if curX >= cols {
+		curX = cols - 1
+	}
+	if curY >= rows {
+		curY = rows - 1
+	}
+	fmt.Fprintf(stdout, "\033[%d;%dH", curY+1, curX+1)
+	if snapshot.cursorVisible {
+		stdout.Write([]byte("\033[?25h"))
+	} else {
+		stdout.Write([]byte("\033[?25l"))
 	}
 }

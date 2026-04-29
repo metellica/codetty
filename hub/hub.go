@@ -94,15 +94,7 @@ func (h *Hub) HandleConn(conn *websocket.Conn) {
 			if sess == nil {
 				return
 			}
-			sess.WriteOutput(payload)
-
-			h.fsMu.RLock()
-			inFullscreen := h.fullscreenID != ""
-			if h.fullscreenID == sess.ID && h.fsWriter != nil {
-				h.fsWriter.Write(payload)
-			}
-			h.fsMu.RUnlock()
-
+			inFullscreen := h.writeSessionOutput(sess, payload)
 			if h.program != nil && !inFullscreen {
 				h.program.Send(ScreenUpdateMsg{ID: sess.ID, Data: nil})
 			}
@@ -111,24 +103,29 @@ func (h *Hub) HandleConn(conn *websocket.Conn) {
 			if sess == nil {
 				return
 			}
-			sess.WriteOutput(payload)
-
-			// In fullscreen mode, forward raw output to the fullscreen writer.
-			// Skip program.Send entirely — bubbletea's event loop is blocked
-			// inside tea.Exec and its msgs channel is unbuffered, so Send
-			// would block forever.
-			h.fsMu.RLock()
-			inFullscreen := h.fullscreenID != ""
-			if h.fullscreenID == sess.ID && h.fsWriter != nil {
-				h.fsWriter.Write(payload)
-			}
-			h.fsMu.RUnlock()
-
+			inFullscreen := h.writeSessionOutput(sess, payload)
 			if h.program != nil && !inFullscreen {
 				h.program.Send(ScreenUpdateMsg{ID: sess.ID, Data: payload})
 			}
 		}
 	}
+}
+
+func (h *Hub) writeSessionOutput(sess *ClientSession, payload []byte) bool {
+	h.fsMu.RLock()
+	defer h.fsMu.RUnlock()
+
+	sess.WriteOutput(payload)
+
+	// In fullscreen mode, forward raw output to the fullscreen writer.
+	// Skip program.Send entirely — bubbletea's event loop is blocked
+	// inside tea.Exec and its msgs channel is unbuffered, so Send
+	// would block forever.
+	inFullscreen := h.fullscreenID != ""
+	if h.fullscreenID == sess.ID && h.fsWriter != nil {
+		h.fsWriter.Write(payload)
+	}
+	return inFullscreen
 }
 
 func (h *Hub) addSession(s *ClientSession) {

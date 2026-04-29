@@ -28,6 +28,14 @@ type ClientSession struct {
 	writer *ConnWriter
 }
 
+type terminalSnapshot struct {
+	lines         []string
+	cursorX       int
+	cursorY       int
+	cursorVisible bool
+	wrapEnabled   bool
+}
+
 // NewClientSession creates a session with a vt10x virtual terminal.
 // Pass nil for writer if no WebSocket connection is available (testing).
 func NewClientSession(id, title string, cols, rows uint16, writer *ConnWriter) *ClientSession {
@@ -53,13 +61,30 @@ func (s *ClientSession) Screen() string {
 	return s.term.String()
 }
 
+func (s *ClientSession) SnapshotANSI(w, h int) terminalSnapshot {
+	s.term.Lock()
+	defer s.term.Unlock()
+	lines, _, _ := s.renderANSILocked(w, h)
+	cursor := s.term.Cursor()
+	return terminalSnapshot{
+		lines:         lines,
+		cursorX:       cursor.X,
+		cursorY:       cursor.Y,
+		cursorVisible: s.term.CursorVisible(),
+		wrapEnabled:   s.term.Mode()&vt10x.ModeWrap != 0,
+	}
+}
+
 // RenderANSI renders the terminal screen with ANSI colors and cursor.
 // Returns exactly h lines, each of visual width w, with ANSI color codes.
 // Also returns the cursor position relative to the visible area (-1,-1 if not visible).
 func (s *ClientSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 	s.term.Lock()
 	defer s.term.Unlock()
+	return s.renderANSILocked(w, h)
+}
 
+func (s *ClientSession) renderANSILocked(w, h int) (lines []string, curX, curY int) {
 	cols, rows := s.term.Size()
 	cursor := s.term.Cursor()
 	curVisible := s.term.CursorVisible()
