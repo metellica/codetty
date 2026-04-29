@@ -20,11 +20,11 @@ const (
 
 // ClientSession represents one connected terminal client.
 type ClientSession struct {
-	ID    string
-	Title string
-	Cols  uint16
-	Rows  uint16
-	term  vt10x.Terminal
+	ID     string
+	Title  string
+	Cols   uint16
+	Rows   uint16
+	term   vt10x.Terminal
 	writer *ConnWriter
 }
 
@@ -88,10 +88,17 @@ func (s *ClientSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 		lastContent++
 	}
 
-	// If first row has content, it's likely a full-screen TUI app — show from top.
-	// Otherwise (shell with prompt at bottom), show the bottom portion.
 	var startY int
-	if firstContent <= 0 {
+	if rows > h {
+		startY = cursor.Y - h + 1
+		if startY < 0 {
+			startY = 0
+		}
+		maxStart := rows - h
+		if startY > maxStart {
+			startY = maxStart
+		}
+	} else if firstContent <= 0 {
 		startY = 0
 	} else {
 		startY = lastContent - h + 1
