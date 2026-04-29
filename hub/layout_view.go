@@ -76,7 +76,7 @@ func (m *Model) gridView() string {
 func (m *Model) focusBigView() string {
 	sessions := m.orderedSessions()
 	n := len(sessions)
-	if n <= 1 || m.selected < 0 || m.selected >= n {
+	if n == 0 || m.selected < 0 || m.selected >= n {
 		return m.gridView()
 	}
 
@@ -89,6 +89,16 @@ func (m *Model) focusBigView() string {
 	availableH := m.height - statusH
 	if availableH < 0 {
 		availableH = 0
+	}
+
+	if n == 1 {
+		primary := sessions[m.selected]
+		mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
+		layout := m.renderFocusBigSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
+		if layout == "" {
+			return status
+		}
+		return lipgloss.JoinVertical(lipgloss.Left, layout, status)
 	}
 
 	var layout string

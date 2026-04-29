@@ -517,36 +517,41 @@ func TestModel_FocusBigNarrowLongTitlesStayWithinWidth(t *testing.T) {
 }
 
 func TestModel_FocusBigViewFallsBackToGridForZeroOrOneSession(t *testing.T) {
-	tests := []struct {
-		name     string
-		sessions []*ClientSession
-	}{
-		{
-			name: "zero sessions",
-		},
-		{
-			name: "one session",
-			sessions: []*ClientSession{
-				NewClientSession("alpha", "alpha", 80, 24, nil),
-			},
-		},
+	m := NewModel(New())
+	m.width = 120
+	m.height = 24
+	m.layout.mode = layoutFocusBig
+
+	got := stripANSI(m.focusBigView())
+	want := stripANSI(m.gridView())
+	if got != want {
+		t.Fatalf("focusBigView should fall back to gridView for zero sessions, got:\n%s\nwant:\n%s", got, want)
 	}
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := NewModel(New())
-			m.width = 120
-			m.height = 24
-			m.sessions = tt.sessions
-			m.layout.syncSessions(m.sessions)
-			m.layout.mode = layoutFocusBig
+func TestModel_FocusBigSingleSessionUsesBudgetedMainPanel(t *testing.T) {
+	m := NewModel(New())
+	m.width = 120
+	m.height = 5
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha-with-a-very-long-title-that-must-not-expand-the-panel", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
 
-			got := stripANSI(m.focusBigView())
-			want := stripANSI(m.gridView())
-			if got != want {
-				t.Fatalf("focusBigView should fall back to gridView, got:\n%s\nwant:\n%s", got, want)
-			}
-		})
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "MAIN [1]") {
+		t.Fatalf("single-session focus-big view should render selected session as MAIN, got:\n%s", view)
+	}
+	if got := renderedHeight(view); got > m.height {
+		t.Fatalf("single-session focus-big view height = %d, want <= %d\n%s", got, m.height, view)
+	}
+	if got := renderedMaxWidth(view); got > m.width {
+		t.Fatalf("single-session focus-big view width = %d, want <= %d\n%s", got, m.width, view)
+	}
+	if grid := stripANSI(m.gridView()); view == grid {
+		t.Fatalf("single-session focus-big view should not fall back to gridView, got:\n%s", view)
 	}
 }
 
