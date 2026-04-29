@@ -163,6 +163,158 @@ func TestModel_PrefixFixedColsAndAuto(t *testing.T) {
 	}
 }
 
+func TestModel_PrefixFocusBigMode(t *testing.T) {
+	m := NewModel(New())
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+	if cmd != nil {
+		t.Fatal("Ctrl+A should enter prefix mode without returning a command")
+	}
+	if !m.layout.prefix {
+		t.Fatal("Ctrl+A should enter prefix mode")
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'b'}})
+	if cmd != nil {
+		t.Fatal("Ctrl+A b should set focus-big mode without returning a command")
+	}
+	if m.layout.prefix {
+		t.Fatal("Ctrl+A b should clear prefix mode")
+	}
+	if m.layout.mode != layoutFocusBig {
+		t.Fatalf("Ctrl+A b mode = %s, want focus-big", m.layout.modeName())
+	}
+}
+
+func TestModel_FocusBigViewUsesSelectedAsPrimary(t *testing.T) {
+	m := NewModel(New())
+	m.width = 120
+	m.height = 24
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+	m.layout.mode = layoutFocusBig
+	m.selected = 1
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "MAIN [2] beta") {
+		t.Fatalf("focus-big view should render selected session as primary, got:\n%s", view)
+	}
+	if !strings.Contains(view, "focus-big | clients: 2") {
+		t.Fatalf("focus-big view should include status bar mode, got:\n%s", view)
+	}
+}
+
+func TestModel_FocusBigNarrowViewUsesSelectedAsPrimary(t *testing.T) {
+	m := NewModel(New())
+	m.width = 100
+	m.height = 24
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "MAIN [1] alpha") {
+		t.Fatalf("narrow focus-big view should render selected session as primary, got:\n%s", view)
+	}
+	if !strings.Contains(view, "focus-big | clients: 2") {
+		t.Fatalf("narrow focus-big view should include status bar mode, got:\n%s", view)
+	}
+}
+
+func TestModel_FocusBigViewUsesLayoutOrder(t *testing.T) {
+	a := NewClientSession("a", "alpha", 80, 24, nil)
+	b := NewClientSession("b", "beta", 80, 24, nil)
+	m := NewModel(New())
+	m.width = 120
+	m.height = 24
+	m.sessions = []*ClientSession{a, b}
+	m.layout.order = []string{"b", "a"}
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "MAIN [1] beta") {
+		t.Fatalf("focus-big view should use ordered sessions for primary, got:\n%s", view)
+	}
+}
+
+func TestModel_FocusBigViewFallsBackToGridForZeroOrOneSession(t *testing.T) {
+	tests := []struct {
+		name     string
+		sessions []*ClientSession
+	}{
+		{
+			name: "zero sessions",
+		},
+		{
+			name: "one session",
+			sessions: []*ClientSession{
+				NewClientSession("alpha", "alpha", 80, 24, nil),
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(New())
+			m.width = 120
+			m.height = 24
+			m.sessions = tt.sessions
+			m.layout.syncSessions(m.sessions)
+			m.layout.mode = layoutFocusBig
+
+			got := stripANSI(m.focusBigView())
+			want := stripANSI(m.gridView())
+			if got != want {
+				t.Fatalf("focusBigView should fall back to gridView, got:\n%s\nwant:\n%s", got, want)
+			}
+		})
+	}
+}
+
+func TestModel_FocusBigViewFallsBackToGridForInvalidSelection(t *testing.T) {
+	tests := []struct {
+		name     string
+		selected int
+	}{
+		{name: "negative selected", selected: -1},
+		{name: "selected past end", selected: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(New())
+			m.width = 120
+			m.height = 24
+			m.sessions = []*ClientSession{
+				NewClientSession("alpha", "alpha", 80, 24, nil),
+				NewClientSession("beta", "beta", 80, 24, nil),
+			}
+			m.layout.syncSessions(m.sessions)
+			m.layout.mode = layoutFocusBig
+			m.selected = tt.selected
+
+			got := stripANSI(m.focusBigView())
+			want := stripANSI(m.gridView())
+			if got != want {
+				t.Fatalf("focusBigView should fall back to gridView, got:\n%s\nwant:\n%s", got, want)
+			}
+		})
+	}
+}
+
 func TestModel_GridViewUsesLayoutOrder(t *testing.T) {
 	a := NewClientSession("a", "first", 80, 24, nil)
 	b := NewClientSession("b", "second", 80, 24, nil)

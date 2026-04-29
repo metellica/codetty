@@ -65,8 +65,123 @@ func (m *Model) gridView() string {
 	}
 
 	grid := lipgloss.JoinVertical(lipgloss.Left, rowViews...)
-	help := statusBarStyle.Width(m.width).Render(m.statusHelp(n))
-	return lipgloss.JoinVertical(lipgloss.Left, grid, help)
+	return lipgloss.JoinVertical(lipgloss.Left, grid, m.statusBar(n))
+}
+
+func (m *Model) focusBigView() string {
+	sessions := m.orderedSessions()
+	n := len(sessions)
+	if n <= 1 || m.selected < 0 || m.selected >= n {
+		return m.gridView()
+	}
+
+	var layout string
+	if m.width >= 120 {
+		layout = m.focusBigWideView(sessions)
+	} else {
+		layout = m.focusBigNarrowView(sessions)
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, layout, m.statusBar(n))
+}
+
+func (m *Model) focusBigWideView(sessions []*ClientSession) string {
+	availableH := m.height - 1
+	if availableH < 3 {
+		availableH = 3
+	}
+
+	mainW := m.width * 7 / 10
+	sideW := m.width - mainW
+	if sideW < 14 {
+		sideW = 14
+		mainW = m.width - sideW
+	}
+	if mainW < 14 {
+		mainW = 14
+	}
+
+	primary := sessions[m.selected]
+	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
+	mainPanel := m.renderSessionPanel(primary, mainTitle, mainW, availableH-2, true)
+
+	secondaries := make([]string, 0, len(sessions)-1)
+	secondaryCount := len(sessions) - 1
+	baseH := availableH / secondaryCount
+	extraH := availableH % secondaryCount
+	for idx, sess := range sessions {
+		if idx == m.selected {
+			continue
+		}
+		panelH := baseH
+		if len(secondaries) < extraH {
+			panelH++
+		}
+		title := fmt.Sprintf("[%d] %s", idx+1, sess.Title)
+		secondaries = append(secondaries, m.renderSessionPanel(sess, title, sideW, panelH-2, false))
+	}
+
+	side := lipgloss.JoinVertical(lipgloss.Left, secondaries...)
+	return lipgloss.JoinHorizontal(lipgloss.Top, mainPanel, side)
+}
+
+func (m *Model) focusBigNarrowView(sessions []*ClientSession) string {
+	availableH := m.height - 1
+	if availableH < 4 {
+		availableH = 4
+	}
+
+	mainPanelH := availableH * 65 / 100
+	if mainPanelH < 3 {
+		mainPanelH = 3
+	}
+	if mainPanelH > availableH-1 {
+		mainPanelH = availableH - 1
+	}
+
+	primary := sessions[m.selected]
+	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
+	mainPanel := m.renderSessionPanel(primary, mainTitle, m.width, mainPanelH-2, true)
+
+	secondaryCount := len(sessions) - 1
+	secondaryH := availableH - mainPanelH
+	if secondaryH < 3 {
+		secondaryH = 3
+	}
+	baseW := m.width / secondaryCount
+	extraW := m.width % secondaryCount
+	secondaries := make([]string, 0, secondaryCount)
+	for idx, sess := range sessions {
+		if idx == m.selected {
+			continue
+		}
+		panelW := baseW
+		if len(secondaries) < extraW {
+			panelW++
+		}
+		title := fmt.Sprintf("[%d] %s", idx+1, sess.Title)
+		secondaries = append(secondaries, m.renderSessionPanel(sess, title, panelW, secondaryH-2, false))
+	}
+
+	secondaryRow := lipgloss.JoinHorizontal(lipgloss.Top, secondaries...)
+	return lipgloss.JoinVertical(lipgloss.Left, mainPanel, secondaryRow)
+}
+
+func (m *Model) renderSessionPanel(sess *ClientSession, title string, panelW, contentH int, focused bool) string {
+	contentW := panelW - 2
+	if contentW < 1 {
+		contentW = 1
+	}
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	contentLines, _, _ := sess.RenderANSI(contentW, contentH)
+	content := strings.Join(contentLines, "\n")
+	return renderPanel(title, content, panelW, contentH, focused)
+}
+
+func (m *Model) statusBar(n int) string {
+	return statusBarStyle.Width(m.width).Render(m.statusHelp(n))
 }
 
 func (m *Model) statusHelp(n int) string {

@@ -220,6 +220,10 @@ func (m *Model) View() string {
 		return "Fullscreen mode active..."
 	}
 
+	if m.layout.mode == layoutFocusBig {
+		return m.focusBigView()
+	}
+
 	return m.gridView()
 }
 
