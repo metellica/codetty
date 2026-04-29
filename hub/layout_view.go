@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -74,13 +75,17 @@ func (m *Model) gridView() string {
 }
 
 func (m *Model) focusBigView() string {
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+
 	sessions := m.orderedSessions()
 	n := len(sessions)
 	if n == 0 || m.selected < 0 || m.selected >= n {
 		return m.gridView()
 	}
 
-	status := m.statusBar(n)
+	status := m.focusBigStatusBar(n)
 	statusH := renderedLineCount(status)
 	if statusH > m.height {
 		status = constrainRenderedLineCount(status, m.height)
@@ -262,15 +267,42 @@ func constrainRenderedLineCount(s string, maxLines int) string {
 	return strings.Join(lines[:maxLines], "\n")
 }
 
+func constrainRenderedWidth(s string, maxW int) string {
+	if maxW <= 0 {
+		return ""
+	}
+	trimmed := strings.TrimRight(s, "\n")
+	if trimmed == "" {
+		return ""
+	}
+	lines := strings.Split(trimmed, "\n")
+	for i, line := range lines {
+		lines[i] = ansi.Truncate(line, maxW, "")
+	}
+	return strings.Join(lines, "\n")
+}
+
 func morePanel(hidden, panelW, contentH int) string {
+	if panelW <= 0 {
+		return ""
+	}
 	label := fmt.Sprintf("+%d more", hidden)
 	if contentH < 1 {
 		contentH = 1
+	}
+	if panelW < 5 {
+		return truncateToWidth(label, panelW)
 	}
 	return renderPanel(fitPanelTitle(label, panelW), truncateToWidth(label, panelW-2), panelW, contentH, false)
 }
 
 func (m *Model) renderFocusBigSessionPanel(sess *ClientSession, title string, panelW, contentH int, focused bool) string {
+	if contentH < 1 {
+		contentH = 1
+	}
+	if panelW < 5 {
+		return m.renderPlainFocusBigSessionPanel(sess, title, panelW, contentH+2)
+	}
 	return m.renderSessionPanel(sess, fitPanelTitle(title, panelW), panelW, contentH, focused)
 }
 
@@ -280,6 +312,9 @@ func (m *Model) renderFocusBigSessionPanelWithOuterHeight(sess *ClientSession, t
 	}
 	if panelH == 1 {
 		return truncateToWidth(title, panelW)
+	}
+	if panelW < 5 {
+		return m.renderPlainFocusBigSessionPanel(sess, title, panelW, panelH)
 	}
 	contentH := panelH - 2
 	contentW := panelW - 2
@@ -293,6 +328,32 @@ func (m *Model) renderFocusBigSessionPanelWithOuterHeight(sess *ClientSession, t
 		content = strings.Join(contentLines, "\n")
 	}
 	return renderPanel(fitPanelTitle(title, panelW), content, panelW, contentH, focused)
+}
+
+func (m *Model) renderPlainFocusBigSessionPanel(sess *ClientSession, title string, panelW, panelH int) string {
+	if panelW <= 0 || panelH <= 0 {
+		return ""
+	}
+
+	lines := make([]string, 0, panelH)
+	if title != "" {
+		lines = append(lines, truncateToWidth(title, panelW))
+	}
+
+	remaining := panelH - len(lines)
+	if remaining > 0 {
+		contentLines, _, _ := sess.RenderANSI(panelW, remaining)
+		for _, line := range contentLines {
+			if len(lines) >= panelH {
+				break
+			}
+			lines = append(lines, ansi.Truncate(line, panelW, ""))
+		}
+	}
+	if len(lines) > panelH {
+		lines = lines[:panelH]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func fitPanelTitle(title string, panelW int) string {
@@ -335,6 +396,13 @@ func (m *Model) renderSessionPanel(sess *ClientSession, title string, panelW, co
 
 func (m *Model) statusBar(n int) string {
 	return statusBarStyle.Width(m.width).Render(m.statusHelp(n))
+}
+
+func (m *Model) focusBigStatusBar(n int) string {
+	if m.width < 5 {
+		return truncateToWidth(m.statusHelp(n), m.width)
+	}
+	return constrainRenderedWidth(m.statusBar(n), m.width)
 }
 
 func (m *Model) statusHelp(n int) string {

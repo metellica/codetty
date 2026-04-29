@@ -14,6 +14,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/gorilla/websocket"
 )
 
@@ -552,6 +553,117 @@ func TestModel_FocusBigSingleSessionUsesBudgetedMainPanel(t *testing.T) {
 	}
 	if grid := stripANSI(m.gridView()); view == grid {
 		t.Fatalf("single-session focus-big view should not fall back to gridView, got:\n%s", view)
+	}
+}
+
+func TestModel_FocusBigTinyWidthsStayWithinWidth(t *testing.T) {
+	for _, width := range []int{1, 2, 3, 4} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			m := NewModel(New())
+			m.width = width
+			m.height = 5
+			m.layout.mode = layoutFocusBig
+			m.selected = 0
+			m.sessions = []*ClientSession{
+				NewClientSession("alpha", "alpha-with-a-very-long-title-that-must-not-expand-the-panel", 80, 24, nil),
+			}
+			m.layout.syncSessions(m.sessions)
+
+			view := stripANSI(m.View())
+			if got := renderedMaxWidth(view); got > m.width {
+				t.Fatalf("single-session focus-big tiny-width view width = %d, want <= %d\n%s", got, m.width, view)
+			}
+			if got := renderedHeight(view); got > m.height {
+				t.Fatalf("single-session focus-big tiny-width view height = %d, want <= %d\n%s", got, m.height, view)
+			}
+		})
+	}
+}
+
+func TestModel_FocusBigNarrowTinyWidthsStayWithinWidth(t *testing.T) {
+	for _, width := range []int{1, 2, 3, 4} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			m := NewModel(New())
+			m.width = width
+			m.height = 8
+			m.layout.mode = layoutFocusBig
+			m.selected = 0
+			m.sessions = []*ClientSession{
+				NewClientSession("alpha", "alpha", 80, 24, nil),
+				NewClientSession("beta", "beta", 80, 24, nil),
+			}
+			m.layout.syncSessions(m.sessions)
+
+			view := stripANSI(m.View())
+			if got := renderedMaxWidth(view); got > m.width {
+				t.Fatalf("narrow focus-big tiny-width view width = %d, want <= %d\n%s", got, m.width, view)
+			}
+			if got := renderedHeight(view); got > m.height {
+				t.Fatalf("narrow focus-big tiny-width view height = %d, want <= %d\n%s", got, m.height, view)
+			}
+		})
+	}
+}
+
+func TestModel_FocusBigTinyWidthStatusOnlyStaysWithinWidth(t *testing.T) {
+	for _, width := range []int{1, 2, 3, 4} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			m := NewModel(New())
+			m.width = width
+			m.height = 1
+			m.layout.mode = layoutFocusBig
+			m.selected = 0
+			m.sessions = []*ClientSession{
+				NewClientSession("alpha", "alpha", 80, 24, nil),
+				NewClientSession("beta", "beta", 80, 24, nil),
+			}
+			m.layout.syncSessions(m.sessions)
+
+			view := stripANSI(m.View())
+			if got := renderedMaxWidth(view); got > m.width {
+				t.Fatalf("focus-big tiny-width status-only view width = %d, want <= %d\n%s", got, m.width, view)
+			}
+			if got := renderedHeight(view); got > m.height {
+				t.Fatalf("focus-big tiny-width status-only view height = %d, want <= %d\n%s", got, m.height, view)
+			}
+		})
+	}
+}
+
+func TestModel_FocusBigStatusBarWidthConstraintPreservesANSI(t *testing.T) {
+	m := NewModel(New())
+	m.width = 5
+	m.height = 1
+	m.layout.mode = layoutFocusBig
+
+	status := m.focusBigStatusBar(2)
+	for _, line := range strings.Split(status, "\n") {
+		if got := ansi.StringWidth(line); got > m.width {
+			t.Fatalf("focus-big status line width = %d, want <= %d\n%q", got, m.width, status)
+		}
+	}
+	if strings.Contains(ansi.Strip(status), "\x1b") {
+		t.Fatalf("focus-big status should not expose partial ANSI escapes, got %q", status)
+	}
+	if strings.Contains(status, "\x1b[") && !strings.Contains(status, "\x1b[0m") {
+		t.Fatalf("focus-big styled status should preserve ANSI reset, got %q", status)
+	}
+}
+
+func TestModel_FocusBigTinyWidthPanelFallbackPreservesANSI(t *testing.T) {
+	m := NewModel(New())
+	m.width = 1
+	m.height = 5
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+	session := NewClientSession("alpha", "alpha", 80, 24, nil)
+	session.WriteOutput([]byte("\x1b[31m🙂"))
+	m.sessions = []*ClientSession{session}
+	m.layout.syncSessions(m.sessions)
+
+	view := m.View()
+	if strings.Contains(view, "\x1b[ ") || (strings.Contains(view, "\x1b[") && !strings.Contains(view, "\x1b[0m")) {
+		t.Fatalf("focus-big tiny-width panel fallback should not expose partial ANSI escapes, got %q", view)
 	}
 }
 
