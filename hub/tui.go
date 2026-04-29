@@ -128,8 +128,13 @@ func (m *Model) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 		case 'b':
 			m.layout.mode = layoutFocusBig
 		case 'g':
-			m.layout.mode = layoutAutoGrid
-			m.layout.fixedCols = 0
+			if m.layout.mode == layoutFocusBig {
+				if m.layout.fixedCols > 0 {
+					m.layout.mode = layoutFixedGrid
+				} else {
+					m.layout.mode = layoutAutoGrid
+				}
+			}
 		}
 	}
 	return nil

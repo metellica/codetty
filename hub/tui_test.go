@@ -121,6 +121,65 @@ func TestModel_UsesCtrlAPrefixForHubCommands(t *testing.T) {
 	}
 }
 
+func TestModel_PrefixGridCommandPreservesGridPreference(t *testing.T) {
+	tests := []struct {
+		name          string
+		keys          []rune
+		wantMode      layoutMode
+		wantFixedCols int
+	}{
+		{
+			name:          "fixed grid remains fixed grid",
+			keys:          []rune{'2', 'g'},
+			wantMode:      layoutFixedGrid,
+			wantFixedCols: 2,
+		},
+		{
+			name:          "focus big returns to fixed grid preference",
+			keys:          []rune{'2', 'b', 'g'},
+			wantMode:      layoutFixedGrid,
+			wantFixedCols: 2,
+		},
+		{
+			name:          "focus big returns to auto grid preference",
+			keys:          []rune{'a', 'b', 'g'},
+			wantMode:      layoutAutoGrid,
+			wantFixedCols: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(New())
+
+			for _, key := range tt.keys {
+				_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+				if cmd != nil {
+					t.Fatal("Ctrl+A should enter prefix mode without returning a command")
+				}
+				if !m.layout.prefix {
+					t.Fatal("Ctrl+A should enter prefix mode")
+				}
+
+				_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+				if cmd != nil {
+					t.Fatalf("Ctrl+A %c should not return a command", key)
+				}
+				if m.layout.prefix {
+					t.Fatalf("Ctrl+A %c should clear prefix mode", key)
+				}
+			}
+
+			if m.layout.mode != tt.wantMode {
+				t.Fatalf("layout mode = %s, want %s", m.layout.modeName(), (&layoutState{mode: tt.wantMode}).modeName())
+			}
+			if m.layout.fixedCols != tt.wantFixedCols {
+				t.Fatalf("fixedCols = %d, want %d", m.layout.fixedCols, tt.wantFixedCols)
+			}
+		})
+	}
+}
+
 func TestModel_LegacyShortcutsForwardWithoutPrefix(t *testing.T) {
 	h := New()
 	clientConn, sessions := modelTestClient(t, h, "copilot", "copilot@test")
