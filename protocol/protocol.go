@@ -8,7 +8,7 @@ const (
 	// cli → hub
 	MsgRegister MsgType = 'r'
 	MsgOutput   MsgType = 'o'
-	MsgReplay   MsgType = 'R' // buffered PTY output for screen recovery
+	MsgReplay   MsgType = 'R' // ANSI screen snapshot for screen recovery
 
 	// hub → cli
 	MsgInput  MsgType = 'i'

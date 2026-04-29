@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -74,10 +75,10 @@ func main() {
 		}
 	}()
 
-	// Ring buffer for replay on reconnect (256KB)
-	replayBuf := NewRingBuffer(256 * 1024)
+	screenMirror := NewScreenMirror(cols, rows)
+	var replayMu sync.Mutex
 
-	// Single PTY reader → local stdout + hub channel + replay buffer
+	// Single PTY reader → local stdout + hub channel + screen mirror
 	outputCh := make(chan []byte, 256)
 	go func() {
 		buf := make([]byte, 4096)
@@ -87,11 +88,13 @@ func main() {
 				os.Stdout.Write(buf[:n])
 				cp := make([]byte, n)
 				copy(cp, buf[:n])
-				replayBuf.Write(cp)
+				replayMu.Lock()
+				screenMirror.Write(cp)
 				select {
 				case outputCh <- cp:
 				default: // drop if hub not keeping up
 				}
+				replayMu.Unlock()
 			}
 			if err != nil {
 				return
@@ -100,7 +103,7 @@ func main() {
 	}()
 
 	// Run connection loop (reconnects on failure)
-	go connectionLoop(*serverURL, *clientID, title, cols, rows, ptmx, outputCh, doneCh, replayBuf)
+	go connectionLoop(*serverURL, *clientID, title, ptmx, outputCh, doneCh, screenMirror, &replayMu)
 
 	// Wait for process exit or signal
 	select {
@@ -112,12 +115,12 @@ func main() {
 	}
 }
 
-func connectionLoop(serverURL, clientID, title string, cols, rows uint16, ptmx *os.File, outputCh <-chan []byte, done <-chan error, replayBuf *RingBuffer) {
+func connectionLoop(serverURL, clientID, title string, ptmx *os.File, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) {
 	delay := time.Second
 	maxDelay := 30 * time.Second
 
 	for {
-		err := runConnection(serverURL, clientID, title, cols, rows, ptmx, outputCh, done, replayBuf)
+		err := runConnection(serverURL, clientID, title, ptmx, outputCh, done, screen, replayMu)
 		if err == nil {
 			return
 		}
@@ -135,13 +138,14 @@ func connectionLoop(serverURL, clientID, title string, cols, rows uint16, ptmx *
 	}
 }
 
-func runConnection(serverURL, clientID, title string, cols, rows uint16, ptmx *os.File, outputCh <-chan []byte, done <-chan error, replayBuf *RingBuffer) error {
+func runConnection(serverURL, clientID, title string, ptmx *os.File, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) error {
 	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
 
+	cols, rows := screen.Size()
 	regMsg, err := protocol.EncodeRegister(protocol.RegisterPayload{
 		ID:    clientID,
 		Title: title,
@@ -155,8 +159,7 @@ func runConnection(serverURL, clientID, title string, cols, rows uint16, ptmx *o
 		return fmt.Errorf("send register: %w", err)
 	}
 
-	// Send buffered output for screen restore
-	if replay := replayBuf.Bytes(); len(replay) > 0 {
+	if replay := snapshotReplay(outputCh, screen, replayMu); len(replay) > 0 {
 		msg := protocol.EncodeReplay(replay)
 		if err := conn.WriteMessage(websocket.BinaryMessage, msg); err != nil {
 			return fmt.Errorf("send replay: %w", err)
@@ -205,7 +208,13 @@ func runConnection(serverURL, clientID, title string, cols, rows uint16, ptmx *o
 			case protocol.MsgResize:
 				p, err := protocol.DecodeResize(payload)
 				if err == nil {
-					pty.Setsize(ptmx, &pty.Winsize{Cols: p.Cols, Rows: p.Rows})
+					replayMu.Lock()
+					if err := pty.Setsize(ptmx, &pty.Winsize{Cols: p.Cols, Rows: p.Rows}); err != nil {
+						log.Printf("resize pty: %v", err)
+					} else {
+						screen.Resize(p.Cols, p.Rows)
+					}
+					replayMu.Unlock()
 				}
 			}
 		}

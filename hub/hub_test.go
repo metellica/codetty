@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -172,4 +173,58 @@ func TestHub_ReplayRestoresScreen(t *testing.T) {
 	if !strings.Contains(screen, "line two") {
 		t.Fatalf("screen should contain 'line two', got:\n%s", screen)
 	}
+}
+
+func TestHub_ReplayWritesSnapshotToFullscreenWriter(t *testing.T) {
+	h := New()
+
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := testUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		h.HandleConn(conn)
+	}))
+	defer s.Close()
+
+	clientConn, _, err := websocket.DefaultDialer.Dial("ws"+s.URL[4:], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer clientConn.Close()
+
+	regMsg, _ := protocol.EncodeRegister(protocol.RegisterPayload{
+		ID: "fullscreen-replay", Title: "test", Cols: 80, Rows: 24,
+	})
+	clientConn.WriteMessage(websocket.BinaryMessage, regMsg)
+	time.Sleep(100 * time.Millisecond)
+
+	var fullscreen lockedBuffer
+	h.SetFullscreen("fullscreen-replay", &fullscreen)
+	defer h.SetFullscreen("", nil)
+
+	replayData := []byte("\033[2J\033[Hrestored fullscreen")
+	clientConn.WriteMessage(websocket.BinaryMessage, protocol.EncodeReplay(replayData))
+	time.Sleep(100 * time.Millisecond)
+
+	if got := fullscreen.String(); !strings.Contains(got, "restored fullscreen") {
+		t.Fatalf("fullscreen writer should receive replay snapshot, got %q", got)
+	}
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.b.String()
 }

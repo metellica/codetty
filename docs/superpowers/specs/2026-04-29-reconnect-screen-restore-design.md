@@ -2,91 +2,81 @@
 
 ## Problem
 
-When the codetty-hub server restarts, all `vt10x.Terminal` session state is lost.
-Clients (codetty-cli) reconnect automatically, but the new session starts with an
-empty virtual terminal — the TUI shows a black screen until the remote PTY
-produces new output.
+When `codetty-hub` restarts, all hub-side `vt10x.Terminal` state is lost.
+Clients reconnect automatically, but a fresh hub session starts with an empty
+virtual terminal, so the TUI can show a black or partial screen until the remote
+PTY produces new output.
 
-The same problem occurs when a client disconnects and reconnects while the hub is
-running: `addSession` replaces the old session with a fresh one that has an empty
-vt10x.
+The same class of problem can happen after network reconnects: replaying only a
+suffix of raw PTY output is not equivalent to restoring current terminal state.
+Full-screen TUIs like Copilot often paint the whole frame once and later emit
+small cursor-addressed updates. If replay starts from the middle of that stream,
+the hub cannot reconstruct the missing frame from an empty terminal.
 
 ## Approach
 
-Client-side ring buffer with replay on reconnect.
+Client-side screen mirror with snapshot replay.
 
-The client maintains a fixed-size ring buffer of recent raw PTY output. On every
-(re)connection, after sending `MsgRegister`, the client sends a `MsgReplay`
-message containing the buffered output. The hub feeds this data into the new
-session's `vt10x.Terminal`, reconstructing the terminal screen state.
+`codetty-cli` maintains a local `vt10x.Terminal` mirror of the PTY output. On
+every connection, after `MsgRegister`, the client serializes the current mirror
+into an ANSI screen snapshot and sends it as `MsgReplay`. The hub feeds this
+snapshot into its fresh vt10x session, rebuilding the current visible screen from
+blank state.
+
+This replaces the initial raw-output suffix approach. Recent bytes cannot
+guarantee a valid terminal-state boundary. A screen snapshot is bounded by
+terminal size and always describes the current display.
 
 ## Protocol Change
 
-New message type:
+Message type:
 
-```
-MsgReplay MsgType = 'R'   // cli → hub: buffered PTY output for screen recovery
+```go
+MsgReplay MsgType = 'R' // cli -> hub: ANSI screen snapshot for recovery
 ```
 
 Message sequence on connect:
 
-1. `MsgRegister` — session registration (unchanged)
-2. `MsgReplay` — ring buffer contents (raw PTY output bytes). Omitted if buffer
-   is empty (first connection with no output yet).
+1. `MsgRegister` — session registration with the current mirrored terminal size.
+2. `MsgReplay` — complete ANSI snapshot of the current visible screen. Omitted
+   if the client has not seen any PTY output yet.
 3. Normal `MsgOutput` stream resumes.
 
-Encoding: `EncodeReplay(data []byte) []byte` — prepends `'R'` byte to data,
-same pattern as existing encode functions.
+`EncodeReplay(data []byte) []byte` prepends `'R'` to the snapshot bytes, matching
+the existing message encoding style.
 
-## Client-Side Ring Buffer
+## Client-Side Screen Mirror
 
-### Data Structure
+New file: `cmd/codetty-cli/screen_snapshot.go`.
 
-New file `cmd/codetty-cli/ringbuf.go`:
+`ScreenMirror` owns a `vt10x.Terminal`:
 
-```go
-type RingBuffer struct {
-    mu   sync.Mutex
-    buf  []byte
-    size int   // fixed capacity
-    pos  int   // next write position
-    full bool  // true once buffer has wrapped around
-}
-```
+- `Write(data []byte)` feeds PTY output into the mirror.
+- `Resize(cols, rows uint16)` keeps the mirror aligned with PTY resize messages.
+- `Size()` returns the current mirrored terminal size for `MsgRegister`.
+- `Snapshot()` returns ANSI bytes that restore exposed terminal modes, clear the
+  target, repaint every visible cell, restore attributes, move the cursor, and
+  restore cursor visibility.
 
-### Behavior
+The PTY reader writes output to local stdout, the mirror, and the hub output
+queue. A shared mutex serializes mirror updates, output queue writes, queue
+draining, and snapshot creation.
 
-- **Capacity:** 256KB default, configurable via `--replay-buf` flag.
-- **Write:** Called from the PTY reader goroutine after each `ptmx.Read()`.
-  Appends data, wraps around when full.
-- **Bytes():** Returns the buffer contents in chronological order (handles
-  wrap-around). Called during reconnection.
-- **Thread safety:** `sync.Mutex` protects all access. The PTY reader writes
-  concurrently with the reconnection sender reading.
+## Queue Draining on Reconnect
 
-### Integration Point
+During hub downtime, `outputCh` can contain output chunks that have already been
+applied to the screen mirror. If the client sends a snapshot and then sends those
+queued chunks again, the hub can duplicate stream output or disturb cursor state.
 
-In `main.go`, the PTY reader loop writes to both `os.Stdout`, `outputCh`, and
-the ring buffer:
+Before creating the reconnect snapshot, the client drains `outputCh` while
+holding the same mutex used by the PTY reader. This guarantees:
 
-```go
-// existing: os.Stdout.Write(buf[:n])
-// existing: outputCh <- cp
-ringBuf.Write(cp)   // new
-```
-
-In `runConnection()`, after sending `MsgRegister`:
-
-```go
-replay := ringBuf.Bytes()
-if len(replay) > 0 {
-    conn.WriteMessage(websocket.BinaryMessage, protocol.EncodeReplay(replay))
-}
-```
+- chunks produced before the snapshot are included in the snapshot and not resent;
+- chunks produced after the snapshot are queued and sent normally after replay.
 
 ## Hub-Side Handling
 
-In `hub.go` `HandleConn`, add a case for `MsgReplay`:
+In `hub.go` `HandleConn`, `MsgReplay` is handled like a state restore:
 
 ```go
 case protocol.MsgReplay:
@@ -94,54 +84,48 @@ case protocol.MsgReplay:
         return
     }
     sess.WriteOutput(payload)
-    // Send a single refresh notification to TUI (not per-byte updates)
-    if h.program != nil {
-        h.fsMu.RLock()
-        inFullscreen := h.fullscreenID != ""
-        h.fsMu.RUnlock()
-        if !inFullscreen {
-            h.program.Send(ScreenUpdateMsg{ID: sess.ID, Data: nil})
-        }
+    if h.fullscreenID == sess.ID && h.fsWriter != nil {
+        h.fsWriter.Write(payload)
+    }
+    if h.program != nil && !inFullscreen {
+        h.program.Send(ScreenUpdateMsg{ID: sess.ID, Data: nil})
     }
 ```
 
-Key decisions:
-
-- Replay data is fed into `vt10x` identically to normal output — vt10x
-  correctly parses all ANSI escape sequences to rebuild terminal state.
-- Only one `ScreenUpdateMsg` is sent after the entire replay, avoiding
-  intermediate render flicker.
-- In fullscreen mode, replay is not written to stdout (no visual flash of
-  scrolling history). The vt10x state is updated silently; exiting fullscreen
-  reads the correct state.
-- `ScreenUpdateMsg.Data` being nil signals a refresh-only update. The TUI's
-  `View()` already reads from vt10x on every render, so no data payload is
-  needed.
+Replay data is a snapshot, not raw history. It updates vt10x, triggers a single
+TUI refresh outside fullscreen, and directly repaints the fullscreen writer when
+the matching session is already in fullscreen.
 
 ## Edge Cases
 
 | Case | Handling |
 |------|----------|
-| First connection (no prior output) | Ring buffer empty, no `MsgReplay` sent |
-| Hub in fullscreen during replay | vt10x updated, stdout not written to |
-| Multiple clients reconnecting simultaneously | Each client sends its own replay, sessions are independent |
-| Replay data exceeds vt10x terminal size | vt10x handles scrollback naturally; only visible screen matters |
-| Client process exited before reconnection | Ring buffer retains the last output; replay still works |
+| First connection before PTY output | `Snapshot()` returns nil; no replay sent |
+| Hub restart while client is idle | Client sends a complete screen snapshot immediately after reconnect |
+| Multiple hub restarts | Snapshot is generated from the client-side mirror each time |
+| Output produced while hub is down | Included in snapshot; stale queued chunks are drained before replay |
+| Output produced after snapshot | Sent as normal `MsgOutput` after replay |
+| Resize before reconnect | `MsgRegister` uses the mirror's current size |
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `protocol/protocol.go` | Add `MsgReplay` constant, `EncodeReplay()` function |
-| `cmd/codetty-cli/ringbuf.go` | New file: `RingBuffer` implementation |
-| `cmd/codetty-cli/main.go` | Integrate ring buffer in PTY reader, send replay on connect |
+| `protocol/protocol.go` | Add `MsgReplay` constant and `EncodeReplay()` |
+| `cmd/codetty-cli/screen_snapshot.go` | Add `ScreenMirror`, ANSI snapshot rendering, queue draining |
+| `cmd/codetty-cli/main.go` | Feed PTY output into mirror, send snapshot on connect, keep mirror resized |
 | `hub/hub.go` | Handle `MsgReplay` in `HandleConn` |
 
 ## Testing
 
-- **RingBuffer unit tests** (`cmd/codetty-cli/ringbuf_test.go`): write/read,
-  wrap-around, empty buffer, concurrent access.
-- **Protocol tests** (`protocol/protocol_test.go`): `EncodeReplay` round-trip
-  with `ParseType`.
-- **Hub integration test** (`hub/hub_test.go`): simulate Register → Replay →
-  verify vt10x screen content matches expected state.
+- Protocol tests cover `MsgReplay` encoding and parsing.
+- Screen snapshot tests verify a snapshot restores a full Copilot-like screen
+  from blank state.
+- Queue-drain tests verify reconnect snapshots consume queued output that is
+  already represented in the snapshot.
+- Snapshot tests verify terminal mode restore for alt-screen, app-cursor, wrap,
+  and SGR mouse modes.
+- Hub tests verify `MsgReplay` restores vt10x screen content and directly
+  repaints the fullscreen writer.
+- tmux verification starts real `copilot` in `/root/logsim-mount/tmp` and
+  confirms the hub displays the full terminal after two consecutive hub restarts.

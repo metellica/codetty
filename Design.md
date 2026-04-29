@@ -293,7 +293,7 @@ type ClientSession struct {
     Cols    uint16
     Rows    uint16
     conn    *websocket.Conn
-    screen  []byte   // last rendered screen snapshot (ring buffer)
+    screen  []byte   // last rendered screen snapshot
     mu      sync.Mutex
     hub     *Hub
 }

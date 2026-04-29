@@ -95,13 +95,16 @@ func (h *Hub) HandleConn(conn *websocket.Conn) {
 				return
 			}
 			sess.WriteOutput(payload)
-			if h.program != nil {
-				h.fsMu.RLock()
-				inFullscreen := h.fullscreenID != ""
-				h.fsMu.RUnlock()
-				if !inFullscreen {
-					h.program.Send(ScreenUpdateMsg{ID: sess.ID, Data: nil})
-				}
+
+			h.fsMu.RLock()
+			inFullscreen := h.fullscreenID != ""
+			if h.fullscreenID == sess.ID && h.fsWriter != nil {
+				h.fsWriter.Write(payload)
+			}
+			h.fsMu.RUnlock()
+
+			if h.program != nil && !inFullscreen {
+				h.program.Send(ScreenUpdateMsg{ID: sess.ID, Data: nil})
 			}
 
 		case protocol.MsgOutput:
