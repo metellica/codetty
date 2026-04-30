@@ -31,7 +31,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	idExplicit := *clientID != ""
+	idExplicit := flagWasProvided(flag.CommandLine, "id")
 	wd, _ := os.Getwd()
 	hostname, _ := os.Hostname()
 	identityID, title := buildClientIdentity(*clientID, idExplicit, wd, hostname, os.Getpid(), args[0])
@@ -247,6 +247,16 @@ func buildClientIdentity(id string, explicit bool, dir string, hostname string, 
 	generatedID := fmt.Sprintf("%s-%s-%d", base, hostname, pid)
 	title := fmt.Sprintf("%s@%s#%d", command, base, pid)
 	return generatedID, title
+}
+
+func flagWasProvided(fs *flag.FlagSet, name string) bool {
+	provided := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			provided = true
+		}
+	})
+	return provided
 }
 
 func copyLocalInput(dst io.Writer, src io.Reader) error {

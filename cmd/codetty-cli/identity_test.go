@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,6 +36,30 @@ func TestExplicitClientIdentityPreservesIDAndTitleShape(t *testing.T) {
 	}
 	if title != "claude@shared" {
 		t.Fatalf("explicit title = %q, want %q", title, "claude@shared")
+	}
+}
+
+func TestFlagWasProvidedDetectsExplicitEmptyID(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.String("id", "", "client identifier")
+	if err := fs.Parse([]string{"--id=", "--", "cat"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	if !flagWasProvided(fs, "id") {
+		t.Fatal("empty --id= should count as an explicit id")
+	}
+}
+
+func TestFlagWasProvidedIgnoresOmittedID(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.String("id", "", "client identifier")
+	if err := fs.Parse([]string{"--", "cat"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	if flagWasProvided(fs, "id") {
+		t.Fatal("omitted --id should not count as explicit")
 	}
 }
 

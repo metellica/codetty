@@ -110,3 +110,39 @@ func TestModel_FocusBigHiddenSecondaryDoesNotHit(t *testing.T) {
 		}
 	}
 }
+
+func TestModel_FocusBigMorePanelAreaDoesNotHit(t *testing.T) {
+	m := NewModel(New())
+	m.width = 40
+	m.height = 24
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+		NewClientSession("gamma", "gamma", 80, 24, nil),
+		NewClientSession("delta", "delta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+
+	n := len(m.sessions)
+	statusH := renderedLineCount(m.focusBigStatusBar(n))
+	availableH := m.height - statusH
+	mainPanelH := availableH * 65 / 100
+	if mainPanelH < minPanelH {
+		mainPanelH = minPanelH
+	}
+	if maxMainH := availableH - minPanelH; mainPanelH > maxMainH {
+		mainPanelH = maxMainH
+	}
+	visible, hidden := fitSecondaryCount(m.width, minPanelW, n-1)
+	if visible != 1 || hidden != 2 {
+		t.Fatalf("test setup visible, hidden = %d, %d; want 1, 2", visible, hidden)
+	}
+
+	morePanelX := distributedSlotSize(m.width, visible+1, 0) + 1
+	morePanelY := mainPanelH + 1
+	if got := m.hitTestSession(morePanelX, morePanelY); got != -1 {
+		t.Fatalf("+N more panel hit = %d, want -1", got)
+	}
+}
