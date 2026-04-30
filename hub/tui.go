@@ -71,6 +71,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.fullscreen {
 			return m, nil
 		}
+		if msg.Type == tea.KeyShiftTab {
+			m.selectDelta(1)
+			return m, nil
+		}
 		if msg.Type == tea.KeyCtrlA {
 			if m.layout.prefix {
 				m.layout.prefix = false

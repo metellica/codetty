@@ -213,6 +213,60 @@ func TestModel_PrefixFocusBigMode(t *testing.T) {
 	}
 }
 
+func TestModel_ShiftTabSelectsNextSessionAndChangesForwardingTarget(t *testing.T) {
+	h := New()
+	connA, _ := modelTestClient(t, h, "a", "session-a")
+	connB, _ := modelTestClient(t, h, "b", "session-b")
+
+	m := NewModel(h)
+	m.sessions = h.Sessions()
+	m.layout.syncSessions(m.sessions)
+	m.selected = 0
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if cmd != nil {
+		t.Fatal("Shift+Tab should switch selection without returning a command")
+	}
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd != nil {
+		t.Fatal("normal key should forward without returning a command")
+	}
+	msgType, payload := readTestMessage(t, connB)
+	if msgType != protocol.MsgInput {
+		t.Fatalf("expected input for session-b, got type %q", msgType)
+	}
+	if string(payload) != "x" {
+		t.Fatalf("expected payload %q, got %q", "x", payload)
+	}
+	assertNoTestMessage(t, connA)
+}
+
+func TestModel_TabStillForwardsToSelectedSession(t *testing.T) {
+	h := New()
+	connA, _ := modelTestClient(t, h, "a", "session-a")
+
+	m := NewModel(h)
+	m.sessions = h.Sessions()
+	m.layout.syncSessions(m.sessions)
+	m.selected = 0
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if cmd != nil {
+		t.Fatal("Tab should forward without returning a command")
+	}
+	msgType, payload := readTestMessage(t, connA)
+	if msgType != protocol.MsgInput {
+		t.Fatalf("expected input for session-a, got type %q", msgType)
+	}
+	if string(payload) != "\t" {
+		t.Fatalf("expected tab payload, got %q", payload)
+	}
+}
+
 func TestModel_FocusBigViewUsesSelectedAsPrimary(t *testing.T) {
 	m := NewModel(New())
 	m.width = 120
