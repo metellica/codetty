@@ -1,0 +1,50 @@
+package main
+
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestImplicitClientIdentityIsUniquePerProcess(t *testing.T) {
+	id1, title1 := buildClientIdentity("", false, "/root/logsim-mount/tmp", "host-a", 111, "claude")
+	id2, title2 := buildClientIdentity("", false, "/root/logsim-mount/tmp", "host-a", 222, "claude")
+
+	if id1 == id2 {
+		t.Fatalf("implicit IDs should differ for same directory with different PIDs: %q", id1)
+	}
+	if id1 != "tmp-host-a-111" {
+		t.Fatalf("id1 = %q, want %q", id1, "tmp-host-a-111")
+	}
+	if id2 != "tmp-host-a-222" {
+		t.Fatalf("id2 = %q, want %q", id2, "tmp-host-a-222")
+	}
+	if title1 != "claude@tmp#111" {
+		t.Fatalf("title1 = %q, want %q", title1, "claude@tmp#111")
+	}
+	if title2 != "claude@tmp#222" {
+		t.Fatalf("title2 = %q, want %q", title2, "claude@tmp#222")
+	}
+}
+
+func TestExplicitClientIdentityPreservesIDAndTitleShape(t *testing.T) {
+	id, title := buildClientIdentity("shared", true, "/root/logsim-mount/tmp", "host-a", 111, "claude")
+
+	if id != "shared" {
+		t.Fatalf("explicit id = %q, want %q", id, "shared")
+	}
+	if title != "claude@shared" {
+		t.Fatalf("explicit title = %q, want %q", title, "claude@shared")
+	}
+}
+
+func TestImplicitClientIdentityFallsBackToUnknownHostname(t *testing.T) {
+	id, title := buildClientIdentity("", false, filepath.Join("/", "tmp"), "", 333, "cat")
+
+	if !strings.Contains(id, "tmp-unknown-333") {
+		t.Fatalf("implicit id should include unknown hostname fallback and pid, got %q", id)
+	}
+	if title != "cat@tmp#333" {
+		t.Fatalf("title = %q, want %q", title, "cat@tmp#333")
+	}
+}

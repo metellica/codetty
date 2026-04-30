@@ -22,7 +22,7 @@ import (
 
 func main() {
 	serverURL := flag.String("server", "ws://localhost:8080/ws", "hub WebSocket URL")
-	clientID := flag.String("id", defaultID(), "client identifier")
+	clientID := flag.String("id", "", "client identifier")
 	flag.Parse()
 
 	args := flag.Args()
@@ -30,6 +30,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: codetty-cli --server ws://hub:8080/ws --id NAME -- <command> [args...]\n")
 		os.Exit(1)
 	}
+
+	idExplicit := *clientID != ""
+	wd, _ := os.Getwd()
+	hostname, _ := os.Hostname()
+	identityID, title := buildClientIdentity(*clientID, idExplicit, wd, hostname, os.Getpid(), args[0])
 
 	// Determine terminal size
 	cols, rows := uint16(220), uint16(50)
@@ -49,8 +54,6 @@ func main() {
 		log.Fatalf("pty.Start: %v", err)
 	}
 	defer ptmx.Close()
-
-	title := fmt.Sprintf("%s@%s", args[0], *clientID)
 
 	// Signal handling
 	sigCh := make(chan os.Signal, 1)
@@ -103,7 +106,7 @@ func main() {
 	}()
 
 	// Run connection loop (reconnects on failure)
-	go connectionLoop(*serverURL, *clientID, title, ptmx, outputCh, doneCh, screenMirror, &replayMu)
+	go connectionLoop(*serverURL, identityID, title, ptmx, outputCh, doneCh, screenMirror, &replayMu)
 
 	// Wait for process exit or signal
 	select {
@@ -230,16 +233,20 @@ func runConnection(serverURL, clientID, title string, ptmx *os.File, outputCh <-
 	}
 }
 
-func defaultID() string {
-	dir, err := os.Getwd()
-	if err == nil && dir != "" {
-		return filepath.Base(dir)
+func buildClientIdentity(id string, explicit bool, dir string, hostname string, pid int, command string) (string, string) {
+	if explicit {
+		return id, fmt.Sprintf("%s@%s", command, id)
 	}
-	h, _ := os.Hostname()
-	if h == "" {
-		return "unknown"
+	base := filepath.Base(dir)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		base = "unknown"
 	}
-	return h
+	if hostname == "" {
+		hostname = "unknown"
+	}
+	generatedID := fmt.Sprintf("%s-%s-%d", base, hostname, pid)
+	title := fmt.Sprintf("%s@%s#%d", command, base, pid)
+	return generatedID, title
 }
 
 func copyLocalInput(dst io.Writer, src io.Reader) error {
