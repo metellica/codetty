@@ -33,46 +33,22 @@ func (m *Model) gridView() string {
 	sessions := m.orderedSessions()
 	n := len(sessions)
 	status := m.statusBar(n)
-	statusH := renderedLineCount(status)
-	if statusH > m.height {
-		return constrainRenderedLineCount(status, m.height)
-	}
-	availableH := m.height - statusH
-	if availableH <= 0 {
-		return constrainRenderedLineCount(status, m.height)
-	}
-	cols := m.layout.gridCols(n, m.width, m.height)
-	rows := (n + cols - 1) / cols
-	panelW, panelH := m.panelSize(n, cols, availableH)
-	if panelH < 1 {
-		panelH = 1
-	}
-	visibleRows := rows
-	if visibleRows*panelH > availableH {
-		visibleRows = availableH / panelH
-	}
-	if visibleRows < 1 {
+	metrics, ok := m.gridMetrics(n)
+	if !ok {
+		if renderedLineCount(status) > m.height {
+			return constrainRenderedLineCount(status, m.height)
+		}
 		return status
-	}
-	startRow := 0
-	if visibleRows < rows && m.selected >= 0 && m.selected < n {
-		selectedRow := m.selected / cols
-		if selectedRow >= visibleRows {
-			startRow = selectedRow - visibleRows + 1
-		}
-		if startRow+visibleRows > rows {
-			startRow = rows - visibleRows
-		}
 	}
 
 	var rowViews []string
-	for displayRow := 0; displayRow < visibleRows; displayRow++ {
-		r := startRow + displayRow
+	for displayRow := 0; displayRow < metrics.visibleRows; displayRow++ {
+		r := metrics.startRow + displayRow
 		var colViews []string
-		for c := 0; c < cols; c++ {
-			idx := r*cols + c
+		for c := 0; c < metrics.cols; c++ {
+			idx := r*metrics.cols + c
 			if idx >= n {
-				colViews = append(colViews, strings.Repeat(" ", panelW))
+				colViews = append(colViews, strings.Repeat(" ", metrics.panelW))
 				continue
 			}
 			sess := sessions[idx]
@@ -82,7 +58,7 @@ func (m *Model) gridView() string {
 				title = fmt.Sprintf("▶ [%d] %s", idx+1, sess.Title)
 			}
 
-			panel := m.renderSessionPanelWithOuterHeight(sess, title, panelW, panelH, focused)
+			panel := m.renderSessionPanelWithOuterHeight(sess, title, metrics.panelW, metrics.panelH, focused)
 			colViews = append(colViews, panel)
 		}
 		rowViews = append(rowViews, lipgloss.JoinHorizontal(lipgloss.Top, colViews...))
