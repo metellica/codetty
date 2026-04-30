@@ -35,6 +35,34 @@ func TestFullscreenHandlerRunRestoresRemoteCursorAfterSnapshot(t *testing.T) {
 	}
 }
 
+func TestFullscreenHandlerRunResetsLocalTerminalStateBeforeSnapshot(t *testing.T) {
+	sess := NewClientSession("claude", "claude", 20, 6, nil)
+	sess.WriteOutput([]byte("\x1b[2J\x1b[Hheader\x1b[5;4Hprompt"))
+
+	var stdout bytes.Buffer
+	handler := &fullscreenHandler{
+		session: sess,
+		hub:     New(),
+		stdin:   bytes.NewReader([]byte{0x01}),
+		stdout:  &stdout,
+	}
+
+	if err := handler.Run(); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	got := stdout.String()
+	resetState := strings.Index(got, "\x1b[0m\x1b[r\x1b[?6l")
+	clearScreen := strings.Index(got, "\x1b[2J\x1b[H")
+	firstPaintedLine := strings.Index(got, "\x1b[1;1H")
+	if resetState < 0 || clearScreen < 0 || firstPaintedLine < 0 {
+		t.Fatalf("snapshot should reset local terminal state, clear, and paint; got %q", got)
+	}
+	if !(resetState < clearScreen && clearScreen < firstPaintedLine) {
+		t.Fatalf("snapshot should reset state before clearing and painting, reset=%d clear=%d paint=%d output=%q", resetState, clearScreen, firstPaintedLine, got)
+	}
+}
+
 func TestFullscreenHandlerRunDisablesAutowrapWhilePaintingSnapshot(t *testing.T) {
 	sess := NewClientSession("claude", "claude", 20, 6, nil)
 	sess.WriteOutput([]byte("\x1b[2J\x1b[H" + strings.Repeat("x", int(sess.Cols)) + "\x1b[5;4Hprompt"))

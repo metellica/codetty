@@ -83,7 +83,7 @@ func (f *fullscreenHandler) Run() error {
 }
 
 func (f *fullscreenHandler) writeSnapshot(stdout io.Writer) {
-	stdout.Write([]byte("\033[2J\033[H"))
+	stdout.Write([]byte("\033[0m\033[r\033[?6l\033[2J\033[H"))
 
 	cols, rows := int(f.session.Cols), int(f.session.Rows)
 	if cols <= 0 || rows <= 0 {
