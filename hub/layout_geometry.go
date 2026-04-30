@@ -130,5 +130,107 @@ func (m *Model) hitTestSession(x, y int) int {
 }
 
 func (m *Model) focusBigHitRegions(n int) []hitRegion {
-	return nil
+	if m.width <= 0 || m.height <= 0 || n == 0 || m.selected < 0 || m.selected >= n {
+		return nil
+	}
+
+	status := m.focusBigStatusBar(n)
+	statusH := renderedLineCount(status)
+	if statusH > m.height {
+		statusH = m.height
+	}
+	availableH := m.height - statusH
+	if availableH <= 0 {
+		return nil
+	}
+
+	if n == 1 {
+		return []hitRegion{{sessionIndex: m.selected, rect: rect{x: 0, y: 0, w: m.width, h: availableH}}}
+	}
+	if m.width >= 120 {
+		return m.focusBigWideHitRegions(n, availableH)
+	}
+	return m.focusBigNarrowHitRegions(n, availableH)
+}
+
+func (m *Model) focusBigWideHitRegions(n, availableH int) []hitRegion {
+	if availableH < minPanelH {
+		return []hitRegion{{sessionIndex: m.selected, rect: rect{x: 0, y: 0, w: m.width, h: availableH}}}
+	}
+	mainW := m.width * 7 / 10
+	sideW := m.width - mainW
+	if sideW < minPanelW {
+		sideW = minPanelW
+		mainW = m.width - sideW
+	}
+	if mainW < minPanelW {
+		mainW = minPanelW
+	}
+
+	regions := []hitRegion{{sessionIndex: m.selected, rect: rect{x: 0, y: 0, w: mainW, h: availableH}}}
+	secondaryCount := n - 1
+	visible, hidden := fitSecondaryCount(availableH, minPanelH, secondaryCount)
+	renderedSlots := visible
+	if hidden > 0 && availableH >= minPanelH {
+		renderedSlots++
+	}
+	if renderedSlots <= 0 {
+		return regions
+	}
+
+	y := 0
+	slotIndex := 0
+	for idx := 0; idx < n; idx++ {
+		if idx == m.selected {
+			continue
+		}
+		if slotIndex >= visible {
+			break
+		}
+		panelH := distributedSlotSize(availableH, renderedSlots, slotIndex)
+		regions = append(regions, hitRegion{sessionIndex: idx, rect: rect{x: mainW, y: y, w: sideW, h: panelH}})
+		y += panelH
+		slotIndex++
+	}
+	return regions
+}
+
+func (m *Model) focusBigNarrowHitRegions(n, availableH int) []hitRegion {
+	if availableH < minPanelH*2 {
+		return []hitRegion{{sessionIndex: m.selected, rect: rect{x: 0, y: 0, w: m.width, h: availableH}}}
+	}
+	mainPanelH := availableH * 65 / 100
+	if mainPanelH < minPanelH {
+		mainPanelH = minPanelH
+	}
+	if maxMainH := availableH - minPanelH; mainPanelH > maxMainH {
+		mainPanelH = maxMainH
+	}
+	regions := []hitRegion{{sessionIndex: m.selected, rect: rect{x: 0, y: 0, w: m.width, h: mainPanelH}}}
+
+	secondaryCount := n - 1
+	visible, hidden := fitSecondaryCount(m.width, minPanelW, secondaryCount)
+	renderedSlots := visible
+	if hidden > 0 && m.width >= minPanelW {
+		renderedSlots++
+	}
+	if renderedSlots <= 0 {
+		return regions
+	}
+
+	x := 0
+	slotIndex := 0
+	for idx := 0; idx < n; idx++ {
+		if idx == m.selected {
+			continue
+		}
+		if slotIndex >= visible {
+			break
+		}
+		panelW := distributedSlotSize(m.width, renderedSlots, slotIndex)
+		regions = append(regions, hitRegion{sessionIndex: idx, rect: rect{x: x, y: mainPanelH, w: panelW, h: availableH - mainPanelH}})
+		x += panelW
+		slotIndex++
+	}
+	return regions
 }

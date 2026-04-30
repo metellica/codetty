@@ -55,3 +55,58 @@ func TestModel_GridHitTestIgnoresStatusAndEmptyCells(t *testing.T) {
 		t.Fatalf("empty filler hit = %d, want -1", got)
 	}
 }
+
+func TestModel_FocusBigWideHitRegionsSelectMainAndSecondary(t *testing.T) {
+	m := NewModel(New())
+	m.width = 140
+	m.height = 30
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+		NewClientSession("gamma", "gamma", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+	m.layout.mode = layoutFocusBig
+	m.selected = 1
+
+	regions := m.layoutHitRegions()
+	if len(regions) < 2 {
+		t.Fatalf("focus-big regions len = %d, want at least 2: %#v", len(regions), regions)
+	}
+	if got := m.hitTestSession(1, 1); got != 1 {
+		t.Fatalf("main panel hit = %d, want selected index 1", got)
+	}
+	foundSecondary := false
+	for _, region := range regions {
+		if region.sessionIndex == 0 {
+			foundSecondary = true
+			if got := m.hitTestSession(region.x+1, region.y+1); got != 0 {
+				t.Fatalf("secondary hit = %d, want 0", got)
+			}
+		}
+	}
+	if !foundSecondary {
+		t.Fatalf("expected a visible secondary region for session 0: %#v", regions)
+	}
+}
+
+func TestModel_FocusBigHiddenSecondaryDoesNotHit(t *testing.T) {
+	m := NewModel(New())
+	m.width = 40
+	m.height = 8
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+		NewClientSession("gamma", "gamma", 80, 24, nil),
+		NewClientSession("delta", "delta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+	m.layout.mode = layoutFocusBig
+	m.selected = 0
+
+	for _, region := range m.layoutHitRegions() {
+		if region.sessionIndex >= len(m.sessions) {
+			t.Fatalf("hidden +N more region should not be selectable: %#v", region)
+		}
+	}
+}
