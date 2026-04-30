@@ -67,6 +67,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case exitFullscreenMsg:
 		m.fullscreen = false
 
+	case tea.MouseMsg:
+		if m.fullscreen {
+			return m, nil
+		}
+		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+			if idx := m.hitTestSession(msg.X, msg.Y); idx >= 0 {
+				m.selected = idx
+			}
+		}
+
 	case tea.KeyMsg:
 		if m.fullscreen {
 			return m, nil

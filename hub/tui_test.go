@@ -267,6 +267,88 @@ func TestModel_TabStillForwardsToSelectedSession(t *testing.T) {
 	}
 }
 
+func TestModel_MouseClickSelectsGridPanel(t *testing.T) {
+	m := NewModel(New())
+	m.width = 100
+	m.height = 24
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+	m.layout.mode = layoutFixedGrid
+	m.layout.fixedCols = 2
+	m.selected = 0
+
+	regions := m.layoutHitRegions()
+	if len(regions) != 2 {
+		t.Fatalf("test setup regions len = %d, want 2", len(regions))
+	}
+
+	_, cmd := m.Update(tea.MouseMsg{
+		X:      regions[1].x + 1,
+		Y:      regions[1].y + 1,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	})
+	if cmd != nil {
+		t.Fatal("mouse selection should not return a command")
+	}
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+}
+
+func TestModel_MouseClickOutsidePanelDoesNotChangeSelection(t *testing.T) {
+	m := NewModel(New())
+	m.width = 100
+	m.height = 24
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+	m.selected = 0
+
+	_, cmd := m.Update(tea.MouseMsg{
+		X:      0,
+		Y:      m.height - 1,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	})
+	if cmd != nil {
+		t.Fatal("ignored mouse click should not return a command")
+	}
+	if m.selected != 0 {
+		t.Fatalf("selected = %d, want 0 after status click", m.selected)
+	}
+}
+
+func TestModel_MouseClickIgnoredInFullscreen(t *testing.T) {
+	m := NewModel(New())
+	m.width = 100
+	m.height = 24
+	m.sessions = []*ClientSession{
+		NewClientSession("alpha", "alpha", 80, 24, nil),
+		NewClientSession("beta", "beta", 80, 24, nil),
+	}
+	m.layout.syncSessions(m.sessions)
+	m.fullscreen = true
+	m.selected = 0
+
+	_, cmd := m.Update(tea.MouseMsg{
+		X:      50,
+		Y:      1,
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+	})
+	if cmd != nil {
+		t.Fatal("fullscreen mouse click should not return a command")
+	}
+	if m.selected != 0 {
+		t.Fatalf("selected = %d, want 0 in fullscreen", m.selected)
+	}
+}
+
 func TestModel_FocusBigViewUsesSelectedAsPrimary(t *testing.T) {
 	m := NewModel(New())
 	m.width = 120
