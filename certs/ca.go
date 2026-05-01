@@ -20,8 +20,20 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 )
+
+// validNameRE matches certificate names that are safe to use as filenames.
+var validNameRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// validateName returns an error if name is not a safe filename component.
+func validateName(name string) error {
+	if !validNameRE.MatchString(name) {
+		return fmt.Errorf("certs: invalid certificate name %q: must match ^[A-Za-z0-9._-]+$", name)
+	}
+	return nil
+}
 
 // DefaultCADays is the default validity period for a new CA certificate.
 const DefaultCADays = 3650 // ~10 years
@@ -61,6 +73,13 @@ type IssueOptions struct {
 func InitCA(opts InitCAOptions) error {
 	if err := os.MkdirAll(opts.Dir, 0700); err != nil {
 		return fmt.Errorf("certs: mkdir %s: %w", opts.Dir, err)
+	}
+
+	// Refuse to overwrite any existing CA/server files.
+	for _, f := range []string{"ca.crt", "ca.key", "server.crt", "server.key"} {
+		if _, err := os.Stat(filepath.Join(opts.Dir, f)); err == nil {
+			return fmt.Errorf("certs: %s already exists; refusing to overwrite", filepath.Join(opts.Dir, f))
+		}
 	}
 
 	days := opts.Days
@@ -149,8 +168,18 @@ func IssueServerCert(opts IssueOptions) error {
 }
 
 func issueCert(opts IssueOptions, isServer bool) error {
+	if err := validateName(opts.Name); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(opts.OutDir, 0700); err != nil {
 		return fmt.Errorf("certs: mkdir %s: %w", opts.OutDir, err)
+	}
+
+	// Refuse to overwrite existing cert/key files.
+	for _, f := range []string{opts.Name + ".crt", opts.Name + ".key"} {
+		if _, err := os.Stat(filepath.Join(opts.OutDir, f)); err == nil {
+			return fmt.Errorf("certs: %s already exists; refusing to overwrite", filepath.Join(opts.OutDir, f))
+		}
 	}
 
 	days := opts.Days

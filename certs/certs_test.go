@@ -125,7 +125,7 @@ func TestIssueServerCert_HasServerAuth(t *testing.T) {
 		t.Fatalf("InitCA: %v", err)
 	}
 
-	outDir := caDir // server cert goes into the CA dir by convention
+	outDir := t.TempDir()
 	err := certs.IssueServerCert(certs.IssueOptions{
 		CADir:     caDir,
 		OutDir:    outDir,
@@ -350,6 +350,84 @@ func TestCertificateUser(t *testing.T) {
 	}
 	if user != "charlie" {
 		t.Errorf("want charlie, got %s", user)
+	}
+}
+
+func TestIssueClientCert_RejectsUnsafeNames(t *testing.T) {
+	caDir := t.TempDir()
+	if err := certs.InitCA(certs.InitCAOptions{Dir: caDir, Days: 10}); err != nil {
+		t.Fatalf("InitCA: %v", err)
+	}
+	outDir := t.TempDir()
+	for _, name := range []string{"../alice", "alice/bob", `alice\bob`, "", "alice bob"} {
+		err := certs.IssueClientCert(certs.IssueOptions{
+			CADir:  caDir,
+			OutDir: outDir,
+			Name:   name,
+			Days:   5,
+		})
+		if err == nil {
+			t.Errorf("IssueClientCert(%q): expected error for unsafe name, got nil", name)
+		}
+	}
+}
+
+func TestRevokeCertificate_RejectsUnsafeNames(t *testing.T) {
+	caDir := t.TempDir()
+	if err := certs.InitCA(certs.InitCAOptions{Dir: caDir, Days: 10}); err != nil {
+		t.Fatalf("InitCA: %v", err)
+	}
+	for _, name := range []string{"../foo", "foo/bar", `foo\bar`, "", "foo bar"} {
+		err := certs.RevokeCertificate(caDir, name)
+		if err == nil {
+			t.Errorf("RevokeCertificate(%q): expected error for unsafe name, got nil", name)
+		}
+	}
+}
+
+func TestInitCA_RefusesToOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	if err := certs.InitCA(certs.InitCAOptions{Dir: dir, Days: 10}); err != nil {
+		t.Fatalf("first InitCA: %v", err)
+	}
+	existing, err := os.ReadFile(filepath.Join(dir, "ca.crt"))
+	if err != nil {
+		t.Fatalf("read ca.crt: %v", err)
+	}
+
+	if err := certs.InitCA(certs.InitCAOptions{Dir: dir, Days: 10}); err == nil {
+		t.Fatal("InitCA: expected error when files already exist, got nil")
+	}
+
+	after, _ := os.ReadFile(filepath.Join(dir, "ca.crt"))
+	if string(existing) != string(after) {
+		t.Error("InitCA: ca.crt was modified despite error")
+	}
+}
+
+func TestIssueClientCert_RefusesToOverwrite(t *testing.T) {
+	caDir := t.TempDir()
+	if err := certs.InitCA(certs.InitCAOptions{Dir: caDir, Days: 10}); err != nil {
+		t.Fatalf("InitCA: %v", err)
+	}
+	outDir := t.TempDir()
+	opts := certs.IssueOptions{CADir: caDir, OutDir: outDir, Name: "alice", Days: 5}
+
+	if err := certs.IssueClientCert(opts); err != nil {
+		t.Fatalf("first IssueClientCert: %v", err)
+	}
+	existing, err := os.ReadFile(filepath.Join(outDir, "alice.crt"))
+	if err != nil {
+		t.Fatalf("read alice.crt: %v", err)
+	}
+
+	if err := certs.IssueClientCert(opts); err == nil {
+		t.Fatal("IssueClientCert: expected error when files already exist, got nil")
+	}
+
+	after, _ := os.ReadFile(filepath.Join(outDir, "alice.crt"))
+	if string(existing) != string(after) {
+		t.Error("IssueClientCert: alice.crt was modified despite error")
 	}
 }
 

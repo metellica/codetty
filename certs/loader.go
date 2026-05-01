@@ -18,6 +18,9 @@ const revokedBlockType = "CODETTY REVOKED CERTIFICATE"
 // RevokeCertificate adds the certificate named <name>.crt in caDir to the
 // revocation list at <caDir>/crl.pem.
 func RevokeCertificate(caDir, name string) error {
+	if err := validateName(name); err != nil {
+		return err
+	}
 	certPath := filepath.Join(caDir, name+".crt")
 	raw, err := os.ReadFile(certPath)
 	if err != nil {
