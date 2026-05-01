@@ -27,7 +27,7 @@ func modelTestClient(t *testing.T, h *Hub, id, title string) (*websocket.Conn, [
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		h.HandleConn(conn)
+		h.HandleConn(conn, AuthInfo{})
 	}))
 	t.Cleanup(s.Close)
 
@@ -1163,5 +1163,35 @@ func TestModel_ForwardsCtrlQToSelectedSession(t *testing.T) {
 	}
 	if string(payload) != "\x11" {
 		t.Fatalf("expected Ctrl+Q byte 0x11, got %q", payload)
+	}
+}
+
+func TestModel_PanelTitleIncludesUserWhenPresent(t *testing.T) {
+	h := New()
+	sess := NewClientSession("u-sess", "my-title", 80, 24, nil)
+	sess.User = "alice"
+	h.addSession(sess)
+
+	m := NewModel(h)
+	m.width = 120
+	m.height = 40
+	m.sessions = h.Sessions()
+	m.layout.syncSessions(m.sessions)
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "alice") {
+		t.Fatalf("panel title should include user 'alice', view:\n%s", view)
+	}
+}
+
+func TestModel_WaitingMessageMentionsInsecureFlag(t *testing.T) {
+	h := New()
+	m := NewModel(h)
+	m.width = 120
+	m.height = 40
+
+	view := m.View()
+	if !strings.Contains(view, "--insecure") {
+		t.Fatalf("waiting message should mention --insecure, got:\n%s", view)
 	}
 }

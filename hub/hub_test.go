@@ -21,7 +21,7 @@ func TestHub_ClientConnectAndDisconnect(t *testing.T) {
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		h.HandleConn(conn)
+		h.HandleConn(conn, AuthInfo{})
 	}))
 	defer s.Close()
 
@@ -64,7 +64,7 @@ func TestHub_OutputUpdatesVT(t *testing.T) {
 		if err != nil {
 			t.Fatalf("upgrade: %v", err)
 		}
-		h.HandleConn(conn)
+		h.HandleConn(conn, AuthInfo{})
 	}))
 	defer s.Close()
 
@@ -101,7 +101,7 @@ func TestHub_ReconnectReplaces(t *testing.T) {
 		if err != nil {
 			return
 		}
-		h.HandleConn(conn)
+		h.HandleConn(conn, AuthInfo{})
 	}))
 	defer s.Close()
 
@@ -139,7 +139,7 @@ func TestHub_ReplayRestoresScreen(t *testing.T) {
 		if err != nil {
 			return
 		}
-		h.HandleConn(conn)
+		h.HandleConn(conn, AuthInfo{})
 	}))
 	defer s.Close()
 
@@ -183,7 +183,7 @@ func TestHub_ReplayWritesSnapshotToFullscreenWriter(t *testing.T) {
 		if err != nil {
 			return
 		}
-		h.HandleConn(conn)
+		h.HandleConn(conn, AuthInfo{})
 	}))
 	defer s.Close()
 
@@ -227,4 +227,99 @@ func (b *lockedBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.b.String()
+}
+
+// authTestServer creates an httptest server that serves HandleConn with the given AuthInfo.
+func authTestServer(t *testing.T, h *Hub, auth AuthInfo) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := testUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		h.HandleConn(conn, auth)
+	}))
+}
+
+func TestHub_SecureAuthAcceptsMatchingUser(t *testing.T) {
+	h := New()
+	s := authTestServer(t, h, AuthInfo{Secure: true, User: "alice"})
+	defer s.Close()
+
+	clientConn, _, err := websocket.DefaultDialer.Dial("ws"+s.URL[4:], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer clientConn.Close()
+
+	regMsg, _ := protocol.EncodeRegister(protocol.RegisterPayload{
+		ID: "alice-session", Title: "alice@host", Cols: 80, Rows: 24, User: "alice",
+	})
+	clientConn.WriteMessage(websocket.BinaryMessage, regMsg)
+	time.Sleep(100 * time.Millisecond)
+
+	sessions := h.Sessions()
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].User != "alice" {
+		t.Fatalf("expected session.User = 'alice', got %q", sessions[0].User)
+	}
+}
+
+func TestHub_SecureAuthRejectsMismatchedUser(t *testing.T) {
+	h := New()
+	s := authTestServer(t, h, AuthInfo{Secure: true, User: "alice"})
+	defer s.Close()
+
+	clientConn, _, err := websocket.DefaultDialer.Dial("ws"+s.URL[4:], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer clientConn.Close()
+
+	regMsg, _ := protocol.EncodeRegister(protocol.RegisterPayload{
+		ID: "mallory-session", Title: "mallory@host", Cols: 80, Rows: 24, User: "mallory",
+	})
+	clientConn.WriteMessage(websocket.BinaryMessage, regMsg)
+	time.Sleep(100 * time.Millisecond)
+
+	// No session should be created
+	sessions := h.Sessions()
+	if len(sessions) != 0 {
+		t.Fatalf("expected 0 sessions (rejected), got %d", len(sessions))
+	}
+
+	// Connection should be closed by server
+	clientConn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	_, _, readErr := clientConn.ReadMessage()
+	if readErr == nil {
+		t.Fatal("expected connection to be closed by server after auth rejection")
+	}
+}
+
+func TestHub_InsecureAuthSetsAnonymousUser(t *testing.T) {
+	h := New()
+	s := authTestServer(t, h, AuthInfo{Secure: false})
+	defer s.Close()
+
+	clientConn, _, err := websocket.DefaultDialer.Dial("ws"+s.URL[4:], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer clientConn.Close()
+
+	regMsg, _ := protocol.EncodeRegister(protocol.RegisterPayload{
+		ID: "anon-session", Title: "anon@host", Cols: 80, Rows: 24,
+	})
+	clientConn.WriteMessage(websocket.BinaryMessage, regMsg)
+	time.Sleep(100 * time.Millisecond)
+
+	sessions := h.Sessions()
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].User != "anonymous" {
+		t.Fatalf("expected session.User = 'anonymous', got %q", sessions[0].User)
+	}
 }

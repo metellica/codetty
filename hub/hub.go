@@ -19,6 +19,14 @@ type ScreenUpdateMsg struct {
 	Data []byte
 }
 
+// AuthInfo carries authentication information for a WebSocket connection.
+// In secure (mTLS) mode, Secure is true and User is the CN from the client cert.
+// In insecure mode, Secure is false and User is empty (stored as "anonymous").
+type AuthInfo struct {
+	Secure bool
+	User   string
+}
+
 // Hub manages all connected client sessions.
 type Hub struct {
 	mu       sync.RWMutex
@@ -57,12 +65,14 @@ func (h *Hub) GetFullscreenID() string {
 }
 
 // HandleConn handles a new WebSocket connection from a client.
+// auth carries identity information resolved from the HTTP/TLS layer.
 // Blocks until the connection is closed.
-func (h *Hub) HandleConn(conn *websocket.Conn) {
+func (h *Hub) HandleConn(conn *websocket.Conn, auth AuthInfo) {
 	var sess *ClientSession
 
 	defer func() {
 		if sess != nil {
+			log.Printf("disconnect: session=%s user=%s", sess.ID, sess.User)
 			h.removeSession(sess.ID)
 		}
 		conn.Close()
@@ -86,9 +96,20 @@ func (h *Hub) HandleConn(conn *websocket.Conn) {
 				log.Printf("bad register payload: %v", err)
 				return
 			}
+
+			// Determine effective user and validate against auth.
+			user := resolveUser(auth, p.User)
+			if user == "" {
+				// resolveUser returning empty means mismatch rejection.
+				log.Printf("auth mismatch: authenticated=%q register=%q; closing connection", auth.User, p.User)
+				return
+			}
+
 			writer := NewConnWriter(conn)
 			sess = NewClientSession(p.ID, p.Title, p.Cols, p.Rows, writer)
+			sess.User = user
 			h.addSession(sess)
+			log.Printf("connect: session=%s user=%s", sess.ID, sess.User)
 
 		case protocol.MsgReplay:
 			if sess == nil {
@@ -109,6 +130,20 @@ func (h *Hub) HandleConn(conn *websocket.Conn) {
 			}
 		}
 	}
+}
+
+// resolveUser determines the effective user for a session.
+// In secure mode, the register payload's User must match the authenticated user.
+// Returns "" to signal rejection (mismatch).
+// In insecure mode, returns "anonymous".
+func resolveUser(auth AuthInfo, registerUser string) string {
+	if auth.Secure {
+		if registerUser != auth.User {
+			return ""
+		}
+		return auth.User
+	}
+	return "anonymous"
 }
 
 func (h *Hub) writeSessionOutput(sess *ClientSession, payload []byte) bool {

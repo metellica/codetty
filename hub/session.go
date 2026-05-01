@@ -22,6 +22,7 @@ const (
 type ClientSession struct {
 	ID     string
 	Title  string
+	User   string
 	Cols   uint16
 	Rows   uint16
 	term   vt10x.Terminal

@@ -13,6 +13,15 @@ const (
 	minPanelH = 3
 )
 
+// sessionDisplayTitle returns the session title with the user appended in
+// parentheses when the session has a non-empty, non-anonymous user.
+func sessionDisplayTitle(sess *ClientSession) string {
+	if sess.User != "" && sess.User != "anonymous" {
+		return fmt.Sprintf("%s (%s)", sess.Title, sess.User)
+	}
+	return sess.Title
+}
+
 func (m *Model) panelSize(n, cols, availableH int) (int, int) {
 	if n == 0 || cols <= 0 {
 		return m.width, availableH
@@ -52,10 +61,10 @@ func (m *Model) gridView() string {
 				continue
 			}
 			sess := sessions[idx]
-			title := fmt.Sprintf("[%d] %s", idx+1, sess.Title)
+			title := fmt.Sprintf("[%d] %s", idx+1, sessionDisplayTitle(sess))
 			focused := idx == m.selected
 			if focused {
-				title = fmt.Sprintf("▶ [%d] %s", idx+1, sess.Title)
+				title = fmt.Sprintf("▶ [%d] %s", idx+1, sessionDisplayTitle(sess))
 			}
 
 			panel := m.renderSessionPanelWithOuterHeight(sess, title, metrics.panelW, metrics.panelH, focused)
@@ -95,7 +104,7 @@ func (m *Model) focusBigView() string {
 
 	if n == 1 {
 		primary := sessions[m.selected]
-		mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
+		mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, sessionDisplayTitle(primary))
 		layout := m.renderSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
 		if layout == "" {
 			return status
@@ -117,7 +126,7 @@ func (m *Model) focusBigView() string {
 
 func (m *Model) focusBigWideView(sessions []*ClientSession, availableH int) string {
 	primary := sessions[m.selected]
-	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
+	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, sessionDisplayTitle(primary))
 	if availableH < minPanelH {
 		return m.renderSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
 	}
@@ -150,7 +159,7 @@ func (m *Model) focusBigWideView(sessions []*ClientSession, availableH int) stri
 			break
 		}
 		panelH := distributedSlotSize(availableH, renderedSlots, slotIndex)
-		title := fmt.Sprintf("[%d] %s", idx+1, sess.Title)
+		title := fmt.Sprintf("[%d] %s", idx+1, sessionDisplayTitle(sess))
 		secondaries = append(secondaries, m.renderFocusBigSessionPanel(sess, title, sideW, panelH-2, false))
 		slotIndex++
 	}
@@ -165,7 +174,7 @@ func (m *Model) focusBigWideView(sessions []*ClientSession, availableH int) stri
 
 func (m *Model) focusBigNarrowView(sessions []*ClientSession, availableH int) string {
 	primary := sessions[m.selected]
-	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, primary.Title)
+	mainTitle := fmt.Sprintf("MAIN [%d] %s", m.selected+1, sessionDisplayTitle(primary))
 	if availableH < minPanelH*2 {
 		return m.renderSessionPanelWithOuterHeight(primary, mainTitle, m.width, availableH, true)
 	}
@@ -197,7 +206,7 @@ func (m *Model) focusBigNarrowView(sessions []*ClientSession, availableH int) st
 			break
 		}
 		panelW := distributedSlotSize(m.width, renderedSlots, slotIndex)
-		title := fmt.Sprintf("[%d] %s", idx+1, sess.Title)
+		title := fmt.Sprintf("[%d] %s", idx+1, sessionDisplayTitle(sess))
 		secondaries = append(secondaries, m.renderFocusBigSessionPanel(sess, title, panelW, secondaryH-2, false))
 		slotIndex++
 	}

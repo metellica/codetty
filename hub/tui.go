@@ -227,7 +227,9 @@ func (m *Model) View() string {
 			titleStyle.Render("⬡ codetty-hub")+"\n\n"+
 				"Waiting for clients to connect...\n\n"+
 				lipgloss.NewStyle().Foreground(lipgloss.Color("240")).
-					Render("Run: codetty-cli --server ws://<this-host>:8080/ws -- <cmd>"))
+					Render("Secure:   codetty-cli --server wss://<host>:8080/ws -- <cmd>\n"+
+						"Insecure: codetty-cli --server ws://<host>:8080/ws -- <cmd>\n\n"+
+						"Start hub in insecure mode with: codetty-hub --insecure"))
 	}
 
 	if m.fullscreen {
