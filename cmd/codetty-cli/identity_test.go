@@ -73,3 +73,26 @@ func TestImplicitClientIdentityFallsBackToUnknownHostname(t *testing.T) {
 		t.Fatalf("title = %q, want %q", title, "cat@tmp#333")
 	}
 }
+
+// TestParseClientFlagsTracksExplicitEmptyID verifies that an explicit empty
+// --id= flag sets IDProvided=true, while an omitted --id leaves it false.
+func TestParseClientFlagsTracksExplicitEmptyID(t *testing.T) {
+	cfg, _, err := parseClientFlags([]string{"--id=", "--insecure", "--", "bash"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.IDProvided {
+		t.Fatal("explicit empty --id= should set IDProvided=true")
+	}
+	if cfg.ClientID != "" {
+		t.Errorf("ClientID = %q, want empty string", cfg.ClientID)
+	}
+
+	cfg2, _, err := parseClientFlags([]string{"--insecure", "--", "bash"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg2.IDProvided {
+		t.Fatal("omitted --id should leave IDProvided=false")
+	}
+}

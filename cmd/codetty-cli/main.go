@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -24,13 +25,14 @@ const defaultInsecureServer = "ws://localhost:8080/ws"
 
 // clientConfig holds the raw CLI flag values.
 type clientConfig struct {
-	ServerURL string
-	ClientID  string
-	CertFile  string
-	KeyFile   string
-	CAFile    string
-	CertDir   string
-	Insecure  bool
+	ServerURL  string
+	ClientID   string
+	IDProvided bool
+	CertFile   string
+	KeyFile    string
+	CAFile     string
+	CertDir    string
+	Insecure   bool
 }
 
 // connectionConfig holds the resolved dial parameters used by runConnection.
@@ -70,8 +72,11 @@ func parseClientFlags(args []string) (clientConfig, []string, error) {
 	// If --server was not provided, choose a default based on insecure mode.
 	serverProvided := false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "server" {
+		switch f.Name {
+		case "server":
 			serverProvided = true
+		case "id":
+			cfg.IDProvided = true
 		}
 	})
 	if !serverProvided {
@@ -105,14 +110,38 @@ func applyCertDir(cfg *clientConfig) {
 // prepareConnectionConfig validates a clientConfig and builds a connectionConfig.
 // In secure mode (default) all of --cert, --key, and --ca must be provided.
 func prepareConnectionConfig(cfg clientConfig) (connectionConfig, error) {
-	applyCertDir(&cfg)
+	u, err := url.Parse(cfg.ServerURL)
+	if err != nil {
+		return connectionConfig{}, fmt.Errorf("invalid server URL: %w", err)
+	}
 
 	if cfg.Insecure {
+		// Cert flags must not be combined with --insecure (check before applyCertDir
+		// so we see the original user-supplied values).
+		if cfg.CertFile != "" || cfg.KeyFile != "" || cfg.CAFile != "" || cfg.CertDir != "" {
+			return connectionConfig{}, fmt.Errorf(
+				"--insecure cannot be combined with cert flags (--cert, --key, --ca, --cert-dir)",
+			)
+		}
+		if u.Scheme != "ws" {
+			return connectionConfig{}, fmt.Errorf(
+				"--insecure requires a ws:// server URL; use wss:// only with secure mode",
+			)
+		}
 		return connectionConfig{
 			ServerURL: cfg.ServerURL,
 			Dialer:    websocket.DefaultDialer,
 		}, nil
 	}
+
+	// Secure mode: require wss:// scheme.
+	if u.Scheme != "wss" {
+		return connectionConfig{}, fmt.Errorf(
+			"secure mode requires a wss:// server URL; use --insecure for ws://",
+		)
+	}
+
+	applyCertDir(&cfg)
 
 	// Secure mode: require cert/key/ca.
 	if cfg.CertFile == "" || cfg.KeyFile == "" || cfg.CAFile == "" {
@@ -167,7 +196,7 @@ func main() {
 	}
 
 	// Determine the client identity.
-	idExplicit := cfg.ClientID != ""
+	idExplicit := cfg.IDProvided
 	wd, _ := os.Getwd()
 	hostname, _ := os.Hostname()
 	identityID, title := buildClientIdentity(cfg.ClientID, idExplicit, wd, hostname, os.Getpid(), args[0])

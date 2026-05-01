@@ -214,14 +214,15 @@ func TestRunConnection_SendsUser(t *testing.T) {
 			return
 		}
 		gotUser <- reg.User
-		time.Sleep(20 * time.Millisecond)
+		// Keep connection alive until the test signals done via doneCh.
+		<-gotUser
 	}))
 	defer server.Close()
 
 	term := newFakeTerminal()
 	screen := NewScreenMirror(80, 24)
 	outputCh := make(chan []byte)
-	doneCh := make(chan error)
+	doneCh := make(chan error, 1)
 	var replayMu sync.Mutex
 
 	connCfg := connectionConfig{
@@ -235,8 +236,9 @@ func TestRunConnection_SendsUser(t *testing.T) {
 		errCh <- runConnection(connCfg, "id", "title", term, outputCh, doneCh, screen, &replayMu)
 	}()
 
+	var user string
 	select {
-	case user := <-gotUser:
+	case user = <-gotUser:
 		if user != "testuser" {
 			t.Errorf("RegisterPayload.User = %q, want %q", user, "testuser")
 		}
@@ -244,9 +246,80 @@ func TestRunConnection_SendsUser(t *testing.T) {
 		t.Fatal("timed out waiting for register message")
 	}
 
+	// Signal process exit so runConnection returns cleanly.
+	doneCh <- nil
+	// Unblock the server handler.
+	gotUser <- ""
+
 	select {
-	case <-errCh:
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("runConnection returned unexpected error: %v", err)
+		}
 	case <-time.After(time.Second):
-		t.Fatal("runConnection did not return after server close")
+		t.Fatal("runConnection did not return after doneCh signal")
+	}
+}
+
+// TestPrepareConnectionConfig_SecureRejectsWsScheme verifies that secure mode
+// (default) rejects a ws:// server URL with a clear error.
+func TestPrepareConnectionConfig_SecureRejectsWsScheme(t *testing.T) {
+	cfg := clientConfig{
+		ServerURL: "ws://localhost:8080/ws",
+		Insecure:  false,
+	}
+	_, err := prepareConnectionConfig(cfg)
+	if err == nil {
+		t.Fatal("expected error for secure mode with ws:// URL")
+	}
+	if !strings.Contains(err.Error(), "wss://") {
+		t.Errorf("error should mention wss://, got: %s", err.Error())
+	}
+	if !strings.Contains(err.Error(), "--insecure") {
+		t.Errorf("error should mention --insecure, got: %s", err.Error())
+	}
+}
+
+// TestPrepareConnectionConfig_InsecureRejectsWssScheme verifies that insecure
+// mode rejects a wss:// server URL.
+func TestPrepareConnectionConfig_InsecureRejectsWssScheme(t *testing.T) {
+	cfg := clientConfig{
+		ServerURL: "wss://localhost:8080/ws",
+		Insecure:  true,
+	}
+	_, err := prepareConnectionConfig(cfg)
+	if err == nil {
+		t.Fatal("expected error for insecure mode with wss:// URL")
+	}
+	if !strings.Contains(err.Error(), "ws://") {
+		t.Errorf("error should mention ws://, got: %s", err.Error())
+	}
+}
+
+// TestPrepareConnectionConfig_InsecureRejectsCertFlags verifies that --insecure
+// combined with any cert flag returns a diagnostic error.
+func TestPrepareConnectionConfig_InsecureRejectsCertFlags(t *testing.T) {
+	base := clientConfig{ServerURL: "ws://localhost:8080/ws", Insecure: true}
+
+	cases := []struct {
+		name string
+		cfg  clientConfig
+	}{
+		{"cert", clientConfig{ServerURL: base.ServerURL, Insecure: true, CertFile: "c.crt"}},
+		{"key", clientConfig{ServerURL: base.ServerURL, Insecure: true, KeyFile: "c.key"}},
+		{"ca", clientConfig{ServerURL: base.ServerURL, Insecure: true, CAFile: "ca.crt"}},
+		{"cert-dir", clientConfig{ServerURL: base.ServerURL, Insecure: true, CertDir: "/some/dir"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := prepareConnectionConfig(tc.cfg)
+			if err == nil {
+				t.Fatalf("expected error for --insecure with %s flag", tc.name)
+			}
+			if !strings.Contains(err.Error(), "--insecure") {
+				t.Errorf("error should mention --insecure, got: %s", err.Error())
+			}
+		})
 	}
 }
