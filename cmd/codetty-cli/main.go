@@ -34,16 +34,11 @@ func main() {
 	hostname, _ := os.Hostname()
 	identityID, title := buildClientIdentity(*clientID, idExplicit, wd, hostname, os.Getpid(), args[0])
 
-	// Determine terminal size
-	cols, rows := uint16(220), uint16(50)
-	fd := int(os.Stdin.Fd())
-	isTTY := xterm.IsTerminal(fd)
-	if isTTY {
-		w, h, err := xterm.GetSize(fd)
-		if err == nil {
-			cols, rows = uint16(w), uint16(h)
-		}
-	}
+	// Determine local console behavior. Windows terminals can expose a usable
+	// output handle even when stdin size lookup fails, so keep input/raw mode
+	// detection separate from size discovery.
+	localTerm := currentLocalTerminalConfig()
+	cols, rows := localTerm.cols, localTerm.rows
 
 	term, err := startTerminal(args, cols, rows)
 	if err != nil {
@@ -60,10 +55,10 @@ func main() {
 	go func() { doneCh <- term.Wait() }()
 
 	// Local terminal: raw mode for interactive use
-	if isTTY {
-		oldState, err := xterm.MakeRaw(fd)
+	if localTerm.inputIsTTY {
+		oldState, err := xterm.MakeRaw(localTerm.inputFD)
 		if err == nil {
-			defer xterm.Restore(fd, oldState)
+			defer xterm.Restore(localTerm.inputFD, oldState)
 		}
 	}
 

@@ -92,12 +92,12 @@ func (s *ClientSession) renderANSILocked(w, h int) (lines []string, curX, curY i
 	// Find last non-blank row
 	// Find first and last non-blank rows
 	firstContent := -1
-	lastContent := 0
+	lastVisibleRow := 0
 	for y := 0; y < rows; y++ {
 		blank := true
 		for x := 0; x < cols; x++ {
 			g := s.term.Cell(x, y)
-			if g.Char != 0 && g.Char != ' ' {
+			if glyphHasVisibleContent(g) {
 				blank = false
 				break
 			}
@@ -106,16 +106,21 @@ func (s *ClientSession) renderANSILocked(w, h int) (lines []string, curX, curY i
 			if firstContent < 0 {
 				firstContent = y
 			}
-			lastContent = y
+			lastVisibleRow = y
 		}
 	}
+	lastContent := lastVisibleRow
 	if lastContent+1 < rows {
 		lastContent++
 	}
 
 	var startY int
 	if rows > h {
-		startY = cursor.Y - h + 1
+		anchorY := cursor.Y
+		if firstContent >= 0 && lastVisibleRow > anchorY {
+			anchorY = lastVisibleRow
+		}
+		startY = anchorY - h + 1
 		if startY < 0 {
 			startY = 0
 		}
@@ -153,6 +158,16 @@ func (s *ClientSession) renderANSILocked(w, h int) (lines []string, curX, curY i
 		lines[i] = s.renderLine(y, w, cols, curVisible && y == cursor.Y, cursor.X)
 	}
 	return lines, curX, curY
+}
+
+func glyphHasVisibleContent(g vt10x.Glyph) bool {
+	if g.Char != 0 && g.Char != ' ' {
+		return true
+	}
+	if g.BG != vt10x.DefaultBG {
+		return true
+	}
+	return g.Mode&(glyphReverse|glyphUnderline) != 0
 }
 
 // renderLine renders one row of the terminal with ANSI colors.

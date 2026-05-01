@@ -45,7 +45,11 @@ PTY 输出 → cli → WebSocket → hub → TUI 渲染
 ./build.sh
 ```
 
-生成两个二进制文件：`codetty-hub` 和 `codetty-cli`。
+```powershell
+.\build.bat
+```
+
+生成两个二进制文件：Unix-like 平台为 `codetty-hub` 和 `codetty-cli`，Windows 为 `codetty-hub.exe` 和 `codetty-cli.exe`。
 
 也可以直接使用 Go 构建：
 
@@ -99,6 +103,7 @@ codetty/
 ├── hub/                # Hub 核心逻辑、TUI、布局
 ├── protocol/           # WebSocket 二进制协议定义
 ├── build.sh            # 构建脚本
+├── build.bat           # Windows 构建脚本
 ├── go.mod
 └── go.sum
 ```
