@@ -12,27 +12,165 @@ import (
 	"syscall"
 	"time"
 
+	"codetty/certs"
 	"codetty/protocol"
 
 	"github.com/gorilla/websocket"
 	xterm "golang.org/x/term"
 )
 
-func main() {
-	serverURL := flag.String("server", "ws://localhost:8080/ws", "hub WebSocket URL")
-	clientID := flag.String("id", "", "client identifier")
-	flag.Parse()
+const defaultSecureServer = "wss://localhost:8080/ws"
+const defaultInsecureServer = "ws://localhost:8080/ws"
 
-	args := flag.Args()
+// clientConfig holds the raw CLI flag values.
+type clientConfig struct {
+	ServerURL string
+	ClientID  string
+	CertFile  string
+	KeyFile   string
+	CAFile    string
+	CertDir   string
+	Insecure  bool
+}
+
+// connectionConfig holds the resolved dial parameters used by runConnection.
+type connectionConfig struct {
+	ServerURL string
+	Dialer    *websocket.Dialer
+	User      string
+}
+
+// parseClientFlags parses codetty-cli flags from args and returns the config,
+// remaining non-flag arguments, and any parse error.
+func parseClientFlags(args []string) (clientConfig, []string, error) {
+	fs := flag.NewFlagSet("codetty-cli", flag.ContinueOnError)
+
+	server := fs.String("server", "", "hub WebSocket URL (default: wss://localhost:8080/ws in secure mode, ws://localhost:8080/ws with --insecure)")
+	clientID := fs.String("id", "", "client identifier")
+	certFile := fs.String("cert", "", "client certificate file (PEM)")
+	keyFile := fs.String("key", "", "client key file (PEM)")
+	caFile := fs.String("ca", "", "CA certificate file (PEM)")
+	certDir := fs.String("cert-dir", "", "directory containing client.crt, client.key, ca.crt")
+	insecure := fs.Bool("insecure", false, "disable mTLS (insecure, not recommended)")
+
+	if err := fs.Parse(args); err != nil {
+		return clientConfig{}, nil, err
+	}
+
+	cfg := clientConfig{
+		ServerURL: *server,
+		ClientID:  *clientID,
+		CertFile:  *certFile,
+		KeyFile:   *keyFile,
+		CAFile:    *caFile,
+		CertDir:   *certDir,
+		Insecure:  *insecure,
+	}
+
+	// If --server was not provided, choose a default based on insecure mode.
+	serverProvided := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "server" {
+			serverProvided = true
+		}
+	})
+	if !serverProvided {
+		if cfg.Insecure {
+			cfg.ServerURL = defaultInsecureServer
+		} else {
+			cfg.ServerURL = defaultSecureServer
+		}
+	}
+
+	return cfg, fs.Args(), nil
+}
+
+// applyCertDir fills in CertFile, KeyFile, and CAFile from CertDir when the
+// direct flags were not provided. Direct flags always take precedence.
+func applyCertDir(cfg *clientConfig) {
+	if cfg.CertDir == "" {
+		return
+	}
+	if cfg.CertFile == "" {
+		cfg.CertFile = filepath.Join(cfg.CertDir, "client.crt")
+	}
+	if cfg.KeyFile == "" {
+		cfg.KeyFile = filepath.Join(cfg.CertDir, "client.key")
+	}
+	if cfg.CAFile == "" {
+		cfg.CAFile = filepath.Join(cfg.CertDir, "ca.crt")
+	}
+}
+
+// prepareConnectionConfig validates a clientConfig and builds a connectionConfig.
+// In secure mode (default) all of --cert, --key, and --ca must be provided.
+func prepareConnectionConfig(cfg clientConfig) (connectionConfig, error) {
+	applyCertDir(&cfg)
+
+	if cfg.Insecure {
+		return connectionConfig{
+			ServerURL: cfg.ServerURL,
+			Dialer:    websocket.DefaultDialer,
+		}, nil
+	}
+
+	// Secure mode: require cert/key/ca.
+	if cfg.CertFile == "" || cfg.KeyFile == "" || cfg.CAFile == "" {
+		return connectionConfig{}, fmt.Errorf(
+			"secure mode requires --cert, --key, and --ca (or --cert-dir); " +
+				"use --insecure to disable mTLS",
+		)
+	}
+
+	tlsCfg, err := certs.BuildClientTLSConfig(cfg.CertFile, cfg.KeyFile, cfg.CAFile)
+	if err != nil {
+		return connectionConfig{}, fmt.Errorf("load TLS config: %w", err)
+	}
+
+	user, err := certs.CertificateUser(cfg.CertFile)
+	if err != nil {
+		return connectionConfig{}, fmt.Errorf("read cert CN: %w", err)
+	}
+
+	dialer := &websocket.Dialer{
+		TLSClientConfig:  tlsCfg,
+		HandshakeTimeout: websocket.DefaultDialer.HandshakeTimeout,
+	}
+
+	return connectionConfig{
+		ServerURL: cfg.ServerURL,
+		Dialer:    dialer,
+		User:      user,
+	}, nil
+}
+
+func main() {
+	cfg, args, err := parseClientFlags(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "codetty-cli: %v\n", err)
+		os.Exit(2)
+	}
+
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: codetty-cli --server ws://hub:8080/ws --id NAME -- <command> [args...]\n")
+		fmt.Fprintf(os.Stderr, "Usage: codetty-cli [--server URL] [--id NAME] [--cert F] [--key F] [--ca F] [--cert-dir DIR] [--insecure] -- <command> [args...]\n")
 		os.Exit(1)
 	}
 
-	idExplicit := flagWasProvided(flag.CommandLine, "id")
+	connCfg, err := prepareConnectionConfig(cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "codetty-cli: %v\n", err)
+		os.Exit(1)
+	}
+
+	if cfg.Insecure {
+		log.Println("WARNING: running in insecure mode without mTLS — not recommended for production")
+	}
+
+	// Determine the client identity.
+	idExplicit := cfg.ClientID != ""
 	wd, _ := os.Getwd()
 	hostname, _ := os.Hostname()
-	identityID, title := buildClientIdentity(*clientID, idExplicit, wd, hostname, os.Getpid(), args[0])
+	identityID, title := buildClientIdentity(cfg.ClientID, idExplicit, wd, hostname, os.Getpid(), args[0])
 
 	// Determine local console behavior. Windows terminals can expose a usable
 	// output handle even when stdin size lookup fails, so keep input/raw mode
@@ -97,7 +235,7 @@ func main() {
 	}()
 
 	// Run connection loop (reconnects on failure)
-	go connectionLoop(*serverURL, identityID, title, term, outputCh, doneCh, screenMirror, &replayMu)
+	go connectionLoop(connCfg, identityID, title, term, outputCh, doneCh, screenMirror, &replayMu)
 
 	// Wait for process exit or signal
 	select {
@@ -109,12 +247,12 @@ func main() {
 	}
 }
 
-func connectionLoop(serverURL, clientID, title string, term terminalSession, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) {
+func connectionLoop(connCfg connectionConfig, clientID, title string, term terminalSession, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) {
 	delay := time.Second
 	maxDelay := 30 * time.Second
 
 	for {
-		err := runConnection(serverURL, clientID, title, term, outputCh, done, screen, replayMu)
+		err := runConnection(connCfg, clientID, title, term, outputCh, done, screen, replayMu)
 		if err == nil {
 			return
 		}
@@ -132,8 +270,8 @@ func connectionLoop(serverURL, clientID, title string, term terminalSession, out
 	}
 }
 
-func runConnection(serverURL, clientID, title string, term terminalSession, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) error {
-	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
+func runConnection(connCfg connectionConfig, clientID, title string, term terminalSession, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) error {
+	conn, _, err := connCfg.Dialer.Dial(connCfg.ServerURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
@@ -145,6 +283,7 @@ func runConnection(serverURL, clientID, title string, term terminalSession, outp
 		Title: title,
 		Cols:  cols,
 		Rows:  rows,
+		User:  connCfg.User,
 	})
 	if err != nil {
 		return fmt.Errorf("encode register: %w", err)

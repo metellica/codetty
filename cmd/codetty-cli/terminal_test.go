@@ -92,7 +92,10 @@ func TestRunConnectionResizeUsesTerminalBackend(t *testing.T) {
 	var replayMu sync.Mutex
 
 	go func() {
-		errCh <- runConnection("ws"+strings.TrimPrefix(server.URL, "http"), "id", "title", term, outputCh, doneCh, screen, &replayMu)
+		errCh <- runConnection(connectionConfig{
+			ServerURL: "ws" + strings.TrimPrefix(server.URL, "http"),
+			Dialer:    websocket.DefaultDialer,
+		}, "id", "title", term, outputCh, doneCh, screen, &replayMu)
 	}()
 
 	select {
