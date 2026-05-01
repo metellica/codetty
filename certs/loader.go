@@ -88,9 +88,11 @@ func LoadRevokedSerials(path string) (map[string]bool, error) {
 	return revoked, nil
 }
 
-// BuildServerTLSConfig creates a *tls.Config for the hub server. It loads the
-// CRL once at build time; pass an empty or non-existent crlFile to skip
-// revocation checks. Clients must present a valid certificate signed by the CA.
+// BuildServerTLSConfig creates a *tls.Config for the hub server. The CRL file
+// is re-read on every new TLS client handshake so that certificates revoked
+// after the config was built are rejected immediately. Pass an empty or
+// non-existent crlFile to skip revocation checks.
+// Clients must present a valid certificate signed by the CA.
 func BuildServerTLSConfig(certFile, keyFile, caFile, crlFile string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -102,25 +104,27 @@ func BuildServerTLSConfig(certFile, keyFile, caFile, crlFile string) (*tls.Confi
 		return nil, err
 	}
 
-	revoked, err := LoadRevokedSerials(crlFile)
-	if err != nil {
-		return nil, fmt.Errorf("certs: load CRL: %w", err)
-	}
-
 	cfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    caPool,
 		VerifyPeerCertificate: func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-			for _, raw := range rawCerts {
-				c, err := x509.ParseCertificate(raw)
-				if err != nil {
-					return fmt.Errorf("certs: parse peer cert: %w", err)
-				}
-				if revoked[c.SerialNumber.String()] {
-					return fmt.Errorf("certs: certificate %s (%s) has been revoked",
-						c.Subject.CommonName, serialHex(c.SerialNumber))
-				}
+			if len(rawCerts) == 0 {
+				return nil
+			}
+			// Re-read the CRL on each handshake so runtime revocations are observed.
+			revoked, err := LoadRevokedSerials(crlFile)
+			if err != nil {
+				return fmt.Errorf("certs: read CRL: %w", err)
+			}
+			// Check only the leaf cert (index 0).
+			c, err := x509.ParseCertificate(rawCerts[0])
+			if err != nil {
+				return fmt.Errorf("certs: parse peer cert: %w", err)
+			}
+			if revoked[c.SerialNumber.String()] {
+				return fmt.Errorf("certs: certificate %s (%s) has been revoked",
+					c.Subject.CommonName, serialHex(c.SerialNumber))
 			}
 			return nil
 		},

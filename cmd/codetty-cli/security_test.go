@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -321,5 +323,76 @@ func TestPrepareConnectionConfig_InsecureRejectsCertFlags(t *testing.T) {
 				t.Errorf("error should mention --insecure, got: %s", err.Error())
 			}
 		})
+	}
+}
+
+// TestRunConnection_AuthRejected verifies that when the server sends a
+// ClosePolicyViolation frame with reason "codetty auth rejected", runConnection
+// returns an error satisfying errors.Is(err, errAuthRejected).
+func TestRunConnection_AuthRejected(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		// Read the register message (discard it).
+		conn.SetReadDeadline(time.Now().Add(time.Second))
+		conn.ReadMessage()
+		// Send policy-violation close.
+		conn.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "codetty auth rejected: alice != mallory"))
+		// Drain until client closes.
+		conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+		conn.ReadMessage()
+	}))
+	defer server.Close()
+
+	term := newFakeTerminal()
+	screen := NewScreenMirror(80, 24)
+	outputCh := make(chan []byte)
+	doneCh := make(chan error, 1)
+	var replayMu sync.Mutex
+
+	connCfg := connectionConfig{
+		ServerURL: "ws" + strings.TrimPrefix(server.URL, "http"),
+		Dialer:    websocket.DefaultDialer,
+		User:      "alice",
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runConnection(connCfg, "id", "title", term, outputCh, doneCh, screen, &replayMu)
+	}()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("runConnection should return an error on auth rejection, got nil")
+		}
+		if !errors.Is(err, errAuthRejected) {
+			t.Errorf("expected errors.Is(err, errAuthRejected), got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runConnection did not return within timeout")
+	}
+}
+
+// TestIsFatalConnectionError verifies that errAuthRejected is fatal and that a
+// generic error is not.
+func TestIsFatalConnectionError(t *testing.T) {
+	if !isFatalConnectionError(errAuthRejected) {
+		t.Error("errAuthRejected should be a fatal connection error")
+	}
+	if !isFatalConnectionError(fmt.Errorf("wrapped: %w", errAuthRejected)) {
+		t.Error("wrapped errAuthRejected should be a fatal connection error")
+	}
+	if isFatalConnectionError(errors.New("transient network error")) {
+		t.Error("a generic error should not be fatal")
+	}
+	if isFatalConnectionError(nil) {
+		t.Error("nil should not be fatal")
 	}
 }

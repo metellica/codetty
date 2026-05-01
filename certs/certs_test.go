@@ -405,6 +405,53 @@ func TestInitCA_RefusesToOverwrite(t *testing.T) {
 	}
 }
 
+// TestBuildServerTLSConfig_RejectsAfterRuntimeRevocation verifies that a cert
+// revoked AFTER BuildServerTLSConfig was called is still rejected on the next
+// handshake (i.e. revocation is checked on each handshake, not cached).
+func TestBuildServerTLSConfig_RejectsAfterRuntimeRevocation(t *testing.T) {
+	dir := t.TempDir()
+	if err := certs.InitCA(certs.InitCAOptions{Dir: dir, Days: 10}); err != nil {
+		t.Fatalf("InitCA: %v", err)
+	}
+	if err := certs.IssueClientCert(certs.IssueOptions{
+		CADir:  dir,
+		OutDir: dir,
+		Name:   "alice",
+		Days:   5,
+	}); err != nil {
+		t.Fatalf("IssueClientCert: %v", err)
+	}
+
+	caFile := filepath.Join(dir, "ca.crt")
+	serverCert := filepath.Join(dir, "server.crt")
+	serverKey := filepath.Join(dir, "server.key")
+	clientCert := filepath.Join(dir, "alice.crt")
+	clientKey := filepath.Join(dir, "alice.key")
+	crlFile := filepath.Join(dir, "crl.pem") // does not exist yet
+
+	// Build server config BEFORE any revocation.
+	serverCfg, err := certs.BuildServerTLSConfig(serverCert, serverKey, caFile, crlFile)
+	if err != nil {
+		t.Fatalf("BuildServerTLSConfig: %v", err)
+	}
+	clientCfg, err := certs.BuildClientTLSConfig(clientCert, clientKey, caFile)
+	if err != nil {
+		t.Fatalf("BuildClientTLSConfig: %v", err)
+	}
+	clientCfg.ServerName = "localhost"
+
+	// First handshake must succeed (cert not yet revoked).
+	doHandshake(t, serverCfg, clientCfg, false)
+
+	// Revoke alice AFTER the server config was already built.
+	if err := certs.RevokeCertificate(dir, "alice"); err != nil {
+		t.Fatalf("RevokeCertificate: %v", err)
+	}
+
+	// Second handshake with the SAME already-built serverCfg must be rejected.
+	doHandshake(t, serverCfg, clientCfg, true /* expectFailure */)
+}
+
 func TestIssueClientCert_RefusesToOverwrite(t *testing.T) {
 	caDir := t.TempDir()
 	if err := certs.InitCA(certs.InitCAOptions{Dir: caDir, Days: 10}); err != nil {

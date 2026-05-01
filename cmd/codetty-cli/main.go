@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -285,6 +287,10 @@ func connectionLoop(connCfg connectionConfig, clientID, title string, term termi
 		if err == nil {
 			return
 		}
+		if isFatalConnectionError(err) {
+			log.Printf("fatal connection error, not retrying: %v", err)
+			return
+		}
 
 		select {
 		case <-done:
@@ -297,6 +303,16 @@ func connectionLoop(connCfg connectionConfig, clientID, title string, term termi
 			delay = maxDelay
 		}
 	}
+}
+
+// errAuthRejected is returned by runConnection when the hub explicitly closes
+// the connection due to an authentication policy violation.
+var errAuthRejected = errors.New("codetty auth rejected")
+
+// isFatalConnectionError reports whether err represents a connection error that
+// should not be retried (e.g. an authentication rejection by the hub).
+func isFatalConnectionError(err error) bool {
+	return errors.Is(err, errAuthRejected)
 }
 
 func runConnection(connCfg connectionConfig, clientID, title string, term terminalSession, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) error {
@@ -357,6 +373,14 @@ func runConnection(connCfg connectionConfig, clientID, title string, term termin
 		for {
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
+				// Check for a hub-initiated auth rejection close frame.
+				var closeErr *websocket.CloseError
+				if errors.As(err, &closeErr) &&
+					closeErr.Code == websocket.ClosePolicyViolation &&
+					strings.Contains(closeErr.Text, "codetty auth rejected") {
+					errCh <- fmt.Errorf("%w: %s", errAuthRejected, closeErr.Text)
+					return
+				}
 				errCh <- fmt.Errorf("read: %w", err)
 				return
 			}

@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"sync"
@@ -102,6 +103,9 @@ func (h *Hub) HandleConn(conn *websocket.Conn, auth AuthInfo) {
 			if user == "" {
 				// resolveUser returning empty means mismatch rejection.
 				log.Printf("auth mismatch: authenticated=%q register=%q; closing connection", auth.User, p.User)
+				reason := fmt.Sprintf("codetty auth rejected: %s != %s", auth.User, p.User)
+				conn.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason))
 				return
 			}
 

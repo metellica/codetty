@@ -298,6 +298,51 @@ func TestHub_SecureAuthRejectsMismatchedUser(t *testing.T) {
 	}
 }
 
+// TestHub_SecureAuthRejectsMismatchedUser_SendsPolicyViolation verifies that a
+// register with a mismatched user causes the hub to send a close frame with
+// code ClosePolicyViolation and a reason containing "codetty auth rejected",
+// and that no session is created.
+func TestHub_SecureAuthRejectsMismatchedUser_SendsPolicyViolation(t *testing.T) {
+	h := New()
+	s := authTestServer(t, h, AuthInfo{Secure: true, User: "alice"})
+	defer s.Close()
+
+	clientConn, _, err := websocket.DefaultDialer.Dial("ws"+s.URL[4:], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer clientConn.Close()
+
+	regMsg, _ := protocol.EncodeRegister(protocol.RegisterPayload{
+		ID: "mallory-session", Title: "mallory@host", Cols: 80, Rows: 24, User: "mallory",
+	})
+	clientConn.WriteMessage(websocket.BinaryMessage, regMsg)
+
+	// Read with a short deadline so we don't hang forever.
+	clientConn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_, _, readErr := clientConn.ReadMessage()
+	if readErr == nil {
+		t.Fatal("expected connection to be closed with policy violation, but ReadMessage succeeded")
+	}
+
+	closeErr, ok := readErr.(*websocket.CloseError)
+	if !ok {
+		t.Fatalf("expected *websocket.CloseError, got %T: %v", readErr, readErr)
+	}
+	if closeErr.Code != websocket.ClosePolicyViolation {
+		t.Errorf("close code: want %d (ClosePolicyViolation), got %d", websocket.ClosePolicyViolation, closeErr.Code)
+	}
+	if !strings.Contains(closeErr.Text, "codetty auth rejected") {
+		t.Errorf("close reason should contain %q, got %q", "codetty auth rejected", closeErr.Text)
+	}
+
+	// No session should be created.
+	time.Sleep(50 * time.Millisecond)
+	if sessions := h.Sessions(); len(sessions) != 0 {
+		t.Fatalf("expected 0 sessions (rejected), got %d", len(sessions))
+	}
+}
+
 func TestHub_InsecureAuthSetsAnonymousUser(t *testing.T) {
 	h := New()
 	s := authTestServer(t, h, AuthInfo{Secure: false})
