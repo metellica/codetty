@@ -35,6 +35,7 @@ PTY 输出 → cli → WebSocket → hub → TUI 渲染
 - **自动身份识别** — cli 根据工作目录、主机名、PID 自动生成唯一标识
 - **焦点事件过滤** — cli 过滤终端焦点事件 (CSI I/O)，避免干扰远程进程
 - **自定义协议** — 基于 WebSocket 的轻量二进制协议，支持注册、输出、输入、调整大小、屏幕重放
+- **跨平台 PTY** — Linux/macOS 使用 Unix PTY，Windows 使用 ConPTY
 
 ## 快速开始
 
@@ -45,6 +46,17 @@ PTY 输出 → cli → WebSocket → hub → TUI 渲染
 ```
 
 生成两个二进制文件：`codetty-hub` 和 `codetty-cli`。
+
+也可以直接使用 Go 构建：
+
+```bash
+go build -o codetty-hub ./cmd/codetty-hub
+go build -o codetty-cli ./cmd/codetty-cli
+
+# Windows
+go build -o codetty-hub.exe ./cmd/codetty-hub
+go build -o codetty-cli.exe ./cmd/codetty-cli
+```
 
 安装到 `/usr/local/bin`：
 
@@ -61,6 +73,9 @@ codetty-hub --addr :8080
 # 远程机器上启动 cli
 codetty-cli --server ws://hub-ip:8080/ws -- bash
 codetty-cli --server ws://hub-ip:8080/ws --id myhost -- claude
+
+# Windows 客户端
+codetty-cli.exe --server ws://hub-ip:8080/ws -- powershell.exe
 ```
 
 ### TUI 快捷键
@@ -96,7 +111,8 @@ codetty/
 | [charmbracelet/bubbletea](https://github.com/charmbracelet/bubbletea) | TUI 框架 (Elm 架构) |
 | [charmbracelet/lipgloss](https://github.com/charmbracelet/lipgloss) | TUI 样式与布局 |
 | [charmbracelet/x/ansi](https://github.com/charmbracelet/x) | ANSI 转义序列处理 |
-| [creack/pty](https://github.com/creack/pty) | PTY 创建与管理 |
+| [creack/pty](https://github.com/creack/pty) | Unix PTY 创建与管理 |
+| [UserExistsError/conpty](https://github.com/UserExistsError/conpty) | Windows ConPTY 创建与管理 |
 | [hinshun/vt10x](https://github.com/hinshun/vt10x) | VT100 终端仿真 (屏幕快照) |
 | [golang.org/x/term](https://pkg.go.dev/golang.org/x/term) | 终端状态管理 |
 
@@ -115,4 +131,5 @@ codetty/
 ## 系统要求
 
 - Go 1.25+
-- Linux (PTY 依赖)
+- Linux / macOS / Windows
+- Windows CLI 需要 Windows 10 version 1809+ 的 ConPTY；建议使用 Windows Terminal

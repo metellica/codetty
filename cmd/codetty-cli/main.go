@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"sync"
@@ -15,7 +14,6 @@ import (
 
 	"codetty/protocol"
 
-	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 	xterm "golang.org/x/term"
 )
@@ -47,13 +45,11 @@ func main() {
 		}
 	}
 
-	// Spawn the command in a PTY
-	cmd := exec.Command(args[0], args[1:]...)
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
+	term, err := startTerminal(args, cols, rows)
 	if err != nil {
-		log.Fatalf("pty.Start: %v", err)
+		log.Fatalf("start terminal: %v", err)
 	}
-	defer ptmx.Close()
+	defer term.Close()
 
 	// Signal handling
 	sigCh := make(chan os.Signal, 1)
@@ -61,7 +57,7 @@ func main() {
 
 	// Process exit channel
 	doneCh := make(chan error, 1)
-	go func() { doneCh <- cmd.Wait() }()
+	go func() { doneCh <- term.Wait() }()
 
 	// Local terminal: raw mode for interactive use
 	if isTTY {
@@ -73,7 +69,7 @@ func main() {
 
 	// Local stdin → PTY (always, not just for TTY)
 	go func() {
-		if err := copyLocalInput(ptmx, os.Stdin); err != nil {
+		if err := copyLocalInput(term, os.Stdin); err != nil {
 			log.Printf("local input copy stopped: %v", err)
 		}
 	}()
@@ -86,7 +82,7 @@ func main() {
 	go func() {
 		buf := make([]byte, 4096)
 		for {
-			n, err := ptmx.Read(buf)
+			n, err := term.Read(buf)
 			if n > 0 {
 				os.Stdout.Write(buf[:n])
 				cp := make([]byte, n)
@@ -106,7 +102,7 @@ func main() {
 	}()
 
 	// Run connection loop (reconnects on failure)
-	go connectionLoop(*serverURL, identityID, title, ptmx, outputCh, doneCh, screenMirror, &replayMu)
+	go connectionLoop(*serverURL, identityID, title, term, outputCh, doneCh, screenMirror, &replayMu)
 
 	// Wait for process exit or signal
 	select {
@@ -118,12 +114,12 @@ func main() {
 	}
 }
 
-func connectionLoop(serverURL, clientID, title string, ptmx *os.File, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) {
+func connectionLoop(serverURL, clientID, title string, term terminalSession, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) {
 	delay := time.Second
 	maxDelay := 30 * time.Second
 
 	for {
-		err := runConnection(serverURL, clientID, title, ptmx, outputCh, done, screen, replayMu)
+		err := runConnection(serverURL, clientID, title, term, outputCh, done, screen, replayMu)
 		if err == nil {
 			return
 		}
@@ -141,7 +137,7 @@ func connectionLoop(serverURL, clientID, title string, ptmx *os.File, outputCh <
 	}
 }
 
-func runConnection(serverURL, clientID, title string, ptmx *os.File, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) error {
+func runConnection(serverURL, clientID, title string, term terminalSession, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) error {
 	conn, _, err := websocket.DefaultDialer.Dial(serverURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
@@ -207,13 +203,13 @@ func runConnection(serverURL, clientID, title string, ptmx *os.File, outputCh <-
 			}
 			switch msgType {
 			case protocol.MsgInput:
-				ptmx.Write(payload)
+				term.Write(payload)
 			case protocol.MsgResize:
 				p, err := protocol.DecodeResize(payload)
 				if err == nil {
 					replayMu.Lock()
-					if err := pty.Setsize(ptmx, &pty.Winsize{Cols: p.Cols, Rows: p.Rows}); err != nil {
-						log.Printf("resize pty: %v", err)
+					if err := term.Resize(p.Cols, p.Rows); err != nil {
+						log.Printf("resize terminal: %v", err)
 					} else {
 						screen.Resize(p.Cols, p.Rows)
 					}
