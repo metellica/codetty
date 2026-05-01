@@ -45,7 +45,7 @@ Built-in subcommands on `codetty-hub` to manage a lightweight local CA.
 |---------|---------|
 | `codetty-hub init-ca [--out <dir>] [--days <n>]` | Create CA root cert + hub server cert. Default output: `~/.codetty/certs/`. Default CA validity: 10 years. Default server cert validity: 1 year. |
 | `codetty-hub issue-cert --name <user> [--out <dir>] [--ca-dir <dir>] [--days <n>]` | Sign a client certificate for `<user>`. CN is set to the user name. Default validity: 1 year. |
-| `codetty-hub list-certs [--ca-dir <dir>]` | List issued certificates with name, serial, expiry, revocation status. |
+| `codetty-hub list-certs [--ca-dir <dir>]` | List issued certificates by scanning `<ca-dir>` for `.crt` files, parsing each to show name (CN), serial number, expiry date, and revocation status (cross-referenced with CRL). |
 | `codetty-hub revoke-cert --name <user> [--ca-dir <dir>]` | Add certificate to CRL (`crl.pem`). Hub hot-reloads CRL. |
 
 **Certificate details:**
@@ -90,7 +90,7 @@ codetty-hub revoke-cert --name bob
 
 In secure mode, hub uses `tls.Listen` + `http.Serve` instead of `http.ListenAndServe`. TLS config:
 
-- Hub: `ClientAuth: tls.RequireAndVerifyClientCert`, `ClientCAs` loaded from CA cert, CRL checked post-handshake.
+- Hub: `ClientAuth: tls.RequireAndVerifyClientCert`, `ClientCAs` loaded from CA cert. CRL is checked via Go's `VerifyPeerCertificate` callback—this runs after the TLS handshake verifies the certificate chain but before the connection is made available to the application. From the client's perspective, a revoked cert results in a closed connection.
 - CLI: `RootCAs` loaded from CA cert, `Certificates` loaded from client cert + key.
 
 In insecure mode, hub uses plain `http.ListenAndServe` as today.
@@ -119,7 +119,7 @@ In insecure mode, `User` is empty or "anonymous"; no verification is performed.
 |----------|----------|
 | No client certificate | TLS handshake failure |
 | Certificate signed by untrusted CA | TLS handshake failure |
-| Certificate revoked (in CRL) | TLS handshake failure |
+| Certificate revoked (in CRL) | Connection closed during `VerifyPeerCertificate` callback |
 | Certificate expired | TLS handshake failure |
 | Register `User` ≠ certificate CN | Hub closes WebSocket |
 
@@ -186,5 +186,5 @@ cmd/codetty-hub/certcmd.go   # init-ca, issue-cert, list-certs, revoke-cert subc
 ### §7 Security Considerations
 
 - **CA key protection:** `ca.key` file permissions set to `0600`, only hub admin can read.
-- **CRL hot-reload:** Hub watches for CRL file changes (fsnotify or periodic poll) to apply revocations without restart.
+- **CRL hot-reload:** Hub periodically re-reads the CRL file (default: every 30 seconds) to apply revocations without restart. This avoids adding `fsnotify` as a dependency.
 - **Audit logging:** Connection/disconnection events log user name, certificate fingerprint, and timestamp.
