@@ -77,6 +77,53 @@ func TestEncodeReplay(t *testing.T) {
 	}
 }
 
+func TestEncodeDecodeRegisterWithUser(t *testing.T) {
+	orig := RegisterPayload{
+		ID:    "machine1",
+		Title: "claude@machine1",
+		Cols:  220,
+		Rows:  50,
+		User:  "alice",
+	}
+	encoded, err := EncodeRegister(orig)
+	if err != nil {
+		t.Fatalf("EncodeRegister: %v", err)
+	}
+	if MsgType(encoded[0]) != MsgRegister {
+		t.Fatalf("expected type %c, got %c", MsgRegister, encoded[0])
+	}
+	decoded, err := DecodeRegister(encoded[1:])
+	if err != nil {
+		t.Fatalf("DecodeRegister: %v", err)
+	}
+	if decoded != orig {
+		t.Fatalf("round-trip mismatch: got %+v, want %+v", decoded, orig)
+	}
+}
+
+func TestDecodeRegisterWithoutUserDefaultsEmpty(t *testing.T) {
+	oldJSON := []byte(`{"id":"old","title":"old-title","cols":80,"rows":24}`)
+	decoded, err := DecodeRegister(oldJSON)
+	if err != nil {
+		t.Fatalf("DecodeRegister: %v", err)
+	}
+	if decoded.ID != "old" {
+		t.Fatalf("ID mismatch: got %q, want %q", decoded.ID, "old")
+	}
+	if decoded.Title != "old-title" {
+		t.Fatalf("Title mismatch: got %q, want %q", decoded.Title, "old-title")
+	}
+	if decoded.Cols != 80 {
+		t.Fatalf("Cols mismatch: got %d, want 80", decoded.Cols)
+	}
+	if decoded.Rows != 24 {
+		t.Fatalf("Rows mismatch: got %d, want 24", decoded.Rows)
+	}
+	if decoded.User != "" {
+		t.Fatalf("User mismatch: got %q, want empty string", decoded.User)
+	}
+}
+
 func TestParseType(t *testing.T) {
 	tests := []struct {
 		name    string

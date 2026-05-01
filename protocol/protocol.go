@@ -20,6 +20,7 @@ type RegisterPayload struct {
 	Title string `json:"title"`
 	Cols  uint16 `json:"cols"`
 	Rows  uint16 `json:"rows"`
+	User  string `json:"user,omitempty"`
 }
 
 type ResizePayload struct {
