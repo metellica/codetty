@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"sync"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gorilla/websocket"
@@ -103,9 +104,11 @@ func (h *Hub) HandleConn(conn *websocket.Conn, auth AuthInfo) {
 			if user == "" {
 				// resolveUser returning empty means mismatch rejection.
 				log.Printf("auth mismatch: authenticated=%q register=%q; closing connection", auth.User, p.User)
-				reason := fmt.Sprintf("codetty auth rejected: %s != %s", auth.User, p.User)
-				conn.WriteMessage(websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason))
+				reason := authRejectedCloseReason(auth.User, p.User)
+				if err := conn.WriteMessage(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason)); err != nil {
+					log.Printf("write close message: %v", err)
+				}
 				return
 			}
 
@@ -136,7 +139,39 @@ func (h *Hub) HandleConn(conn *websocket.Conn, auth AuthInfo) {
 	}
 }
 
-// resolveUser determines the effective user for a session.
+// authRejectedCloseReason returns a UTF-8-safe close reason of at most 123 bytes
+// (the WebSocket control-frame payload limit minus the 2-byte close code) that
+// always contains the stable prefix "codetty auth rejected".  When the full
+// "codetty auth rejected: <authUser> != <registerUser>" string would exceed 123
+// bytes the function falls back to the bare prefix so the CLI can still match it.
+func authRejectedCloseReason(authUser, registerUser string) string {
+	const prefix = "codetty auth rejected"
+	const maxBytes = 123
+
+	full := fmt.Sprintf("%s: %s != %s", prefix, authUser, registerUser)
+	if len([]byte(full)) <= maxBytes {
+		return full
+	}
+
+	// Try to fit as much detail as possible: keep the prefix and append a
+	// truncated suffix, never cutting in the middle of a UTF-8 rune.
+	suffix := fmt.Sprintf(": %s != %s", authUser, registerUser)
+	available := maxBytes - len(prefix)
+	if available <= 0 {
+		return prefix
+	}
+	b := []byte(suffix)
+	if len(b) > available {
+		b = b[:available]
+		// Walk back until we have a valid UTF-8 boundary.
+		for !utf8.Valid(b) {
+			b = b[:len(b)-1]
+		}
+	}
+	return prefix + string(b)
+}
+
+
 // In secure mode, the register payload's User must match the authenticated user.
 // Returns "" to signal rejection (mismatch).
 // In insecure mode, returns "anonymous".
