@@ -9,7 +9,7 @@
 │  codetty-hub (TUI 服务端，监控机)       │
 │  监听 :8080，接受多个 cli 连接          │
 └──────────┬──────────┬─────────────────┘
-  WebSocket│ WebSocket│  WebSocket
+  Secure WebSocket│ Secure WebSocket│  Secure WebSocket
            ▼          ▼
      ┌──────────┐ ┌──────────┐
      │codetty-cli│ │codetty-cli│  ...
@@ -17,11 +17,11 @@
      └──────────┘ └──────────┘
 ```
 
-**数据流：**
+**数据流（mTLS 加密）：**
 
 ```
-PTY 输出 → cli → WebSocket → hub → TUI 渲染
-键盘输入 ← cli ← WebSocket ← hub ← TUI 捕获
+PTY 输出 → cli → Secure WebSocket (mTLS) → hub → TUI 渲染
+键盘输入 ← cli ← Secure WebSocket (mTLS) ← hub ← TUI 捕获
 ```
 
 ## 功能
@@ -34,7 +34,8 @@ PTY 输出 → cli → WebSocket → hub → TUI 渲染
 - **键盘导航** — Tab/Shift+Tab/方向键切换会话，Enter/f 全屏，ESC 返回网格
 - **自动身份识别** — cli 根据工作目录、主机名、PID 自动生成唯一标识
 - **焦点事件过滤** — cli 过滤终端焦点事件 (CSI I/O)，避免干扰远程进程
-- **自定义协议** — 基于 WebSocket 的轻量二进制协议，支持注册、输出、输入、调整大小、屏幕重放
+- **自定义协议** — 基于 Secure WebSocket (mTLS) 的轻量二进制协议，支持注册、输出、输入、调整大小、屏幕重放
+- **互相TLS（mTLS）** — 默认启用证书验证，确保 hub 和 cli 之间的通信加密和身份验证
 - **跨平台 PTY** — Linux/macOS 使用 Unix PTY，Windows 使用 ConPTY
 
 ## 快速开始
@@ -70,16 +71,113 @@ go build -o codetty-cli.exe ./cmd/codetty-cli
 
 ### 使用
 
+CodeTTY 需要 mTLS 证书。详见下面的 **安全配置** 部分。快速示例：
+
 ```bash
+# 生成证书（第一次）
+codetty-hub init-ca --out ~/.codetty/certs
+codetty-hub issue-cert --name alice --out ~/.codetty/certs
+
 # 启动 hub（监控机）
-codetty-hub --addr :8080
+codetty-hub --addr :8080 \
+  --cert ~/.codetty/certs/server.crt \
+  --key ~/.codetty/certs/server.key \
+  --ca ~/.codetty/certs/ca.crt
 
-# 远程机器上启动 cli
-codetty-cli --server ws://hub-ip:8080/ws -- bash
-codetty-cli --server ws://hub-ip:8080/ws --id myhost -- claude
+# 远程机器上启动 cli（使用证书）
+codetty-cli --server wss://hub-ip:8080/ws \
+  --cert-dir ~/.codetty/certs \
+  -- bash
+```
 
-# Windows 客户端
-codetty-cli.exe --server ws://hub-ip:8080/ws -- powershell.exe
+更多选项和配置详见 **安全配置** 部分。
+
+### 安全配置
+
+CodeTTY 默认使用互相TLS（mTLS）。必须生成证书和密钥文件，或明确使用 `--insecure` 标志禁用。
+
+#### 1. 初始化证书颁发机构（CA）
+
+首次使用时，在监控机上初始化 CA：
+
+```bash
+codetty-hub init-ca --out ~/.codetty/certs
+```
+
+此命令生成：
+- `ca.crt` — CA 证书（用于验证客户端）
+- `ca.key` — CA 私钥（用于签署客户端证书）
+- `server.crt` — 服务器证书（由 CA 签署）
+- `server.key` — 服务器私钥
+
+#### 2. 为客户端签发证书
+
+为每个 CLI 客户端（远程机器）签发证书：
+
+```bash
+codetty-hub issue-cert --name alice --out ~/.codetty/certs
+codetty-hub issue-cert --name bob --out ~/.codetty/certs
+```
+
+每条命令生成 `<name>.crt` 和 `<name>.key` 文件。
+
+#### 3. 启动 Hub（服务端）
+
+使用证书启动 hub：
+
+```bash
+codetty-hub --addr :8080 \
+  --cert ~/.codetty/certs/server.crt \
+  --key ~/.codetty/certs/server.key \
+  --ca ~/.codetty/certs/ca.crt
+```
+
+#### 4. 启动 CLI（客户端）
+
+在远程机器上使用客户端证书启动 cli：
+
+```bash
+# 指定证书文件
+codetty-cli --server wss://hub-ip:8080/ws \
+  --cert ~/.codetty/alice.crt \
+  --key ~/.codetty/alice.key \
+  --ca ~/.codetty/ca.crt \
+  -- bash
+
+# 或使用 --cert-dir 查找 client.crt, client.key, ca.crt
+codetty-cli --server wss://hub-ip:8080/ws \
+  --cert-dir ~/.codetty/certs \
+  -- bash
+```
+
+#### 证书管理命令
+
+**列出证书：**
+
+```bash
+codetty-hub list-certs --ca-dir ~/.codetty/certs
+```
+
+**撤销证书：**
+
+```bash
+codetty-hub revoke-cert --name alice --ca-dir ~/.codetty/certs
+```
+
+#### 不安全模式（开发用）
+
+**警告：** 不安全模式禁用加密和身份认证，仅应在开发或受信任的隔离网络中使用。
+
+启动 hub（不安全）：
+
+```bash
+codetty-hub --insecure --addr :8080
+```
+
+启动 CLI（不安全）：
+
+```bash
+codetty-cli --insecure --server ws://hub-ip:8080/ws -- bash
 ```
 
 ### TUI 快捷键
@@ -127,7 +225,7 @@ codetty/
 
 | 方向 | 类型字节 | 含义 |
 |------|---------|------|
-| cli → hub | `r` | 注册 (JSON payload) |
+| cli → hub | `r` | 注册 (JSON payload，使用 mTLS 时包含用户身份) |
 | cli → hub | `o` | PTY 输出数据 |
 | cli → hub | `R` | 屏幕重放快照 |
 | hub → cli | `i` | 键盘输入 |
