@@ -24,7 +24,7 @@ func (f *fullscreenHandler) SetStderr(w io.Writer) {}
 
 // Run proxies raw input from the hub's terminal to the remote session.
 // Output is forwarded by Hub.HandleConn to the fullscreen writer.
-// Blocks until the user presses ESC-ESC or Ctrl+A.
+// Blocks until the user presses ESC-ESC or Ctrl+A, or the session disconnects.
 func (f *fullscreenHandler) Run() error {
 	stdout := f.stdout
 	if stdout == nil {
@@ -37,10 +37,12 @@ func (f *fullscreenHandler) Run() error {
 
 	replaySeq := f.session.ReplaySeq()
 
+	done := make(chan struct{})
 	f.hub.fsMu.Lock()
 	f.hub.fullscreenID = f.session.ID
 	f.hub.fsWriter = stdout
 	f.hub.fsAwaitReplay = true
+	f.hub.fsDoneCh = done
 
 	// Raw mode so individual keystrokes are forwarded immediately and are not
 	// locally echoed before the remote PTY echoes them back.
@@ -57,37 +59,70 @@ func (f *fullscreenHandler) Run() error {
 
 	// Wait briefly for the resize-triggered replay to arrive before we start
 	// forwarding user input. Without this, a command like "ls" can be echoed
-	// against a stale prompt/cursor position and appear garbled.
+	// against a stale prompt/cursor position and appears garbled.
 	replayed := f.session.WaitForReplayAfter(replaySeq, 300*time.Millisecond)
 	if !replayed {
 		f.hub.ClearFullscreenReplayGate(f.session.ID)
 	}
 
-	buf := make([]byte, 4096)
+	// Read stdin in a goroutine so we can also select on the done channel
+	// (closed when the fullscreen session disconnects).
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	readCh := make(chan readResult, 1)
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := stdin.Read(buf)
+			if n > 0 {
+				cp := make([]byte, n)
+				copy(cp, buf[:n])
+				select {
+				case readCh <- readResult{data: cp}:
+				case <-done:
+					return
+				}
+			}
+			if err != nil {
+				select {
+				case readCh <- readResult{err: err}:
+				case <-done:
+				}
+				return
+			}
+		}
+	}()
+
 	var lastEsc time.Time
 
 	for {
-		n, err := stdin.Read(buf)
-		if err != nil {
-			return err
-		}
-		data := buf[:n]
-
-		if len(data) > 0 {
-			// Ctrl+A (byte 0x01) exits immediately
-			if data[0] == 0x01 {
-				return nil
+		select {
+		case <-done:
+			return nil
+		case r := <-readCh:
+			if r.err != nil {
+				return r.err
 			}
-			// Standalone ESC (single byte 0x1b) — double ESC within 300ms exits
-			if data[0] == 0x1b && len(data) == 1 {
-				if time.Since(lastEsc) < 300*time.Millisecond {
+			data := r.data
+
+			if len(data) > 0 {
+				// Ctrl+A (byte 0x01) exits immediately
+				if data[0] == 0x01 {
 					return nil
 				}
-				lastEsc = time.Now()
+				// Standalone ESC (single byte 0x1b) — double ESC within 300ms exits
+				if data[0] == 0x1b && len(data) == 1 {
+					if time.Since(lastEsc) < 300*time.Millisecond {
+						return nil
+					}
+					lastEsc = time.Now()
+				}
 			}
-		}
 
-		f.session.SendInput(data)
+			f.session.SendInput(data)
+		}
 	}
 }
 

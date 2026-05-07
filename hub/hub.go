@@ -40,6 +40,7 @@ type Hub struct {
 	fullscreenID   string
 	fsWriter       io.Writer
 	fsAwaitReplay  bool
+	fsDoneCh       chan struct{} // closed to signal fullscreen handler to exit
 }
 
 func New() *Hub {
@@ -56,6 +57,10 @@ func (h *Hub) SetProgram(p *tea.Program) {
 // Pass empty string and nil writer to exit fullscreen.
 func (h *Hub) SetFullscreen(id string, w io.Writer) {
 	h.fsMu.Lock()
+	if id == "" && h.fsDoneCh != nil {
+		close(h.fsDoneCh)
+		h.fsDoneCh = nil
+	}
 	h.fullscreenID = id
 	h.fsWriter = w
 	h.fsAwaitReplay = id != "" && w != nil
@@ -84,7 +89,12 @@ func (h *Hub) HandleConn(conn *websocket.Conn, auth AuthInfo) {
 
 	defer func() {
 		if sess != nil {
-			log.Printf("disconnect: session=%s user=%s", sess.ID, sess.User)
+			h.fsMu.RLock()
+			inFS := h.fullscreenID != ""
+			h.fsMu.RUnlock()
+			if !inFS {
+				log.Printf("disconnect: session=%s user=%s", sess.ID, sess.User)
+			}
 			h.removeSession(sess.ID)
 		}
 		conn.Close()
@@ -258,6 +268,15 @@ func (h *Hub) removeSession(id string) {
 		}
 	}
 	h.mu.Unlock()
+
+	// If the disconnecting session is the one in fullscreen, signal the
+	// fullscreen handler to exit so the TUI can resume.
+	h.fsMu.Lock()
+	if h.fullscreenID == id && h.fsDoneCh != nil {
+		close(h.fsDoneCh)
+		h.fsDoneCh = nil
+	}
+	h.fsMu.Unlock()
 
 	if h.program != nil {
 		h.program.Send(ClientDisconnectedMsg{ID: id})

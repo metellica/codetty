@@ -2,6 +2,7 @@ package hub
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"sync"
 	"testing"
@@ -119,3 +120,64 @@ func (w *triggerWriter) String() string {
 	defer w.mu.Unlock()
 	return w.buf.String()
 }
+
+func TestFullscreenHandlerExitsWhenSessionDisconnects(t *testing.T) {
+	h := New()
+	sess := NewClientSession("fs-exit", "test", 80, 24, nil)
+
+	// blockingReader blocks until its done channel is closed, simulating
+	// a real stdin that has no input.
+	br := &blockingStdinReader{done: make(chan struct{})}
+
+	var stdout bytes.Buffer
+	handler := &fullscreenHandler{
+		session: sess,
+		hub:     h,
+		stdin:   br,
+		stdout:  &stdout,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handler.Run()
+	}()
+
+	// Wait for fullscreen to be set up.
+	time.Sleep(50 * time.Millisecond)
+	if got := h.GetFullscreenID(); got != "fs-exit" {
+		t.Fatalf("expected fullscreen ID 'fs-exit', got %q", got)
+	}
+
+	// Simulate the session disconnecting by closing the done channel.
+	h.fsMu.Lock()
+	if h.fsDoneCh != nil {
+		close(h.fsDoneCh)
+		h.fsDoneCh = nil
+	}
+	h.fsMu.Unlock()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("Run() returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("fullscreen handler did not exit after session disconnect")
+	}
+
+	// Fullscreen state should be cleared.
+	if got := h.GetFullscreenID(); got != "" {
+		t.Fatalf("expected empty fullscreen ID after exit, got %q", got)
+	}
+}
+
+// blockingStdinReader blocks Read until done is closed, then returns io.EOF.
+type blockingStdinReader struct {
+	done chan struct{}
+}
+
+func (r *blockingStdinReader) Read(p []byte) (int, error) {
+	<-r.done
+	return 0, io.EOF
+}
+
