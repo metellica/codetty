@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -240,6 +241,7 @@ func main() {
 
 	screenMirror := NewScreenMirror(cols, rows)
 	var replayMu sync.Mutex
+	var suppressHubOutput atomic.Bool
 
 	// Single PTY reader → local stdout + hub channel + screen mirror
 	outputCh := make(chan []byte, 256)
@@ -253,9 +255,11 @@ func main() {
 				copy(cp, buf[:n])
 				replayMu.Lock()
 				screenMirror.Write(cp)
-				select {
-				case outputCh <- cp:
-				default: // drop if hub not keeping up
+				if !suppressHubOutput.Load() {
+					select {
+					case outputCh <- cp:
+					default: // drop if hub not keeping up
+					}
 				}
 				replayMu.Unlock()
 			}
@@ -266,7 +270,7 @@ func main() {
 	}()
 
 	// Run connection loop (reconnects on failure)
-	go connectionLoop(connCfg, identityID, title, term, outputCh, doneCh, screenMirror, &replayMu)
+	go connectionLoop(connCfg, identityID, title, term, outputCh, doneCh, screenMirror, &replayMu, &suppressHubOutput)
 
 	// Wait for process exit or signal
 	select {
@@ -278,12 +282,12 @@ func main() {
 	}
 }
 
-func connectionLoop(connCfg connectionConfig, clientID, title string, term terminalSession, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) {
+func connectionLoop(connCfg connectionConfig, clientID, title string, term terminalSession, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex, suppressHubOutput *atomic.Bool) {
 	delay := time.Second
 	maxDelay := 30 * time.Second
 
 	for {
-		err := runConnection(connCfg, clientID, title, term, outputCh, done, screen, replayMu)
+		err := runConnection(connCfg, clientID, title, term, outputCh, done, screen, replayMu, suppressHubOutput)
 		if err == nil {
 			return
 		}
@@ -315,12 +319,19 @@ func isFatalConnectionError(err error) bool {
 	return errors.Is(err, errAuthRejected)
 }
 
-func runConnection(connCfg connectionConfig, clientID, title string, term terminalSession, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex) error {
+func runConnection(connCfg connectionConfig, clientID, title string, term terminalSession, outputCh <-chan []byte, done <-chan error, screen *ScreenMirror, replayMu *sync.Mutex, suppressHubOutput *atomic.Bool) error {
 	conn, _, err := connCfg.Dialer.Dial(connCfg.ServerURL, nil)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
+
+	var writeMu sync.Mutex
+	writeFrame := func(msgType int, data []byte) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return conn.WriteMessage(msgType, data)
+	}
 
 	cols, rows := screen.Size()
 	regMsg, err := protocol.EncodeRegister(protocol.RegisterPayload{
@@ -333,13 +344,13 @@ func runConnection(connCfg connectionConfig, clientID, title string, term termin
 	if err != nil {
 		return fmt.Errorf("encode register: %w", err)
 	}
-	if err := conn.WriteMessage(websocket.BinaryMessage, regMsg); err != nil {
+	if err := writeFrame(websocket.BinaryMessage, regMsg); err != nil {
 		return fmt.Errorf("send register: %w", err)
 	}
 
 	if replay := snapshotReplay(outputCh, screen, replayMu); len(replay) > 0 {
 		msg := protocol.EncodeReplay(replay)
-		if err := conn.WriteMessage(websocket.BinaryMessage, msg); err != nil {
+		if err := writeFrame(websocket.BinaryMessage, msg); err != nil {
 			return fmt.Errorf("send replay: %w", err)
 		}
 	}
@@ -358,7 +369,7 @@ func runConnection(connCfg connectionConfig, clientID, title string, term termin
 					return
 				}
 				msg := protocol.EncodeOutput(data)
-				if werr := conn.WriteMessage(websocket.BinaryMessage, msg); werr != nil {
+				if werr := writeFrame(websocket.BinaryMessage, msg); werr != nil {
 					errCh <- fmt.Errorf("write output: %w", werr)
 					return
 				}
@@ -394,13 +405,42 @@ func runConnection(connCfg connectionConfig, clientID, title string, term termin
 			case protocol.MsgResize:
 				p, err := protocol.DecodeResize(payload)
 				if err == nil {
+					if suppressHubOutput != nil {
+						suppressHubOutput.Store(true)
+					}
+					resized := false
 					replayMu.Lock()
 					if err := term.Resize(p.Cols, p.Rows); err != nil {
 						log.Printf("resize terminal: %v", err)
 					} else {
 						screen.Resize(p.Cols, p.Rows)
+						resized = true
 					}
 					replayMu.Unlock()
+					if resized {
+						// Fullscreen entry is the only current resize path from the hub.
+						// Nudge interactive programs (shells, readline, vim, less, etc.)
+						// to redraw at the new size before we capture the recovery replay.
+						if _, err := term.Write([]byte{0x0c}); err != nil {
+							log.Printf("redraw terminal: %v", err)
+						}
+						// Give interactive programs a brief moment to process SIGWINCH
+						// and redraw before we capture a recovery snapshot for fullscreen.
+						time.Sleep(100 * time.Millisecond)
+						if replay := snapshotReplay(outputCh, screen, replayMu); len(replay) > 0 {
+							msg := protocol.EncodeReplay(replay)
+							if werr := writeFrame(websocket.BinaryMessage, msg); werr != nil {
+								if suppressHubOutput != nil {
+									suppressHubOutput.Store(false)
+								}
+								errCh <- fmt.Errorf("send resize replay: %w", werr)
+								return
+							}
+						}
+					}
+					if suppressHubOutput != nil {
+						suppressHubOutput.Store(false)
+					}
 				}
 			}
 		}
@@ -410,7 +450,7 @@ func runConnection(connCfg connectionConfig, clientID, title string, term termin
 	case err := <-errCh:
 		return err
 	case <-done:
-		conn.WriteMessage(websocket.CloseMessage,
+		writeFrame(websocket.CloseMessage,
 			websocket.FormatCloseMessage(1000, "process exited"))
 		return nil
 	}

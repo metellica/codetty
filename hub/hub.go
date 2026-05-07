@@ -36,9 +36,10 @@ type Hub struct {
 	order    []string // ordered list of session IDs
 	program  *tea.Program
 
-	fsMu         sync.RWMutex
-	fullscreenID string
-	fsWriter     io.Writer
+	fsMu           sync.RWMutex
+	fullscreenID   string
+	fsWriter       io.Writer
+	fsAwaitReplay  bool
 }
 
 func New() *Hub {
@@ -57,6 +58,15 @@ func (h *Hub) SetFullscreen(id string, w io.Writer) {
 	h.fsMu.Lock()
 	h.fullscreenID = id
 	h.fsWriter = w
+	h.fsAwaitReplay = id != "" && w != nil
+	h.fsMu.Unlock()
+}
+
+func (h *Hub) ClearFullscreenReplayGate(id string) {
+	h.fsMu.Lock()
+	if h.fullscreenID == id {
+		h.fsAwaitReplay = false
+	}
 	h.fsMu.Unlock()
 }
 
@@ -122,7 +132,8 @@ func (h *Hub) HandleConn(conn *websocket.Conn, auth AuthInfo) {
 			if sess == nil {
 				return
 			}
-			inFullscreen := h.writeSessionOutput(sess, payload)
+			inFullscreen := h.writeSessionOutput(sess, payload, true)
+			sess.NoteReplay()
 			if h.program != nil && !inFullscreen {
 				h.program.Send(ScreenUpdateMsg{ID: sess.ID, Data: nil})
 			}
@@ -131,7 +142,7 @@ func (h *Hub) HandleConn(conn *websocket.Conn, auth AuthInfo) {
 			if sess == nil {
 				return
 			}
-			inFullscreen := h.writeSessionOutput(sess, payload)
+			inFullscreen := h.writeSessionOutput(sess, payload, false)
 			if h.program != nil && !inFullscreen {
 				h.program.Send(ScreenUpdateMsg{ID: sess.ID, Data: payload})
 			}
@@ -185,7 +196,7 @@ func resolveUser(auth AuthInfo, registerUser string) string {
 	return "anonymous"
 }
 
-func (h *Hub) writeSessionOutput(sess *ClientSession, payload []byte) bool {
+func (h *Hub) writeSessionOutput(sess *ClientSession, payload []byte, isReplay bool) bool {
 	h.fsMu.RLock()
 	defer h.fsMu.RUnlock()
 
@@ -197,7 +208,19 @@ func (h *Hub) writeSessionOutput(sess *ClientSession, payload []byte) bool {
 	// would block forever.
 	inFullscreen := h.fullscreenID != ""
 	if h.fullscreenID == sess.ID && h.fsWriter != nil {
+		if h.fsAwaitReplay && !isReplay {
+			return inFullscreen
+		}
 		h.fsWriter.Write(payload)
+		if isReplay {
+			h.fsMu.RUnlock()
+			h.fsMu.Lock()
+			if h.fullscreenID == sess.ID {
+				h.fsAwaitReplay = false
+			}
+			h.fsMu.Unlock()
+			h.fsMu.RLock()
+		}
 	}
 	return inFullscreen
 }

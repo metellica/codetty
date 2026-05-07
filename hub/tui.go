@@ -35,7 +35,7 @@ func NewModel(h *Hub) *Model {
 }
 
 func (m *Model) Init() tea.Cmd {
-	return tea.WindowSize()
+	return tea.Batch(tea.WindowSize(), tea.EnableMouseCellMotion)
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -45,6 +45,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
+	case tea.FocusMsg:
+		return m, tea.EnableMouseCellMotion
+
 	case ClientConnectedMsg:
 		m.sessions = m.hub.Sessions()
 		m.layout.syncSessions(m.sessions)
@@ -52,6 +55,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selected >= len(ordered) {
 			m.selected = max(0, len(ordered)-1)
 		}
+		return m, tea.ClearScreen
 
 	case ClientDisconnectedMsg:
 		m.sessions = m.hub.Sessions()
@@ -60,12 +64,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.selected >= len(ordered) {
 			m.selected = max(0, len(ordered)-1)
 		}
+		return m, tea.ClearScreen
 
 	case ScreenUpdateMsg:
 		// Re-render happens automatically; vt10x content read in View()
 
 	case exitFullscreenMsg:
 		m.fullscreen = false
+		return m, tea.EnableMouseCellMotion
 
 	case tea.MouseMsg:
 		if m.fullscreen {
@@ -236,11 +242,14 @@ func (m *Model) View() string {
 		return "Fullscreen mode active..."
 	}
 
+	var content string
 	if m.layout.mode == layoutFocusBig {
-		return m.focusBigView()
+		content = m.focusBigView()
+	} else {
+		content = m.gridView()
 	}
 
-	return m.gridView()
+	return m.padToFullScreen(content)
 }
 
 // keyToBytes converts a bubbletea KeyMsg to raw terminal bytes for PTY input.

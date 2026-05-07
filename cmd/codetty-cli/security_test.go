@@ -235,7 +235,7 @@ func TestRunConnection_SendsUser(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runConnection(connCfg, "id", "title", term, outputCh, doneCh, screen, &replayMu)
+		errCh <- runConnection(connCfg, "id", "title", term, outputCh, doneCh, screen, &replayMu, nil)
 	}()
 
 	var user string
@@ -364,7 +364,7 @@ func TestRunConnection_AuthRejected(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runConnection(connCfg, "id", "title", term, outputCh, doneCh, screen, &replayMu)
+		errCh <- runConnection(connCfg, "id", "title", term, outputCh, doneCh, screen, &replayMu, nil)
 	}()
 
 	select {

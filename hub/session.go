@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"time"
 
 	"codetty/protocol"
 
 	"github.com/hinshun/vt10x"
+	"github.com/mattn/go-runewidth"
 )
 
 // vt10x Glyph.Mode flags (unexported in vt10x package)
@@ -27,6 +30,10 @@ type ClientSession struct {
 	Rows   uint16
 	term   vt10x.Terminal
 	writer *ConnWriter
+
+	replayMu   sync.Mutex
+	replaySeq  uint64
+	replayWait chan struct{}
 }
 
 type terminalSnapshot struct {
@@ -42,12 +49,13 @@ type terminalSnapshot struct {
 func NewClientSession(id, title string, cols, rows uint16, writer *ConnWriter) *ClientSession {
 	term := vt10x.New(vt10x.WithSize(int(cols), int(rows)), vt10x.WithWriter(io.Discard))
 	return &ClientSession{
-		ID:     id,
-		Title:  title,
-		Cols:   cols,
-		Rows:   rows,
-		term:   term,
-		writer: writer,
+		ID:         id,
+		Title:      title,
+		Cols:       cols,
+		Rows:       rows,
+		term:       term,
+		writer:     writer,
+		replayWait: make(chan struct{}),
 	}
 }
 
@@ -180,13 +188,31 @@ func (s *ClientSession) renderLine(y, w, cols int, hasCursor bool, cursorX int) 
 	var prevMode int16
 	needReset := false
 
-	for x := 0; x < w; x++ {
-		var g vt10x.Glyph
-		if x < cols {
-			g = s.term.Cell(x, y)
-		}
+	visWidth := 0
+	for x := 0; x < cols && visWidth < w; x++ {
+		g := s.term.Cell(x, y)
 		if g.Char == 0 {
 			g.Char = ' '
+		}
+
+		rw := runewidth.RuneWidth(g.Char)
+		if rw == 0 {
+			rw = 1
+			g.Char = ' '
+		}
+
+		// Skip placeholder cells that follow a wide character.
+		// vt10x stores wide chars at cell x with the next cell as a null placeholder.
+		if rw == 1 && g.Char == ' ' && x > 0 {
+			prev := s.term.Cell(x-1, y)
+			if prev.Char != 0 && runewidth.RuneWidth(prev.Char) > 1 {
+				continue
+			}
+		}
+
+		// Don't exceed target visual width
+		if visWidth+rw > w {
+			break
 		}
 
 		isCursor := hasCursor && x == cursorX
@@ -204,6 +230,17 @@ func (s *ClientSession) renderLine(y, w, cols int, hasCursor bool, cursorX int) 
 		}
 
 		sb.WriteRune(g.Char)
+		visWidth += rw
+	}
+
+	// Pad remaining visual width with spaces
+	for visWidth < w {
+		if needReset {
+			sb.WriteString("\033[0m")
+			needReset = false
+		}
+		sb.WriteByte(' ')
+		visWidth++
 	}
 
 	if needReset {
@@ -285,5 +322,43 @@ func (s *ClientSession) Close() {
 	if s.writer != nil {
 		s.writer.Close()
 		s.writer = nil
+	}
+}
+
+func (s *ClientSession) ReplaySeq() uint64 {
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+	return s.replaySeq
+}
+
+func (s *ClientSession) NoteReplay() {
+	s.replayMu.Lock()
+	defer s.replayMu.Unlock()
+	s.replaySeq++
+	close(s.replayWait)
+	s.replayWait = make(chan struct{})
+}
+
+func (s *ClientSession) WaitForReplayAfter(seq uint64, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		s.replayMu.Lock()
+		if s.replaySeq > seq {
+			s.replayMu.Unlock()
+			return true
+		}
+		ch := s.replayWait
+		s.replayMu.Unlock()
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false
+		}
+
+		select {
+		case <-ch:
+		case <-time.After(remaining):
+			return false
+		}
 	}
 }

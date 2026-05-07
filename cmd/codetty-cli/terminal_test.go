@@ -16,10 +16,14 @@ import (
 
 type fakeTerminal struct {
 	resizeCh chan [2]uint16
+	writeCh  chan []byte
 }
 
 func newFakeTerminal() *fakeTerminal {
-	return &fakeTerminal{resizeCh: make(chan [2]uint16, 1)}
+	return &fakeTerminal{
+		resizeCh: make(chan [2]uint16, 1),
+		writeCh:  make(chan []byte, 4),
+	}
 }
 
 func (f *fakeTerminal) Read([]byte) (int, error) {
@@ -27,6 +31,11 @@ func (f *fakeTerminal) Read([]byte) (int, error) {
 }
 
 func (f *fakeTerminal) Write(p []byte) (int, error) {
+	cp := append([]byte(nil), p...)
+	select {
+	case f.writeCh <- cp:
+	default:
+	}
 	return len(p), nil
 }
 
@@ -95,7 +104,7 @@ func TestRunConnectionResizeUsesTerminalBackend(t *testing.T) {
 		errCh <- runConnection(connectionConfig{
 			ServerURL: "ws" + strings.TrimPrefix(server.URL, "http"),
 			Dialer:    websocket.DefaultDialer,
-		}, "id", "title", term, outputCh, doneCh, screen, &replayMu)
+		}, "id", "title", term, outputCh, doneCh, screen, &replayMu, nil)
 	}()
 
 	select {
@@ -116,6 +125,154 @@ func TestRunConnectionResizeUsesTerminalBackend(t *testing.T) {
 	cols, rows := screen.Size()
 	if cols != 100 || rows != 40 {
 		t.Fatalf("screen size = %dx%d, want 100x40", cols, rows)
+	}
+
+	select {
+	case <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("runConnection did not return after server close")
+	}
+}
+
+func TestRunConnectionResizeSendsReplaySnapshot(t *testing.T) {
+	replayCh := make(chan []byte, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r, nil, 1024, 1024)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read register: %v", err)
+			return
+		}
+		msgType, _, ok := protocol.ParseType(msg)
+		if !ok || msgType != protocol.MsgRegister {
+			t.Errorf("first message type = %q, ok=%v; want register", msgType, ok)
+			return
+		}
+
+		resizeMsg, err := protocol.EncodeResize(100, 40)
+		if err != nil {
+			t.Errorf("encode resize: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, resizeMsg); err != nil {
+			t.Errorf("send resize: %v", err)
+			return
+		}
+
+		_, replayMsg, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read replay: %v", err)
+			return
+		}
+		replayType, payload, ok := protocol.ParseType(replayMsg)
+		if !ok || replayType != protocol.MsgReplay {
+			t.Errorf("message type after resize = %q, ok=%v; want replay", replayType, ok)
+			return
+		}
+		replayCh <- payload
+	}))
+	defer server.Close()
+
+	term := newFakeTerminal()
+	screen := NewScreenMirror(80, 24)
+	screen.Write([]byte("\x1b[2J\x1b[Hhello"))
+	outputCh := make(chan []byte)
+	doneCh := make(chan error)
+	errCh := make(chan error, 1)
+	var replayMu sync.Mutex
+
+	go func() {
+		errCh <- runConnection(connectionConfig{
+			ServerURL: "ws" + strings.TrimPrefix(server.URL, "http"),
+			Dialer:    websocket.DefaultDialer,
+		}, "id", "title", term, outputCh, doneCh, screen, &replayMu, nil)
+	}()
+
+	select {
+	case replay := <-replayCh:
+		if !strings.Contains(string(replay), "hello") {
+			t.Fatalf("resize replay should contain screen content, got %q", replay)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("client did not send replay after resize")
+	}
+
+	select {
+	case <-errCh:
+	case <-time.After(time.Second):
+		t.Fatal("runConnection did not return after server close")
+	}
+}
+
+func TestRunConnectionResizeTriggersRedrawInput(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Upgrade(w, r, nil, 1024, 1024)
+		if err != nil {
+			t.Errorf("upgrade: %v", err)
+			return
+		}
+		defer conn.Close()
+
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			t.Errorf("read register: %v", err)
+			return
+		}
+		msgType, _, ok := protocol.ParseType(msg)
+		if !ok || msgType != protocol.MsgRegister {
+			t.Errorf("first message type = %q, ok=%v; want register", msgType, ok)
+			return
+		}
+
+		resizeMsg, err := protocol.EncodeResize(100, 40)
+		if err != nil {
+			t.Errorf("encode resize: %v", err)
+			return
+		}
+		if err := conn.WriteMessage(websocket.BinaryMessage, resizeMsg); err != nil {
+			t.Errorf("send resize: %v", err)
+			return
+		}
+
+		// Read and discard the replay sent after resize.
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Errorf("read replay: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	term := newFakeTerminal()
+	screen := NewScreenMirror(80, 24)
+	screen.Write([]byte("\x1b[2J\x1b[Hhello"))
+	outputCh := make(chan []byte)
+	doneCh := make(chan error)
+	errCh := make(chan error, 1)
+	var replayMu sync.Mutex
+
+	go func() {
+		errCh <- runConnection(connectionConfig{
+			ServerURL: "ws" + strings.TrimPrefix(server.URL, "http"),
+			Dialer:    websocket.DefaultDialer,
+		}, "id", "title", term, outputCh, doneCh, screen, &replayMu, nil)
+	}()
+
+	foundRedraw := false
+	timeout := time.After(2 * time.Second)
+	for !foundRedraw {
+		select {
+		case got := <-term.writeCh:
+			if len(got) == 1 && got[0] == 0x0c {
+				foundRedraw = true
+			}
+		case <-timeout:
+			t.Fatal("client did not send redraw input after resize")
+		}
 	}
 
 	select {

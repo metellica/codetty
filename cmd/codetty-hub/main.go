@@ -120,7 +120,7 @@ func main() {
 	model := hub.NewModel(h)
 
 	// Start TUI
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithReportFocus())
 	h.SetProgram(p)
 
 	mux := http.NewServeMux()

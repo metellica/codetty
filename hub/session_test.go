@@ -213,3 +213,39 @@ func TestClientSession_RenderANSIUsesUnderlinedSpaceRowsForViewportAnchoring(t *
 		t.Fatalf("expected underlined spaces to count as visible bottom content, got last line %q in:\n%s", lastLine, rendered)
 	}
 }
+
+func TestClientSessionWaitForReplayAfter(t *testing.T) {
+	sess := NewClientSession("test", "test", 80, 24, nil)
+	defer sess.Close()
+
+	seq := sess.ReplaySeq()
+	done := make(chan bool, 1)
+	go func() {
+		done <- sess.WaitForReplayAfter(seq, time.Second)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	sess.NoteReplay()
+
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Fatal("WaitForReplayAfter should succeed after replay")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WaitForReplayAfter did not return")
+	}
+}
+
+func TestClientSessionWaitForReplayAfterTimeout(t *testing.T) {
+	sess := NewClientSession("test", "test", 80, 24, nil)
+	defer sess.Close()
+
+	start := time.Now()
+	if ok := sess.WaitForReplayAfter(sess.ReplaySeq(), 50*time.Millisecond); ok {
+		t.Fatal("WaitForReplayAfter should time out when no replay arrives")
+	}
+	if time.Since(start) < 40*time.Millisecond {
+		t.Fatal("WaitForReplayAfter returned too early")
+	}
+}

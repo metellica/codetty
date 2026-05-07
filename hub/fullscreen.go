@@ -1,7 +1,6 @@
 package hub
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"time"
@@ -31,14 +30,21 @@ func (f *fullscreenHandler) Run() error {
 	if stdout == nil {
 		stdout = os.Stdout
 	}
+	stdin := f.stdin
+	if stdin == nil {
+		stdin = os.Stdin
+	}
+
+	replaySeq := f.session.ReplaySeq()
 
 	f.hub.fsMu.Lock()
 	f.hub.fullscreenID = f.session.ID
 	f.hub.fsWriter = stdout
+	f.hub.fsAwaitReplay = true
 
-	// Raw mode so individual keystrokes are forwarded immediately
-	fd := int(os.Stdin.Fd())
-	if xterm.IsTerminal(fd) {
+	// Raw mode so individual keystrokes are forwarded immediately and are not
+	// locally echoed before the remote PTY echoes them back.
+	if fd, ok := inputFD(stdin); ok && xterm.IsTerminal(fd) {
 		oldState, err := xterm.MakeRaw(fd)
 		if err == nil {
 			defer xterm.Restore(fd, oldState)
@@ -49,9 +55,12 @@ func (f *fullscreenHandler) Run() error {
 	f.hub.fsMu.Unlock()
 	defer f.hub.SetFullscreen("", nil)
 
-	stdin := f.stdin
-	if stdin == nil {
-		stdin = os.Stdin
+	// Wait briefly for the resize-triggered replay to arrive before we start
+	// forwarding user input. Without this, a command like "ls" can be echoed
+	// against a stale prompt/cursor position and appear garbled.
+	replayed := f.session.WaitForReplayAfter(replaySeq, 300*time.Millisecond)
+	if !replayed {
+		f.hub.ClearFullscreenReplayGate(f.session.ID)
 	}
 
 	buf := make([]byte, 4096)
@@ -83,40 +92,24 @@ func (f *fullscreenHandler) Run() error {
 }
 
 func (f *fullscreenHandler) writeSnapshot(stdout io.Writer) {
-	stdout.Write([]byte("\033[0m\033[r\033[?6l\033[2J\033[H"))
+	// Clear screen and reset terminal state.
+	// We intentionally do NOT paint a snapshot of the old vt10x buffer because
+	// the session was just resized from panel dimensions to fullscreen dimensions.
+	// The old content was formatted for the panel width and would appear garbled.
+	// Instead, let the remote shell redraw naturally at the new size.
+	//
+	// Explicitly disable newline mode (LNM, ESC[20l). Normal terminals leave
+	// LNM off; enabling it makes LF imply CR and can add blank lines after
+	// commands in and after fullscreen.
+	stdout.Write([]byte("\033[0m\033[r\033[?6l\033[20l\033[2J\033[H\033[?7h\033[?25h"))
+}
 
-	cols, rows := int(f.session.Cols), int(f.session.Rows)
-	if cols <= 0 || rows <= 0 {
-		return
+func inputFD(r io.Reader) (int, bool) {
+	if f, ok := r.(*os.File); ok {
+		return int(f.Fd()), true
 	}
-
-	snapshot := f.session.SnapshotANSI(cols, rows)
-	stdout.Write([]byte("\033[?7l"))
-	for y, line := range snapshot.lines {
-		fmt.Fprintf(stdout, "\033[%d;1H%s", y+1, line)
+	if os.Stdin != nil {
+		return int(os.Stdin.Fd()), true
 	}
-	if snapshot.wrapEnabled {
-		stdout.Write([]byte("\033[?7h"))
-	} else {
-		stdout.Write([]byte("\033[?7l"))
-	}
-	curX, curY := snapshot.cursorX, snapshot.cursorY
-	if curX < 0 {
-		curX = 0
-	}
-	if curY < 0 {
-		curY = 0
-	}
-	if curX >= cols {
-		curX = cols - 1
-	}
-	if curY >= rows {
-		curY = rows - 1
-	}
-	fmt.Fprintf(stdout, "\033[%d;%dH", curY+1, curX+1)
-	if snapshot.cursorVisible {
-		stdout.Write([]byte("\033[?25h"))
-	} else {
-		stdout.Write([]byte("\033[?25l"))
-	}
+	return 0, false
 }

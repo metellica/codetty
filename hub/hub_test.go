@@ -176,7 +176,7 @@ func TestHub_ReplayRestoresScreen(t *testing.T) {
 	}
 }
 
-func TestHub_ReplayWritesSnapshotToFullscreenWriter(t *testing.T) {
+func TestHub_ReplayOpensFullscreenGate(t *testing.T) {
 	h := New()
 
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -210,6 +210,62 @@ func TestHub_ReplayWritesSnapshotToFullscreenWriter(t *testing.T) {
 
 	if got := fullscreen.String(); !strings.Contains(got, "restored fullscreen") {
 		t.Fatalf("fullscreen writer should receive replay snapshot, got %q", got)
+	}
+
+	clientConn.WriteMessage(websocket.BinaryMessage, protocol.EncodeOutput([]byte("visible after gate")))
+	time.Sleep(100 * time.Millisecond)
+
+	if got := fullscreen.String(); !strings.Contains(got, "visible after gate") {
+		t.Fatalf("fullscreen writer should forward output after replay gate opens, got %q", got)
+	}
+}
+
+func TestHub_FullscreenSuppressesOutputUntilReplay(t *testing.T) {
+	h := New()
+
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := testUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		h.HandleConn(conn, AuthInfo{})
+	}))
+	defer s.Close()
+
+	clientConn, _, err := websocket.DefaultDialer.Dial("ws"+s.URL[4:], nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer clientConn.Close()
+
+	regMsg, _ := protocol.EncodeRegister(protocol.RegisterPayload{
+		ID: "fullscreen-gated", Title: "test", Cols: 80, Rows: 24,
+	})
+	clientConn.WriteMessage(websocket.BinaryMessage, regMsg)
+	time.Sleep(100 * time.Millisecond)
+
+	var fullscreen lockedBuffer
+	h.SetFullscreen("fullscreen-gated", &fullscreen)
+	defer h.SetFullscreen("", nil)
+
+	clientConn.WriteMessage(websocket.BinaryMessage, protocol.EncodeOutput([]byte("partial redraw")))
+	time.Sleep(100 * time.Millisecond)
+	if got := fullscreen.String(); got != "" {
+		t.Fatalf("fullscreen writer should suppress output before replay, got %q", got)
+	}
+
+	replayData := []byte("\033[2J\033[Hstable fullscreen")
+	clientConn.WriteMessage(websocket.BinaryMessage, protocol.EncodeReplay(replayData))
+	time.Sleep(100 * time.Millisecond)
+
+	if got := fullscreen.String(); !strings.Contains(got, "stable fullscreen") {
+		t.Fatalf("fullscreen writer should start with replay snapshot, got %q", got)
+	}
+
+	clientConn.WriteMessage(websocket.BinaryMessage, protocol.EncodeOutput([]byte("\r\nnext line")))
+	time.Sleep(100 * time.Millisecond)
+	if got := fullscreen.String(); !strings.Contains(got, "next line") {
+		t.Fatalf("fullscreen writer should forward output after replay, got %q", got)
 	}
 }
 

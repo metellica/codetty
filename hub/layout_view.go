@@ -471,3 +471,34 @@ func renderPanel(title, content string, totalW, contentH int, focused bool) stri
 
 	return top + "\n" + body.String() + bottom
 }
+
+// padToFullScreen ensures the rendered content fills the entire terminal area.
+// This prevents ghost artifacts from previous frames when the layout shrinks
+// (e.g., when a session disconnects).
+func (m *Model) padToFullScreen(content string) string {
+	if m.width <= 0 || m.height <= 0 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+
+	// Pad each line to full width and truncate if over height
+	for i := range lines {
+		visW := lipgloss.Width(lines[i])
+		if visW < m.width {
+			lines[i] += strings.Repeat(" ", m.width-visW)
+		}
+	}
+
+	// Pad with empty lines to fill full height
+	emptyLine := strings.Repeat(" ", m.width)
+	for len(lines) < m.height {
+		lines = append(lines, emptyLine)
+	}
+
+	// Truncate excess lines
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+
+	return strings.Join(lines, "\n")
+}
