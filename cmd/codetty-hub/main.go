@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gorilla/websocket"
@@ -57,7 +60,9 @@ func parseHubFlags(args []string) (hubConfig, error) {
 }
 
 // buildHubListener creates a TCP listener, wrapping it with TLS when in secure mode.
-func buildHubListener(cfg hubConfig) (net.Listener, error) {
+// When a CertReloader is provided, it uses the reloader's dynamic TLS config;
+// otherwise it falls back to the static BuildServerTLSConfig.
+func buildHubListener(cfg hubConfig, reloader *certs.CertReloader) (net.Listener, error) {
 	ln, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		return nil, fmt.Errorf("listen %s: %w", cfg.Addr, err)
@@ -65,10 +70,16 @@ func buildHubListener(cfg hubConfig) (net.Listener, error) {
 	if cfg.Insecure {
 		return ln, nil
 	}
-	tlsCfg, err := certs.BuildServerTLSConfig(cfg.CertFile, cfg.KeyFile, cfg.CAFile, cfg.CRLFile)
-	if err != nil {
-		ln.Close()
-		return nil, fmt.Errorf("build TLS config: %w", err)
+
+	var tlsCfg *tls.Config
+	if reloader != nil {
+		tlsCfg = reloader.TLSConfig()
+	} else {
+		tlsCfg, err = certs.BuildServerTLSConfig(cfg.CertFile, cfg.KeyFile, cfg.CAFile, cfg.CRLFile)
+		if err != nil {
+			ln.Close()
+			return nil, fmt.Errorf("build TLS config: %w", err)
+		}
 	}
 	return tls.NewListener(ln, tlsCfg), nil
 }
@@ -116,6 +127,17 @@ func main() {
 		log.Printf("WARNING: all connections are unauthenticated; use only in trusted environments")
 	}
 
+	// Initialize TLS cert reloader (nil in insecure mode).
+	var reloader *certs.CertReloader
+	if !cfg.Insecure {
+		var err error
+		reloader, err = certs.NewCertReloader(cfg.CertFile, cfg.KeyFile, cfg.CAFile, cfg.CRLFile)
+		if err != nil {
+			log.Fatalf("tls init: %v", err)
+		}
+		reloader.LogStatus()
+	}
+
 	h := hub.New()
 	model := hub.NewModel(h)
 
@@ -138,7 +160,7 @@ func main() {
 		go h.HandleConn(conn, auth)
 	})
 
-	ln, err := buildHubListener(cfg)
+	ln, err := buildHubListener(cfg, reloader)
 	if err != nil {
 		log.Fatalf("listener: %v", err)
 	}
@@ -153,6 +175,38 @@ func main() {
 		log.Printf("codetty-hub listening on %s://%s/ws", scheme, cfg.Addr)
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("http server: %v", err)
+		}
+	}()
+
+	// Signal handling: SIGHUP → reload TLS, SIGTERM/SIGINT → graceful shutdown.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		for sig := range sigCh {
+			switch sig {
+			case syscall.SIGHUP:
+				if reloader == nil {
+					log.Printf("[signal] SIGHUP received but running in insecure mode; nothing to reload")
+					continue
+				}
+				log.Printf("[signal] SIGHUP received, reloading TLS certificates...")
+				if err := reloader.Reload(); err != nil {
+					log.Printf("[signal] TLS reload FAILED (keeping old certs): %v", err)
+				} else {
+					log.Printf("[signal] TLS reload successful")
+					reloader.LogStatus()
+				}
+			case syscall.SIGTERM, syscall.SIGINT:
+				log.Printf("[signal] %s received, shutting down gracefully...", sig)
+				// Graceful HTTP shutdown: stop accepting new connections,
+				// close idle connections, wait for active ones to finish.
+				if err := srv.Shutdown(context.Background()); err != nil {
+					log.Printf("[signal] HTTP shutdown error: %v", err)
+				}
+				// Quit the TUI program which will unblock p.Run() below.
+				p.Quit()
+				return
+			}
 		}
 	}()
 
