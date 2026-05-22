@@ -21,8 +21,11 @@ func cmdNew(args []string) {
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
 	session := fs.String("s", "", "session name")
 	noHub := fs.Bool("no-hub", false, "do not connect to hub")
-	hubURL := fs.String("hub-url", "", "hub WebSocket URL")
-	insecure := fs.Bool("insecure", false, "skip TLS verification")
+	hubURL := fs.String("hub-url", "", "hub WebSocket URL (e.g. wss://host:8080/ws)")
+	insecure := fs.Bool("insecure", false, "skip TLS verification for hub")
+	certFile := fs.String("cert", "", "client TLS certificate for hub")
+	keyFile := fs.String("key", "", "client TLS key for hub")
+	caFile := fs.String("ca", "", "CA certificate for hub verification")
 	fs.Parse(args)
 
 	command := fs.Args()
@@ -52,6 +55,9 @@ func cmdNew(args []string) {
 		NoHub:       *noHub,
 		HubServer:   *hubURL,
 		HubInsecure: *insecure,
+		HubCertFile: *certFile,
+		HubKeyFile:  *keyFile,
+		HubCAFile:   *caFile,
 	}
 	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(req))
 

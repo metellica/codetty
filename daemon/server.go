@@ -139,6 +139,23 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 		return
 	}
 
+	// Start hub connection if configured
+	if !req.NoHub && req.HubServer != "" {
+		hubCfg := HubConnConfig{
+			ServerURL: req.HubServer,
+			ClientID:  name,
+			Title:     fmt.Sprintf("%s@%s", req.Command[0], name),
+			Cols:      req.Cols,
+			Rows:      req.Rows,
+			Insecure:  req.HubInsecure,
+			CertFile:  req.HubCertFile,
+			KeyFile:   req.HubKeyFile,
+			CAFile:    req.HubCAFile,
+		}
+		sess.Hub = NewHubConn(hubCfg, sess)
+		sess.Hub.Start()
+	}
+
 	s.mu.Lock()
 	s.sessions[name] = sess
 	s.mu.Unlock()
