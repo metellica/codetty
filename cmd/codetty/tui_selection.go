@@ -13,11 +13,14 @@ import (
 
 // textSelection tracks in-pane text selection state.
 type textSelection struct {
-	active  bool   // currently dragging
-	session string // which session is being selected in
+	active   bool   // actively selecting (drag started)
+	pending  bool   // mouse pressed but not yet dragged
+	session  string // which session is being selected in
 	// Coordinates in session-local terminal space (0-based col/row)
 	startX, startY int
 	endX, endY     int
+	// Screen coordinates of the press (for forwarding to PTY)
+	screenX, screenY int
 }
 
 // panelRegion describes where a session's content is rendered on screen.
@@ -46,7 +49,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				return nil
 			}
 
-			// Plain click: start text selection
+			// Plain click: start pending selection (will become real on drag)
 			regions := m.panelRegions()
 			for _, r := range regions {
 				localX := msg.X - r.contentX
@@ -55,25 +58,32 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					m.selected = r.sessionIdx
 					sess := m.orderedSessions()[r.sessionIdx]
 					m.sel = textSelection{
-						active:  true,
-						session: sess.Name,
-						startX:  localX,
-						startY:  localY,
-						endX:    localX,
-						endY:    localY,
+						pending:  true,
+						session:  sess.Name,
+						startX:   localX,
+						startY:   localY,
+						endX:     localX,
+						endY:     localY,
+						screenX:  msg.X,
+						screenY:  msg.Y,
 					}
 					return nil
 				}
 			}
-			// Click on border/title area — still switch focus
+			// Click on border/title area — switch focus
 			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
 				m.selected = idx
 			}
 			m.sel = textSelection{}
 		}
+		// Forward scroll wheel to PTY
+		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+			m.forwardMouseToPTY(msg)
+		}
 
 	case tea.MouseActionMotion:
-		if m.sel.active {
+		if m.sel.pending {
+			// First motion after press: start real selection
 			regions := m.panelRegions()
 			for _, r := range regions {
 				sess := m.orderedSessions()[r.sessionIdx]
@@ -82,7 +92,36 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				}
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
-				// Clamp to content area
+				if localX < 0 {
+					localX = 0
+				}
+				if localX >= r.contentW {
+					localX = r.contentW - 1
+				}
+				if localY < 0 {
+					localY = 0
+				}
+				if localY >= r.contentH {
+					localY = r.contentH - 1
+				}
+				// Only promote to active if actually moved
+				if localX != m.sel.startX || localY != m.sel.startY {
+					m.sel.pending = false
+					m.sel.active = true
+					m.sel.endX = localX
+					m.sel.endY = localY
+				}
+				return nil
+			}
+		} else if m.sel.active {
+			regions := m.panelRegions()
+			for _, r := range regions {
+				sess := m.orderedSessions()[r.sessionIdx]
+				if sess.Name != m.sel.session {
+					continue
+				}
+				localX := msg.X - r.contentX
+				localY := msg.Y - r.contentY
 				if localX < 0 {
 					localX = 0
 				}
@@ -111,6 +150,11 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				}
 			}
 			m.sel = textSelection{}
+		} else if m.sel.pending {
+			// Click without drag: forward press+release to PTY
+			m.sel.pending = false
+			m.forwardClickToPTY(m.sel.startX, m.sel.startY)
+			m.sel = textSelection{}
 		}
 	}
 	return nil
@@ -118,6 +162,8 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 // handleFullscreenMouse handles mouse in fullscreen mode (entire screen is one session).
 func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
+	// In fullscreen, forward all mouse events directly to PTY
+	// except for drag selection
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
@@ -126,16 +172,28 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 				return nil
 			}
 			m.sel = textSelection{
-				active:  true,
-				session: sess.Name,
-				startX:  msg.X,
-				startY:  msg.Y,
-				endX:    msg.X,
-				endY:    msg.Y,
+				pending:  true,
+				session:  sess.Name,
+				startX:   msg.X,
+				startY:   msg.Y,
+				endX:     msg.X,
+				endY:     msg.Y,
+				screenX:  msg.X,
+				screenY:  msg.Y,
 			}
+			return nil
 		}
+		// Forward scroll and other buttons directly
+		m.forwardMouseToPTY(msg)
 	case tea.MouseActionMotion:
-		if m.sel.active {
+		if m.sel.pending {
+			if msg.X != m.sel.startX || msg.Y != m.sel.startY {
+				m.sel.pending = false
+				m.sel.active = true
+				m.sel.endX = msg.X
+				m.sel.endY = msg.Y
+			}
+		} else if m.sel.active {
 			x, y := msg.X, msg.Y
 			if x < 0 {
 				x = 0
@@ -151,6 +209,8 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			m.sel.endX = x
 			m.sel.endY = y
+		} else {
+			m.forwardMouseToPTY(msg)
 		}
 	case tea.MouseActionRelease:
 		if m.sel.active {
@@ -162,9 +222,73 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 				}
 			}
 			m.sel = textSelection{}
+		} else if m.sel.pending {
+			// Click without drag: forward to PTY
+			m.sel.pending = false
+			m.forwardClickToPTY(m.sel.startX, m.sel.startY)
+			m.sel = textSelection{}
+		} else {
+			m.forwardMouseToPTY(msg)
 		}
 	}
 	return nil
+}
+
+// forwardMouseToPTY sends a mouse event as SGR escape sequence to the focused session PTY.
+func (m *tuiModel) forwardMouseToPTY(msg tea.MouseMsg) {
+	sess := m.selectedSession()
+	if sess == nil || m.conn == nil {
+		return
+	}
+
+	var btn int
+	switch msg.Button {
+	case tea.MouseButtonLeft:
+		btn = 0
+	case tea.MouseButtonMiddle:
+		btn = 1
+	case tea.MouseButtonRight:
+		btn = 2
+	case tea.MouseButtonWheelUp:
+		btn = 64
+	case tea.MouseButtonWheelDown:
+		btn = 65
+	default:
+		btn = 3 // release
+	}
+
+	if msg.Shift {
+		btn |= 4
+	}
+	if msg.Alt {
+		btn |= 8
+	}
+	if msg.Ctrl {
+		btn |= 16
+	}
+	if msg.Action == tea.MouseActionMotion {
+		btn |= 32
+	}
+
+	x, y := msg.X+1, msg.Y+1 // SGR uses 1-based coordinates
+	var suffix byte = 'M'
+	if msg.Action == tea.MouseActionRelease {
+		suffix = 'm'
+	}
+	seq := fmt.Sprintf("\x1b[<%d;%d;%d%c", btn, x, y, suffix)
+	m.conn.SendInput(sess.Name, []byte(seq))
+}
+
+// forwardClickToPTY sends a click (press+release) to PTY at the given local coords.
+func (m *tuiModel) forwardClickToPTY(localX, localY int) {
+	sess := m.selectedSession()
+	if sess == nil || m.conn == nil {
+		return
+	}
+	x, y := localX+1, localY+1 // SGR 1-based
+	press := fmt.Sprintf("\x1b[<0;%d;%dM", x, y)
+	release := fmt.Sprintf("\x1b[<0;%d;%dm", x, y)
+	m.conn.SendInput(sess.Name, []byte(press+release))
 }
 
 // panelRegions computes the on-screen content rectangles for all visible sessions.

@@ -212,17 +212,57 @@ func tuiKeyToBytes(msg tea.KeyMsg) []byte {
 	case tea.KeyCtrlA:
 		return []byte{0x01}
 	case tea.KeyUp:
+		if msg.Alt {
+			return []byte{0x1b, '[', '1', ';', '3', 'A'}
+		}
 		return []byte{0x1b, '[', 'A'}
 	case tea.KeyDown:
+		if msg.Alt {
+			return []byte{0x1b, '[', '1', ';', '3', 'B'}
+		}
 		return []byte{0x1b, '[', 'B'}
 	case tea.KeyRight:
+		if msg.Alt {
+			return []byte{0x1b, '[', '1', ';', '3', 'C'}
+		}
 		return []byte{0x1b, '[', 'C'}
 	case tea.KeyLeft:
+		if msg.Alt {
+			return []byte{0x1b, '[', '1', ';', '3', 'D'}
+		}
 		return []byte{0x1b, '[', 'D'}
+	case tea.KeyShiftUp:
+		return []byte{0x1b, '[', '1', ';', '2', 'A'}
+	case tea.KeyShiftDown:
+		return []byte{0x1b, '[', '1', ';', '2', 'B'}
+	case tea.KeyShiftRight:
+		return []byte{0x1b, '[', '1', ';', '2', 'C'}
+	case tea.KeyShiftLeft:
+		return []byte{0x1b, '[', '1', ';', '2', 'D'}
+	case tea.KeyCtrlUp:
+		return []byte{0x1b, '[', '1', ';', '5', 'A'}
+	case tea.KeyCtrlDown:
+		return []byte{0x1b, '[', '1', ';', '5', 'B'}
+	case tea.KeyCtrlRight:
+		return []byte{0x1b, '[', '1', ';', '5', 'C'}
+	case tea.KeyCtrlLeft:
+		return []byte{0x1b, '[', '1', ';', '5', 'D'}
+	case tea.KeyCtrlShiftUp:
+		return []byte{0x1b, '[', '1', ';', '6', 'A'}
+	case tea.KeyCtrlShiftDown:
+		return []byte{0x1b, '[', '1', ';', '6', 'B'}
+	case tea.KeyCtrlShiftRight:
+		return []byte{0x1b, '[', '1', ';', '6', 'C'}
+	case tea.KeyCtrlShiftLeft:
+		return []byte{0x1b, '[', '1', ';', '6', 'D'}
 	case tea.KeyHome:
 		return []byte{0x1b, '[', 'H'}
 	case tea.KeyEnd:
 		return []byte{0x1b, '[', 'F'}
+	case tea.KeyShiftHome:
+		return []byte{0x1b, '[', '1', ';', '2', 'H'}
+	case tea.KeyShiftEnd:
+		return []byte{0x1b, '[', '1', ';', '2', 'F'}
 	case tea.KeyDelete:
 		return []byte{0x1b, '[', '3', '~'}
 	case tea.KeyPgUp:
@@ -232,6 +272,10 @@ func tuiKeyToBytes(msg tea.KeyMsg) []byte {
 	case tea.KeySpace:
 		return []byte{' '}
 	case tea.KeyRunes:
+		if msg.Alt && len(msg.Runes) == 1 {
+			// Alt+key: ESC prefix + character
+			return append([]byte{0x1b}, []byte(string(msg.Runes))...)
+		}
 		return []byte(string(msg.Runes))
 	default:
 		if msg.Type >= tea.KeyCtrlA && msg.Type <= tea.KeyCtrlZ {
