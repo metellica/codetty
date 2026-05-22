@@ -81,7 +81,8 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		case 'c':
 			if m.conn != nil {
-				m.conn.CreateSession("", []string{terminal.DefaultShell()}, uint16(m.width), uint16(m.height))
+				cols, rows := m.focusedContentSize()
+				m.conn.CreateSession("", []string{terminal.DefaultShell()}, uint16(cols), uint16(rows))
 			}
 			return nil
 		case 'n':
@@ -96,6 +97,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			} else {
 				m.mode = modeFullscreen
 			}
+			m.resizeSessionPTYs()
 			return nil
 		case 'g':
 			if m.mode == modeGrid {
@@ -103,12 +105,15 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			} else {
 				m.mode = modeGrid
 			}
+			m.resizeSessionPTYs()
 			return nil
 		case 'b':
 			m.mode = modeFocusBig
+			m.resizeSessionPTYs()
 			return nil
 		case 'a':
 			m.mode = modeGrid
+			m.resizeSessionPTYs()
 			return nil
 		case 'h':
 			m.moveOrder(-1)

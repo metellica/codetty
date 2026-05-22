@@ -77,9 +77,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		if m.conn != nil {
-			m.conn.SendResize(uint16(msg.Width), uint16(msg.Height))
-		}
+		m.resizeSessionPTYs()
 
 	case daemonOutputMsg:
 		if sess := m.sessionByName(msg.Session); sess != nil {
@@ -231,6 +229,100 @@ func (m *tuiModel) maybeAutoCreate() {
 	cmd := m.autoCreate
 	m.autoCreate = nil
 	if m.conn != nil {
-		m.conn.CreateSession("", cmd, uint16(m.width), uint16(m.height))
+		cols, rows := m.focusedContentSize()
+		m.conn.CreateSession("", cmd, uint16(cols), uint16(rows))
 	}
+}
+
+// resizeSessionPTYs sends the effective content size of the focused panel to the daemon,
+// and resizes local vt10x terminals to match.
+func (m *tuiModel) resizeSessionPTYs() {
+	if m.conn == nil {
+		return
+	}
+	cols, rows := m.focusedContentSize()
+	if cols > 0 && rows > 0 {
+		m.conn.SendResize(uint16(cols), uint16(rows))
+		for _, sess := range m.sessions {
+			sess.Resize(uint16(cols), uint16(rows))
+		}
+	}
+}
+
+// focusedContentSize returns the inner content dimensions for the focused session.
+func (m *tuiModel) focusedContentSize() (int, int) {
+	if m.mode == modeFullscreen {
+		return m.width, m.height
+	}
+
+	statusH := 1
+	availH := m.height - statusH
+
+	n := len(m.orderedSessions())
+	if n == 0 {
+		return m.width, m.height
+	}
+
+	if m.mode == modeGrid {
+		cols := gridCols(n, m.width)
+		rows := (n + cols - 1) / cols
+		panelW := m.width / cols
+		panelH := availH / rows
+		if panelH < tuiMinPanelH {
+			panelH = tuiMinPanelH
+		}
+		// Content inside panel: -2 for borders, -1 for title line
+		contentW := panelW - 2
+		contentH := panelH - 3
+		if contentW < 1 {
+			contentW = 1
+		}
+		if contentH < 1 {
+			contentH = 1
+		}
+		return contentW, contentH
+	}
+
+	// Focus-big mode
+	if n == 1 {
+		contentW := m.width - 2
+		contentH := availH - 3
+		if contentW < 1 {
+			contentW = 1
+		}
+		if contentH < 1 {
+			contentH = 1
+		}
+		return contentW, contentH
+	}
+
+	if m.width >= 120 {
+		mainW := m.width * 7 / 10
+		sideW := m.width - mainW
+		if sideW < tuiMinPanelW {
+			sideW = tuiMinPanelW
+			mainW = m.width - sideW
+		}
+		contentW := mainW - 2
+		contentH := availH - 3
+		if contentW < 1 {
+			contentW = 1
+		}
+		if contentH < 1 {
+			contentH = 1
+		}
+		return contentW, contentH
+	}
+
+	// Narrow focus-big
+	mainH := availH * 7 / 10
+	contentW := m.width - 2
+	contentH := mainH - 3
+	if contentW < 1 {
+		contentW = 1
+	}
+	if contentH < 1 {
+		contentH = 1
+	}
+	return contentW, contentH
 }

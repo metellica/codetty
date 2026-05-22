@@ -509,7 +509,12 @@ func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(c
 
 		var sb strings.Builder
 		visualCol := 0
+		skipNext := false
 		for x := 0; x < cols && visualCol < w; x++ {
+			if skipNext {
+				skipNext = false
+				continue
+			}
 			g := term.Cell(x, srcRow)
 			ch := g.Char
 			if ch == 0 {
@@ -520,12 +525,6 @@ func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(c
 				ch = ' '
 				cw = 1
 			}
-			if cw == 1 && ch == ' ' && x > 0 {
-				prev := term.Cell(x-1, srcRow)
-				if prev.Char != 0 && runewidth.RuneWidth(prev.Char) > 1 {
-					continue
-				}
-			}
 			if visualCol+cw > w {
 				break
 			}
@@ -534,7 +533,6 @@ func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(c
 			isSelected := selFn != nil && selFn(visualCol, displayRow)
 
 			if isSelected {
-				// Selection: always use reverse video
 				sb.WriteString("\x1b[7m")
 				sb.WriteRune(ch)
 				sb.WriteString("\x1b[0m")
@@ -545,6 +543,9 @@ func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(c
 				sb.WriteString(ansiEnd)
 			}
 			visualCol += cw
+			if cw > 1 {
+				skipNext = true
+			}
 		}
 		for visualCol < w {
 			if selFn != nil && selFn(visualCol, displayRow) {

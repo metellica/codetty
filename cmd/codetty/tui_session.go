@@ -124,7 +124,12 @@ func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 
 		var sb strings.Builder
 		visualCol := 0
+		skipNext := false
 		for x := 0; x < cols && visualCol < w; x++ {
+			if skipNext {
+				skipNext = false
+				continue
+			}
 			g := term.Cell(x, srcRow)
 			ch := g.Char
 			if ch == 0 {
@@ -134,12 +139,6 @@ func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 			if cw == 0 {
 				ch = ' '
 				cw = 1
-			}
-			if cw == 1 && ch == ' ' && x > 0 {
-				prev := term.Cell(x-1, srcRow)
-				if prev.Char != 0 && runewidth.RuneWidth(prev.Char) > 1 {
-					continue
-				}
 			}
 			if visualCol+cw > w {
 				break
@@ -156,6 +155,9 @@ func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 			sb.WriteRune(ch)
 			sb.WriteString(ansiEnd)
 			visualCol += cw
+			if cw > 1 {
+				skipNext = true
+			}
 		}
 		for visualCol < w {
 			sb.WriteByte(' ')
@@ -173,11 +175,11 @@ func glyphANSI(g vt10x.Glyph, isCursor bool) (string, string) {
 	fg := g.FG
 	bg := g.BG
 	if fg != vt10x.DefaultFG {
-		fmt.Fprintf(&start, "\x1b[38;5;%dm", fg)
+		start.WriteString(colorToANSIFG(fg))
 		needReset = true
 	}
 	if bg != vt10x.DefaultBG {
-		fmt.Fprintf(&start, "\x1b[48;5;%dm", bg)
+		start.WriteString(colorToANSIBG(bg))
 		needReset = true
 	}
 	if g.Mode&glyphReverse != 0 || isCursor {
@@ -201,4 +203,42 @@ func glyphANSI(g vt10x.Glyph, isCursor bool) (string, string) {
 		return start.String(), "\x1b[0m"
 	}
 	return "", ""
+}
+
+// colorToANSIFG converts a vt10x Color to an ANSI foreground escape sequence.
+func colorToANSIFG(c vt10x.Color) string {
+	v := uint32(c)
+	if v < 16 {
+		// Standard ANSI colors: use compact SGR codes
+		if v < 8 {
+			return fmt.Sprintf("\x1b[%dm", 30+v)
+		}
+		return fmt.Sprintf("\x1b[%dm", 90+v-8)
+	}
+	if v < 256 {
+		return fmt.Sprintf("\x1b[38;5;%dm", v)
+	}
+	// Truecolor: r<<16 | g<<8 | b
+	r := (v >> 16) & 0xFF
+	g := (v >> 8) & 0xFF
+	b := v & 0xFF
+	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
+}
+
+// colorToANSIBG converts a vt10x Color to an ANSI background escape sequence.
+func colorToANSIBG(c vt10x.Color) string {
+	v := uint32(c)
+	if v < 16 {
+		if v < 8 {
+			return fmt.Sprintf("\x1b[%dm", 40+v)
+		}
+		return fmt.Sprintf("\x1b[%dm", 100+v-8)
+	}
+	if v < 256 {
+		return fmt.Sprintf("\x1b[48;5;%dm", v)
+	}
+	r := (v >> 16) & 0xFF
+	g := (v >> 8) & 0xFF
+	b := v & 0xFF
+	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
 }
