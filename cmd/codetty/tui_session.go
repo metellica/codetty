@@ -172,15 +172,16 @@ func glyphANSI(g vt10x.Glyph, isCursor bool) (string, string) {
 
 	fg := g.FG
 	bg := g.BG
-	if g.Mode&glyphReverse != 0 || isCursor {
-		fg, bg = bg, fg
-	}
 	if fg != vt10x.DefaultFG {
 		fmt.Fprintf(&start, "\x1b[38;5;%dm", fg)
 		needReset = true
 	}
 	if bg != vt10x.DefaultBG {
 		fmt.Fprintf(&start, "\x1b[48;5;%dm", bg)
+		needReset = true
+	}
+	if g.Mode&glyphReverse != 0 || isCursor {
+		start.WriteString("\x1b[7m")
 		needReset = true
 	}
 	if g.Mode&glyphBold != 0 {

@@ -210,16 +210,3 @@ func (m *tuiModel) maybeAutoCreate() {
 		m.conn.CreateSession("", cmd, uint16(m.width), uint16(m.height))
 	}
 }
-
-// Stub methods for compilation — will be fully implemented in tui_view.go.
-func (m *tuiModel) focusBigView() string {
-	return "focus-big view (pending)"
-}
-
-func (m *tuiModel) gridView() string {
-	return "grid view (pending)"
-}
-
-func (m *tuiModel) hitTest(x, y int) int {
-	return -1
-}
