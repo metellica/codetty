@@ -24,6 +24,7 @@ const (
 	FrameSessionEvent  FrameType = 0x12 // S→C: JSON session lifecycle event
 	FrameCreateSession FrameType = 0x13 // C→S: JSON create session request
 	FrameKillSession   FrameType = 0x14 // C→S: JSON kill session request
+	FrameRenameSession FrameType = 0x15 // C→S: JSON rename session request
 )
 
 // Action identifies the requested operation in a Request frame.
@@ -111,6 +112,12 @@ type CreateSessionRequest struct {
 // KillSessionRequest is the payload for FrameKillSession.
 type KillSessionRequest struct {
 	Name string `json:"name"`
+}
+
+// RenameSessionRequest is the payload for FrameRenameSession.
+type RenameSessionRequest struct {
+	OldName string `json:"old_name"`
+	NewName string `json:"new_name"`
 }
 
 // EncodeTaggedOutput prepends session name length + name to output data.

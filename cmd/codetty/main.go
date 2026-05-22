@@ -24,6 +24,7 @@ TUI Keys (Ctrl+A prefix):
   d       Detach (exit TUI, sessions keep running)
   x       Kill focused session
   c       Create new session
+  r       Rename focused session
   n/p     Next/previous session
   f       Toggle fullscreen (no borders/status)
   g       Toggle grid view
@@ -31,6 +32,10 @@ TUI Keys (Ctrl+A prefix):
   a       Auto grid mode
   h/l     Move session order left/right
   1-9     Jump to session by number
+
+Other keys:
+  Shift+Tab           Switch to next session
+  Mouse click         Select session panel
 
 Options:
   -s, --session NAME   Target session name

@@ -347,6 +347,32 @@ func (s *Server) killSessionForSubscriber(req KillSessionRequest) {
 	}
 }
 
+func (s *Server) renameSessionForSubscriber(req RenameSessionRequest) {
+	if req.OldName == "" || req.NewName == "" || req.OldName == req.NewName {
+		return
+	}
+	s.mu.Lock()
+	sess, exists := s.sessions[req.OldName]
+	if !exists {
+		s.mu.Unlock()
+		return
+	}
+	if _, conflict := s.sessions[req.NewName]; conflict {
+		s.mu.Unlock()
+		return
+	}
+	delete(s.sessions, req.OldName)
+	sess.Name = req.NewName
+	s.sessions[req.NewName] = sess
+	s.mu.Unlock()
+
+	s.notifySubscribers(SessionEvent{
+		Type:    "renamed",
+		Session: req.OldName,
+		Info:    SessionInfo{Name: req.NewName},
+	})
+}
+
 func (s *Server) handleSubscribeAll(conn net.Conn, req Request) {
 	sub := newSubscriber(conn)
 	s.addSubscriber(sub)

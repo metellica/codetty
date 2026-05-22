@@ -112,6 +112,14 @@ func (dc *daemonConn) KillSession(name string) {
 	}))
 }
 
+// RenameSession requests the daemon to rename a session.
+func (dc *daemonConn) RenameSession(oldName, newName string) {
+	daemon.WriteFrame(dc.conn, daemon.FrameRenameSession, daemon.MarshalJSON(daemon.RenameSessionRequest{
+		OldName: oldName,
+		NewName: newName,
+	}))
+}
+
 // Detach sends detach and closes the connection.
 func (dc *daemonConn) Detach() {
 	daemon.WriteFrame(dc.conn, daemon.FrameDetach, nil)

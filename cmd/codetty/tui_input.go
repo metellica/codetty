@@ -7,6 +7,16 @@ import (
 )
 
 func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
+	// Rename mode: capture text input
+	if m.renaming {
+		return m.handleRenameKey(msg)
+	}
+
+	if msg.Type == tea.KeyShiftTab {
+		m.selectDelta(1)
+		return nil
+	}
+
 	if msg.Type == tea.KeyCtrlA {
 		if m.prefix {
 			m.prefix = false
@@ -27,6 +37,32 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	m.forwardKey(msg)
+	return nil
+}
+
+func (m *tuiModel) handleRenameKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.Type {
+	case tea.KeyEnter:
+		newName := m.renameText
+		m.renaming = false
+		m.renameText = ""
+		if newName != "" {
+			if sess := m.selectedSession(); sess != nil && m.conn != nil {
+				m.conn.RenameSession(sess.Name, newName)
+			}
+		}
+	case tea.KeyEscape:
+		m.renaming = false
+		m.renameText = ""
+	case tea.KeyBackspace:
+		if len(m.renameText) > 0 {
+			m.renameText = m.renameText[:len(m.renameText)-1]
+		}
+	case tea.KeyRunes:
+		m.renameText += string(msg.Runes)
+	case tea.KeySpace:
+		m.renameText += " "
+	}
 	return nil
 }
 
@@ -79,6 +115,12 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		case 'l':
 			m.moveOrder(1)
+			return nil
+		case 'r':
+			if sess := m.selectedSession(); sess != nil {
+				m.renaming = true
+				m.renameText = sess.Name
+			}
 			return nil
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			idx := int(msg.Runes[0]-'0') - 1

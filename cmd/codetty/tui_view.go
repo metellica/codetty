@@ -185,6 +185,11 @@ func (m *tuiModel) renderPanel(sess *tuiSession, title string, w, h int, focused
 }
 
 func (m *tuiModel) statusBar() string {
+	if m.renaming {
+		prompt := fmt.Sprintf(" Rename: %s█  (Enter confirm, Esc cancel)", m.renameText)
+		return tuiStatusStyle.Width(m.width).Render(prompt)
+	}
+
 	sess := m.selectedSession()
 	var name string
 	if sess != nil {
@@ -192,8 +197,20 @@ func (m *tuiModel) statusBar() string {
 	}
 	n := len(m.sessions)
 
+	if m.prefix {
+		help := "^A: d detach  c new  x kill  r rename  n/p nav  f full  g grid  b focus  a auto  h/l move  1-9 jump"
+		return tuiStatusStyle.Width(m.width).Render(" " + help)
+	}
+
 	left := fmt.Sprintf(" [%s] %d/%d", name, m.selected+1, n)
-	right := " Ctrl+A ? help "
+	modeName := "focus"
+	switch m.mode {
+	case modeGrid:
+		modeName = "grid"
+	case modeFullscreen:
+		modeName = "fullscreen"
+	}
+	right := fmt.Sprintf(" %s | ^A prefix | shift+tab switch ", modeName)
 	contentW := max(0, m.width-2)
 	mid := strings.Repeat(" ", max(0, contentW-lipgloss.Width(left)-lipgloss.Width(right)))
 
@@ -201,25 +218,84 @@ func (m *tuiModel) statusBar() string {
 }
 
 func (m *tuiModel) hitTest(x, y int) int {
-	if m.mode != modeGrid {
+	sessions := m.orderedSessions()
+	n := len(sessions)
+	if n == 0 || m.mode == modeFullscreen {
 		return -1
 	}
-	n := len(m.sessions)
-	if n == 0 {
-		return -1
-	}
-	cols := gridCols(n, m.width)
-	panelW := m.width / cols
+
 	statusH := 1
 	availH := m.height - statusH
-	rows := (n + cols - 1) / cols
-	panelH := availH / rows
 
-	col := x / panelW
-	row := y / panelH
-	idx := row*cols + col
-	if idx >= 0 && idx < n {
-		return idx
+	if m.mode == modeGrid {
+		cols := gridCols(n, m.width)
+		panelW := m.width / cols
+		rows := (n + cols - 1) / cols
+		panelH := availH / rows
+		if panelH < tuiMinPanelH {
+			panelH = tuiMinPanelH
+		}
+		col := x / panelW
+		row := y / panelH
+		idx := row*cols + col
+		if idx >= 0 && idx < n {
+			return idx
+		}
+		return -1
+	}
+
+	// Focus-big mode
+	if n == 1 {
+		if y < availH {
+			return 0
+		}
+		return -1
+	}
+
+	if m.width >= 120 {
+		mainW := m.width * 7 / 10
+		if x < mainW {
+			return m.selected
+		}
+		// Sidebar panels
+		sideW := m.width - mainW
+		if sideW < tuiMinPanelW {
+			return m.selected
+		}
+		secondaryCount := n - 1
+		slotH := availH / secondaryCount
+		if slotH < tuiMinPanelH {
+			slotH = tuiMinPanelH
+		}
+		visible := availH / slotH
+		if visible > secondaryCount {
+			visible = secondaryCount
+		}
+		slot := y / slotH
+		if slot >= visible {
+			return -1
+		}
+		idx := 0
+		for i := 0; i < n; i++ {
+			if i == m.selected {
+				continue
+			}
+			if idx == slot {
+				return i
+			}
+			idx++
+		}
+	} else {
+		// Narrow: top is main, bottom is secondary
+		mainH := availH * 7 / 10
+		if y < mainH {
+			return m.selected
+		}
+		for i := 0; i < n; i++ {
+			if i != m.selected {
+				return i
+			}
+		}
 	}
 	return -1
 }

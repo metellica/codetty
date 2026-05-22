@@ -117,6 +117,12 @@ func (s *Subscriber) Run(srv *Server) {
 				srv.killSessionForSubscriber(req)
 			}
 
+		case FrameRenameSession:
+			var req RenameSessionRequest
+			if json.Unmarshal(payload, &req) == nil {
+				srv.renameSessionForSubscriber(req)
+			}
+
 		case FrameDetach:
 			return
 		}
