@@ -65,6 +65,10 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					return nil
 				}
 			}
+			// Click on border/title area — still switch focus
+			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
+				m.selected = idx
+			}
 			m.sel = textSelection{}
 		}
 
