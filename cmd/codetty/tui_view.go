@@ -13,6 +13,17 @@ const (
 	tuiMinPanelH = 3
 )
 
+// fullscreenView renders only the selected session filling the entire terminal.
+func (m *tuiModel) fullscreenView() string {
+	sess := m.selectedSession()
+	if sess == nil {
+		m.mode = modeFocusBig
+		return m.focusBigView()
+	}
+	lines, _, _ := sess.RenderANSI(m.width, m.height)
+	return strings.Join(lines, "\n")
+}
+
 func (m *tuiModel) focusBigView() string {
 	sessions := m.orderedSessions()
 	n := len(sessions)

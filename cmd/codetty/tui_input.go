@@ -54,12 +54,31 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 		case 'p':
 			m.selectDelta(-1)
 			return nil
-		case 'g':
-			if m.mode == modeFocusBig {
-				m.mode = modeGrid
-			} else {
+		case 'f':
+			if m.mode == modeFullscreen {
 				m.mode = modeFocusBig
+			} else {
+				m.mode = modeFullscreen
 			}
+			return nil
+		case 'g':
+			if m.mode == modeGrid {
+				m.mode = modeFocusBig
+			} else {
+				m.mode = modeGrid
+			}
+			return nil
+		case 'b':
+			m.mode = modeFocusBig
+			return nil
+		case 'a':
+			m.mode = modeGrid
+			return nil
+		case 'h':
+			m.moveOrder(-1)
+			return nil
+		case 'l':
+			m.moveOrder(1)
 			return nil
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			idx := int(msg.Runes[0]-'0') - 1
@@ -109,6 +128,17 @@ func (m *tuiModel) selectDelta(delta int) {
 		return
 	}
 	m.selected = ((m.selected+delta)%len(ordered) + len(ordered)) % len(ordered)
+}
+
+// moveOrder swaps the selected session's position in the display order.
+func (m *tuiModel) moveOrder(delta int) {
+	n := len(m.order)
+	if n < 2 || m.selected < 0 || m.selected >= n {
+		return
+	}
+	target := ((m.selected + delta) % n + n) % n
+	m.order[m.selected], m.order[target] = m.order[target], m.order[m.selected]
+	m.selected = target
 }
 
 // tuiKeyToBytes converts a tea.KeyMsg to raw terminal bytes.

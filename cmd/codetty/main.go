@@ -25,7 +25,11 @@ TUI Keys (Ctrl+A prefix):
   x       Kill focused session
   c       Create new session
   n/p     Next/previous session
-  g       Toggle grid overview
+  f       Toggle fullscreen (no borders/status)
+  g       Toggle grid view
+  b       Focus-big mode
+  a       Auto grid mode
+  h/l     Move session order left/right
   1-9     Jump to session by number
 
 Options:

@@ -28,8 +28,9 @@ var (
 type layoutMode int
 
 const (
-	modeFocusBig layoutMode = iota
+	modeFocusBig   layoutMode = iota
 	modeGrid
+	modeFullscreen // no borders, no status bar, just terminal
 )
 
 // tuiModel is the Bubble Tea model for the unified codetty TUI.
@@ -108,10 +109,14 @@ func (m *tuiModel) View() string {
 				"No sessions. Creating one...")
 	}
 
-	if m.mode == modeFocusBig {
+	switch m.mode {
+	case modeFullscreen:
+		return m.fullscreenView()
+	case modeGrid:
+		return m.gridView()
+	default:
 		return m.focusBigView()
 	}
-	return m.gridView()
 }
 
 func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
