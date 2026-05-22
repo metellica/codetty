@@ -2,24 +2,35 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+
+	"codetty/terminal"
 )
 
 const usage = `codetty — terminal multiplexer with hub integration
 
 Usage:
-  codetty [new] [-s name] [--] [command ...]   Create a new session
-  codetty attach [-s name]                     Reattach to a session (alias: a)
+  codetty                                      Open TUI (auto-create shell if no sessions)
+  codetty [new] [-s name] [--] [command ...]   Create session and open TUI
+  codetty attach [-s name]                     Open TUI focused on session (alias: a)
   codetty ls                                   List active sessions
   codetty kill [-s name]                       Kill a session
   codetty kill-server                          Stop the daemon and all sessions
-  codetty hub [flags]                          Start the hub TUI
-  codetty run [flags] [--] [command ...]       Legacy one-shot CLI mode
+  codetty hub [flags]                          Start the hub WebSocket/TUI server
+
+TUI Keys (Ctrl+A prefix):
+  d       Detach (exit TUI, sessions keep running)
+  x       Kill focused session
+  c       Create new session
+  n/p     Next/previous session
+  g       Toggle grid overview
+  1-9     Jump to session by number
 
 Options:
-  -s, --session NAME   Target session name (default: auto-generated or latest)
-  --no-hub             Do not connect to the hub
+  -s, --session NAME   Target session name
+  --no-hub             Do not connect session to hub
   --hub-url URL        Hub WebSocket URL
   --insecure           Skip TLS verification
   --help, -h           Show this help
@@ -27,8 +38,7 @@ Options:
 
 func main() {
 	if len(os.Args) < 2 {
-		// Default: new session
-		cmdNew(os.Args[1:])
+		cmdDefault()
 		return
 	}
 
@@ -60,6 +70,14 @@ func main() {
 		// Treat unknown args as command to run in a new session
 		cmdNew(os.Args[1:])
 	}
+}
+
+func cmdDefault() {
+	sockPath := defaultSocketPath()
+	if err := ensureDaemon(sockPath); err != nil {
+		log.Fatalf("cannot start daemon: %v", err)
+	}
+	startTUI(sockPath, "", []string{terminal.DefaultShell()})
 }
 
 // defaultSocketPath returns the Unix socket path for the daemon.

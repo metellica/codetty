@@ -7,13 +7,12 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 
 	"codetty/daemon"
 	"codetty/terminal"
 
+	tea "github.com/charmbracelet/bubbletea"
 	xterm "golang.org/x/term"
 )
 
@@ -38,14 +37,12 @@ func cmdNew(args []string) {
 		log.Fatalf("cannot start daemon: %v", err)
 	}
 
-	cols, rows := terminalSize()
-
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
 		log.Fatalf("connect to daemon: %v", err)
 	}
-	defer conn.Close()
 
+	cols, rows := terminalSize()
 	req := daemon.Request{
 		Action:      daemon.ActionNewSession,
 		Session:     *session,
@@ -73,8 +70,9 @@ func cmdNew(args []string) {
 	if !resp.OK {
 		log.Fatalf("new session failed: %s", resp.Error)
 	}
+	conn.Close()
 
-	runAttachLoop(conn, resp.Session)
+	startTUI(sockPath, resp.Session, nil)
 }
 
 func cmdAttach(args []string) {
@@ -83,36 +81,31 @@ func cmdAttach(args []string) {
 	fs.Parse(args)
 
 	sockPath := defaultSocketPath()
-	conn, err := net.Dial("unix", sockPath)
+	if err := ensureDaemon(sockPath); err != nil {
+		log.Fatalf("no daemon running")
+	}
+
+	startTUI(sockPath, *session, nil)
+}
+
+func startTUI(sockPath string, focusTarget string, autoCreate []string) {
+	conn, err := newDaemonConn(sockPath)
 	if err != nil {
-		log.Fatalf("daemon not running (cannot connect to %s)", sockPath)
-	}
-	defer conn.Close()
-
-	cols, rows := terminalSize()
-	req := daemon.Request{
-		Action:  daemon.ActionAttach,
-		Session: *session,
-		Cols:    cols,
-		Rows:    rows,
-	}
-	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(req))
-
-	ft, payload, err := daemon.ReadFrame(conn)
-	if err != nil {
-		log.Fatalf("read response: %v", err)
-	}
-	if ft != daemon.FrameResponse {
-		log.Fatalf("unexpected frame type: %d", ft)
-	}
-	var resp daemon.Response
-	json.Unmarshal(payload, &resp)
-	if !resp.OK {
-		fmt.Fprintf(os.Stderr, "error: %s\n", resp.Error)
-		os.Exit(1)
+		log.Fatalf("connect to daemon: %v", err)
 	}
 
-	runAttachLoop(conn, resp.Session)
+	model := newTUIModel(conn, focusTarget, autoCreate)
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+
+	if err := conn.Subscribe(p); err != nil {
+		log.Fatalf("subscribe: %v", err)
+	}
+
+	if _, err := p.Run(); err != nil {
+		log.Fatalf("TUI: %v", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "[detached]\n")
 }
 
 func cmdList(args []string) {
@@ -193,133 +186,6 @@ func cmdKillServer(args []string) {
 	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionKillServer}))
 	daemon.ReadFrame(conn)
 	fmt.Println("daemon stopped")
-}
-
-// runAttachLoop runs the terminal raw mode loop, forwarding I/O between
-// the local terminal and the daemon session.
-func runAttachLoop(conn net.Conn, sessionName string) {
-	oldState, err := xterm.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		log.Fatalf("raw mode: %v", err)
-	}
-	defer xterm.Restore(int(os.Stdin.Fd()), oldState)
-
-	// Handle terminal resize
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGWINCH)
-	go func() {
-		for range sigCh {
-			cols, rows := terminalSize()
-			daemon.WriteFrame(conn, daemon.FrameResize, daemon.MarshalJSON(daemon.ResizePayload{Cols: cols, Rows: rows}))
-		}
-	}()
-
-	doneCh := make(chan struct{})
-
-	// Read from daemon → stdout
-	go func() {
-		defer close(doneCh)
-		for {
-			ft, payload, err := daemon.ReadFrame(conn)
-			if err != nil {
-				return
-			}
-			switch ft {
-			case daemon.FrameOutput:
-				os.Stdout.Write(payload)
-			case daemon.FrameNotification:
-				var n daemon.Notification
-				json.Unmarshal(payload, &n)
-				handleNotification(n, sessionName)
-				if n.Event == "session_exited" {
-					return
-				}
-			}
-		}
-	}()
-
-	// Read from stdin → daemon (with Ctrl+A prefix handling)
-	go func() {
-		buf := make([]byte, 4096)
-		prefixActive := false
-		for {
-			n, err := os.Stdin.Read(buf)
-			if err != nil {
-				return
-			}
-			data := buf[:n]
-
-			if prefixActive {
-				prefixActive = false
-				if len(data) > 0 {
-					switch data[0] {
-					case 'd': // detach
-						daemon.WriteFrame(conn, daemon.FrameDetach, nil)
-						conn.Close()
-						return
-					case 'n': // next session
-						daemon.WriteFrame(conn, daemon.FrameSessionSwitch, daemon.MarshalJSON(daemon.SwitchPayload{Target: "__next"}))
-						continue
-					case 'p': // prev session
-						daemon.WriteFrame(conn, daemon.FrameSessionSwitch, daemon.MarshalJSON(daemon.SwitchPayload{Target: "__prev"}))
-						continue
-					case 0x01: // Ctrl+A literal
-						daemon.WriteFrame(conn, daemon.FrameInput, []byte{0x01})
-						if len(data) > 1 {
-							daemon.WriteFrame(conn, daemon.FrameInput, data[1:])
-						}
-						continue
-					}
-				}
-			}
-
-			// Check for Ctrl+A prefix
-			for i, b := range data {
-				if b == 0x01 { // Ctrl+A
-					// Send everything before the prefix
-					if i > 0 {
-						daemon.WriteFrame(conn, daemon.FrameInput, data[:i])
-					}
-					if i+1 < len(data) {
-						// Immediate character after prefix
-						switch data[i+1] {
-						case 'd':
-							daemon.WriteFrame(conn, daemon.FrameDetach, nil)
-							conn.Close()
-							return
-						case 'n':
-							daemon.WriteFrame(conn, daemon.FrameSessionSwitch, daemon.MarshalJSON(daemon.SwitchPayload{Target: "__next"}))
-						case 'p':
-							daemon.WriteFrame(conn, daemon.FrameSessionSwitch, daemon.MarshalJSON(daemon.SwitchPayload{Target: "__prev"}))
-						case 0x01:
-							daemon.WriteFrame(conn, daemon.FrameInput, []byte{0x01})
-						}
-						// Continue with remaining data
-						if i+2 < len(data) {
-							daemon.WriteFrame(conn, daemon.FrameInput, data[i+2:])
-						}
-					} else {
-						prefixActive = true
-					}
-					goto nextRead
-				}
-			}
-			daemon.WriteFrame(conn, daemon.FrameInput, data)
-		nextRead:
-		}
-	}()
-
-	<-doneCh
-	fmt.Fprintf(os.Stderr, "\r\n[detached from %s]\r\n", sessionName)
-}
-
-func handleNotification(n daemon.Notification, currentSession string) {
-	switch n.Event {
-	case "session_exited":
-		fmt.Fprintf(os.Stderr, "\r\n[session %s exited (code %d)]\r\n", n.Session, n.ExitCode)
-	case "session_switched":
-		fmt.Fprintf(os.Stderr, "\r\n[switched to %s]\r\n", n.Session)
-	}
 }
 
 func terminalSize() (uint16, uint16) {
