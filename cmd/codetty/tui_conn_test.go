@@ -164,6 +164,10 @@ func TestDaemonConn_SubscribeTranslatesFramesToTeaMessages(t *testing.T) {
 			t.Errorf("write session event: %v", err)
 			return
 		}
+		if err := daemon.WriteFrame(server, daemon.FrameResponse, daemon.MarshalJSON(daemon.Response{OK: true})); err != nil {
+			t.Errorf("write subscribe response: %v", err)
+			return
+		}
 		server.Close()
 	}()
 
@@ -180,6 +184,8 @@ func TestDaemonConn_SubscribeTranslatesFramesToTeaMessages(t *testing.T) {
 	if event.Event.Type != "created" || event.Event.Session != "sess" {
 		t.Fatalf("event = %#v, want created sess", event)
 	}
+
+	_ = waitForMsg[daemonSubscribedMsg](t, msgs)
 
 	disconnected := waitForMsg[daemonDisconnectedMsg](t, msgs)
 	if !errors.Is(disconnected.Err, io.EOF) {

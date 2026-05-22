@@ -12,8 +12,9 @@ import (
 
 // daemonConn manages the connection between TUI and daemon.
 type daemonConn struct {
-	conn    net.Conn
-	program *tea.Program
+	conn       net.Conn
+	program    *tea.Program
+	subscribed bool
 }
 
 // Tea messages from daemon connection
@@ -29,6 +30,8 @@ type daemonSessionEventMsg struct {
 type daemonDisconnectedMsg struct {
 	Err error
 }
+
+type daemonSubscribedMsg struct{}
 
 func newDaemonConn(sockPath string) (*daemonConn, error) {
 	conn, err := net.Dial("unix", sockPath)
@@ -75,7 +78,10 @@ func (dc *daemonConn) readLoop() {
 			}
 
 		case daemon.FrameResponse:
-			// Initial OK response, ignore
+			if !dc.subscribed {
+				dc.subscribed = true
+				dc.program.Send(daemonSubscribedMsg{})
+			}
 		}
 	}
 }
