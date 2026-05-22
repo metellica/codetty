@@ -158,6 +158,8 @@ func (m *tuiModel) forwardKey(msg tea.KeyMsg) {
 	if sess == nil || m.conn == nil {
 		return
 	}
+	// Clear any active selection when typing
+	m.sel = textSelection{}
 	raw := tuiKeyToBytes(msg)
 	if len(raw) > 0 {
 		m.conn.SendInput(sess.Name, raw)

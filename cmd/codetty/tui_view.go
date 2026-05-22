@@ -20,6 +20,13 @@ func (m *tuiModel) fullscreenView() string {
 		m.mode = modeFocusBig
 		return m.focusBigView()
 	}
+	if m.sel.session == sess.Name && (m.sel.active || m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY) {
+		selFn := func(col, row int) bool {
+			return m.selectionCovers(sess.Name, col, row)
+		}
+		lines := sess.RenderANSIWithSelection(m.width, m.height, selFn)
+		return strings.Join(lines, "\n")
+	}
 	lines, _, _ := sess.RenderANSI(m.width, m.height)
 	return strings.Join(lines, "\n")
 }
@@ -177,7 +184,15 @@ func (m *tuiModel) renderPanel(sess *tuiSession, title string, w, h int, focused
 		return style.Render(title)
 	}
 
-	lines, _, _ := sess.RenderANSI(innerW, innerH)
+	var lines []string
+	if m.sel.session == sess.Name && (m.sel.active || m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY) {
+		selFn := func(col, row int) bool {
+			return m.selectionCovers(sess.Name, col, row)
+		}
+		lines = sess.RenderANSIWithSelection(innerW, innerH, selFn)
+	} else {
+		lines, _, _ = sess.RenderANSI(innerW, innerH)
+	}
 	content := strings.Join(lines, "\n")
 
 	header := lipgloss.NewStyle().Bold(focused).Render(title)

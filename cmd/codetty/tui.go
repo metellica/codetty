@@ -48,6 +48,9 @@ type tuiModel struct {
 	renaming   bool
 	renameText string
 
+	// Text selection
+	sel textSelection
+
 	// Initial focus target (from new/attach command)
 	focusTarget string
 	// Auto-create session on start
@@ -97,14 +100,10 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleKey(msg)
 
 	case tea.MouseMsg:
-		if m.mode == modeFullscreen || m.renaming {
+		if m.renaming {
 			return m, nil
 		}
-		if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
-			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
-				m.selected = idx
-			}
-		}
+		return m, m.handleMouse(msg)
 	}
 	return m, nil
 }
