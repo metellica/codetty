@@ -1,10 +1,9 @@
 //go:build windows
 
-package main
+package terminal
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -13,11 +12,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-type windowsTerminal struct {
+type windowsSession struct {
 	pty *conpty.ConPty
 }
 
-func startPlatformTerminal(args []string, cols, rows uint16) (terminalSession, error) {
+func startPlatform(args []string, cols, rows uint16) (Session, error) {
 	commandLine, err := windowsCommandLine(args)
 	if err != nil {
 		return nil, err
@@ -29,12 +28,9 @@ func startPlatformTerminal(args []string, cols, rows uint16) (terminalSession, e
 		conpty.ConPtyEnv(os.Environ()),
 	)
 	if err != nil {
-		if errors.Is(err, conpty.ErrConPtyUnsupported) {
-			return nil, fmt.Errorf("windows ConPTY requires Windows 10 version 1809 or later: %w", err)
-		}
-		return nil, err
+		return nil, fmt.Errorf("start conpty: %w", err)
 	}
-	return &windowsTerminal{pty: cpty}, nil
+	return &windowsSession{pty: cpty}, nil
 }
 
 func windowsCommandLine(args []string) (string, error) {
@@ -46,23 +42,15 @@ func windowsCommandLine(args []string) (string, error) {
 	return windows.ComposeCommandLine(args), nil
 }
 
-func (t *windowsTerminal) Read(p []byte) (int, error) {
-	return t.pty.Read(p)
-}
+func (t *windowsSession) Read(p []byte) (int, error)  { return t.pty.Read(p) }
+func (t *windowsSession) Write(p []byte) (int, error) { return t.pty.Write(p) }
+func (t *windowsSession) Close() error                { return t.pty.Close() }
 
-func (t *windowsTerminal) Write(p []byte) (int, error) {
-	return t.pty.Write(p)
-}
-
-func (t *windowsTerminal) Close() error {
-	return t.pty.Close()
-}
-
-func (t *windowsTerminal) Resize(cols, rows uint16) error {
+func (t *windowsSession) Resize(cols, rows uint16) error {
 	return t.pty.Resize(int(cols), int(rows))
 }
 
-func (t *windowsTerminal) Wait() error {
+func (t *windowsSession) Wait() error {
 	exitCode, err := t.pty.Wait(context.Background())
 	if err != nil {
 		return err

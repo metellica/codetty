@@ -1,21 +1,10 @@
 package main
 
-import (
-	"errors"
-	"io"
-)
+import "codetty/terminal"
 
-var errNoCommand = errors.New("no command specified")
-
-type terminalSession interface {
-	io.ReadWriteCloser
-	Resize(cols, rows uint16) error
-	Wait() error
-}
+// terminalSession is a type alias for the shared terminal.Session interface.
+type terminalSession = terminal.Session
 
 func startTerminal(args []string, cols, rows uint16) (terminalSession, error) {
-	if len(args) == 0 {
-		return nil, errNoCommand
-	}
-	return startPlatformTerminal(args, cols, rows)
+	return terminal.Start(args, cols, rows)
 }
