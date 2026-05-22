@@ -16,6 +16,7 @@ type DaemonSession struct {
 	Screen    *terminal.ScreenMirror
 	Hub       *HubConn
 	CreatedAt time.Time
+	onOutput  func(session string, data []byte)
 
 	mu       sync.Mutex
 	clients  []*Client
@@ -24,7 +25,7 @@ type DaemonSession struct {
 	doneCh   chan struct{}
 }
 
-func newDaemonSession(name string, command []string, cols, rows uint16) (*DaemonSession, error) {
+func newDaemonSession(name string, command []string, cols, rows uint16, onOutput func(session string, data []byte)) (*DaemonSession, error) {
 	term, err := terminal.Start(command, cols, rows)
 	if err != nil {
 		return nil, err
@@ -36,6 +37,7 @@ func newDaemonSession(name string, command []string, cols, rows uint16) (*Daemon
 		Terminal:  term,
 		Screen:    terminal.NewScreenMirror(cols, rows),
 		CreatedAt: time.Now(),
+		onOutput:  onOutput,
 		doneCh:    make(chan struct{}),
 	}
 
@@ -54,6 +56,11 @@ func (s *DaemonSession) readLoop() {
 			copy(data, buf[:n])
 			s.Screen.Write(data)
 			s.broadcastOutput(data)
+			if s.onOutput != nil {
+				broadcast := make([]byte, len(data))
+				copy(broadcast, data)
+				s.onOutput(s.Name, broadcast)
+			}
 			if s.Hub != nil {
 				s.Hub.SendOutput(data)
 			}

@@ -8,16 +8,19 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"codetty/terminal"
 )
 
 // Server is the daemon that manages PTY sessions.
 type Server struct {
-	sockPath string
-	listener net.Listener
-	sessions map[string]*DaemonSession
-	mu       sync.Mutex
-	done     chan struct{}
-	wg       sync.WaitGroup
+	sockPath    string
+	listener    net.Listener
+	sessions    map[string]*DaemonSession
+	subscribers []*Subscriber
+	mu          sync.Mutex
+	done        chan struct{}
+	wg          sync.WaitGroup
 }
 
 // NewServer creates a new daemon server listening on the given Unix socket path.
@@ -112,6 +115,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.handleKill(conn, req)
 	case ActionKillServer:
 		s.handleKillServer(conn)
+	case ActionSubscribeAll:
+		s.handleSubscribeAll(conn, req)
 	default:
 		s.sendError(conn, fmt.Sprintf("unknown action: %s", req.Action))
 	}
@@ -133,7 +138,7 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 	}
 	s.mu.Unlock()
 
-	sess, err := newDaemonSession(name, req.Command, req.Cols, req.Rows)
+	sess, err := newDaemonSession(name, req.Command, req.Cols, req.Rows, s.broadcastToSubscribers)
 	if err != nil {
 		s.sendError(conn, fmt.Sprintf("start session: %v", err))
 		return
@@ -157,9 +162,16 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 	}
 
 	s.mu.Lock()
+	if _, exists := s.sessions[name]; exists {
+		s.mu.Unlock()
+		sess.Kill()
+		s.sendError(conn, fmt.Sprintf("session %q already exists", name))
+		return
+	}
 	s.sessions[name] = sess
 	s.mu.Unlock()
 
+	s.notifySubscribers(SessionEvent{Type: "created", Session: name, Info: sess.Info()})
 	go s.watchSession(sess)
 
 	resp := Response{OK: true, Session: name}
@@ -242,6 +254,133 @@ func (s *Server) runAttachedClient(conn net.Conn, sess *DaemonSession) {
 	client.Run(s)
 }
 
+func (s *Server) addSubscriber(sub *Subscriber) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.subscribers = append(s.subscribers, sub)
+}
+
+func (s *Server) removeSubscriber(sub *Subscriber) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, ss := range s.subscribers {
+		if ss == sub {
+			s.subscribers = append(s.subscribers[:i], s.subscribers[i+1:]...)
+			return
+		}
+	}
+}
+
+func (s *Server) broadcastToSubscribers(session string, data []byte) {
+	s.mu.Lock()
+	subs := append([]*Subscriber(nil), s.subscribers...)
+	s.mu.Unlock()
+	for _, sub := range subs {
+		sub.SendTaggedOutput(session, data)
+	}
+}
+
+func (s *Server) notifySubscribers(evt SessionEvent) {
+	s.mu.Lock()
+	subs := append([]*Subscriber(nil), s.subscribers...)
+	s.mu.Unlock()
+	for _, sub := range subs {
+		sub.SendSessionEvent(evt)
+	}
+}
+
+func (s *Server) resizeAllSessions(cols, rows uint16) {
+	s.mu.Lock()
+	sessions := make([]*DaemonSession, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		sessions = append(sessions, sess)
+	}
+	s.mu.Unlock()
+	for _, sess := range sessions {
+		sess.Resize(cols, rows)
+	}
+}
+
+func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRequest) {
+	name := req.Name
+	if name == "" {
+		s.mu.Lock()
+		name = autoSessionName(req.Command, s.sessions)
+		s.mu.Unlock()
+	}
+	cmd := req.Command
+	if len(cmd) == 0 {
+		cmd = []string{terminal.DefaultShell()}
+	}
+	s.mu.Lock()
+	if _, exists := s.sessions[name]; exists {
+		s.mu.Unlock()
+		sub.SendSessionEvent(SessionEvent{Type: "error", Session: name})
+		return
+	}
+	s.mu.Unlock()
+
+	sess, err := newDaemonSession(name, cmd, req.Cols, req.Rows, s.broadcastToSubscribers)
+	if err != nil {
+		sub.SendSessionEvent(SessionEvent{Type: "error", Session: name})
+		return
+	}
+	s.mu.Lock()
+	if _, exists := s.sessions[name]; exists {
+		s.mu.Unlock()
+		sess.Kill()
+		sub.SendSessionEvent(SessionEvent{Type: "error", Session: name})
+		return
+	}
+	s.sessions[name] = sess
+	s.mu.Unlock()
+	go s.watchSession(sess)
+	s.notifySubscribers(SessionEvent{Type: "created", Session: name, Info: sess.Info()})
+}
+
+func (s *Server) killSessionForSubscriber(req KillSessionRequest) {
+	s.mu.Lock()
+	sess, exists := s.sessions[req.Name]
+	s.mu.Unlock()
+	if exists {
+		sess.Kill()
+	}
+}
+
+func (s *Server) handleSubscribeAll(conn net.Conn, req Request) {
+	sub := newSubscriber(conn)
+	s.addSubscriber(sub)
+	defer s.removeSubscriber(sub)
+
+	s.mu.Lock()
+	sessions := make([]*DaemonSession, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		sessions = append(sessions, sess)
+	}
+	s.mu.Unlock()
+
+	for _, sess := range sessions {
+		if !sess.isExited() {
+			snap := sess.Screen.Snapshot()
+			cols, rows := sess.Screen.Size()
+			sub.sendFrameDirect(FrameSessionEvent, MarshalJSON(SessionEvent{
+				Type:    "snapshot",
+				Session: sess.Name,
+				Info:    sess.Info(),
+				Cols:    cols,
+				Rows:    rows,
+			}))
+			if len(snap) > 0 {
+				sub.sendFrameDirect(FrameTaggedOutput, EncodeTaggedOutput(sess.Name, snap))
+			}
+		}
+	}
+
+	sub.sendFrameDirect(FrameResponse, MarshalJSON(Response{OK: true}))
+	sub.activate()
+	sub.Run(s)
+}
+
 func (s *Server) watchSession(sess *DaemonSession) {
 	<-sess.doneCh
 
@@ -261,6 +400,8 @@ func (s *Server) watchSession(sess *DaemonSession) {
 	delete(s.sessions, sess.Name)
 	remaining := len(s.sessions)
 	s.mu.Unlock()
+
+	s.notifySubscribers(SessionEvent{Type: "exited", Session: sess.Name, ExitCode: sess.exitCode})
 
 	if remaining == 0 {
 		go s.Stop()
