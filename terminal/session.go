@@ -16,6 +16,8 @@ type Session interface {
 	io.ReadWriteCloser
 	Resize(cols, rows uint16) error
 	Wait() error
+	// Kill sends SIGKILL (or equivalent) to the process.
+	Kill() error
 }
 
 // Start creates a new PTY session running the given command.

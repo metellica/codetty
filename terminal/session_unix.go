@@ -26,6 +26,7 @@ func startPlatform(args []string, cols, rows uint16) (Session, error) {
 func (t *unixSession) Read(p []byte) (int, error)  { return t.file.Read(p) }
 func (t *unixSession) Write(p []byte) (int, error) { return t.file.Write(p) }
 func (t *unixSession) Close() error                { return t.file.Close() }
+func (t *unixSession) Kill() error                 { return t.cmd.Process.Kill() }
 
 func (t *unixSession) Resize(cols, rows uint16) error {
 	return pty.Setsize(t.file, &pty.Winsize{Cols: cols, Rows: rows})

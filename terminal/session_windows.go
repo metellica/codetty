@@ -45,6 +45,7 @@ func windowsCommandLine(args []string) (string, error) {
 func (t *windowsSession) Read(p []byte) (int, error)  { return t.pty.Read(p) }
 func (t *windowsSession) Write(p []byte) (int, error) { return t.pty.Write(p) }
 func (t *windowsSession) Close() error                { return t.pty.Close() }
+func (t *windowsSession) Kill() error                 { return t.pty.Close() }
 
 func (t *windowsSession) Resize(cols, rows uint16) error {
 	return t.pty.Resize(int(cols), int(rows))

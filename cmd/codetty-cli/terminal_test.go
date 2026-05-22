@@ -52,6 +52,10 @@ func (f *fakeTerminal) Wait() error {
 	return nil
 }
 
+func (f *fakeTerminal) Kill() error {
+	return nil
+}
+
 func TestStartTerminalRejectsMissingCommand(t *testing.T) {
 	if _, err := startTerminal(nil, 80, 24); err == nil {
 		t.Fatal("startTerminal should reject an empty command")

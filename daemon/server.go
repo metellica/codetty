@@ -1,0 +1,273 @@
+package daemon
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net"
+	"os"
+	"sync"
+	"time"
+)
+
+// Server is the daemon that manages PTY sessions.
+type Server struct {
+	sockPath string
+	listener net.Listener
+	sessions map[string]*DaemonSession
+	mu       sync.Mutex
+	done     chan struct{}
+	wg       sync.WaitGroup
+}
+
+// NewServer creates a new daemon server listening on the given Unix socket path.
+func NewServer(sockPath string) *Server {
+	return &Server{
+		sockPath: sockPath,
+		sessions: make(map[string]*DaemonSession),
+		done:     make(chan struct{}),
+	}
+}
+
+// Start begins listening for client connections.
+func (s *Server) Start() error {
+	os.Remove(s.sockPath)
+
+	ln, err := net.Listen("unix", s.sockPath)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", s.sockPath, err)
+	}
+	s.listener = ln
+
+	s.wg.Add(1)
+	go s.acceptLoop()
+	return nil
+}
+
+// Stop shuts down the server, killing all sessions and cleaning up.
+func (s *Server) Stop() {
+	select {
+	case <-s.done:
+		return // already stopped
+	default:
+		close(s.done)
+	}
+
+	if s.listener != nil {
+		s.listener.Close()
+	}
+	s.wg.Wait()
+
+	s.mu.Lock()
+	for _, sess := range s.sessions {
+		sess.Kill()
+	}
+	s.mu.Unlock()
+
+	os.Remove(s.sockPath)
+}
+
+func (s *Server) acceptLoop() {
+	defer s.wg.Done()
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			select {
+			case <-s.done:
+				return
+			default:
+				log.Printf("accept error: %v", err)
+				continue
+			}
+		}
+		go s.handleConn(conn)
+	}
+}
+
+func (s *Server) handleConn(conn net.Conn) {
+	defer conn.Close()
+
+	ft, payload, err := ReadFrame(conn)
+	if err != nil {
+		return
+	}
+	if ft != FrameRequest {
+		return
+	}
+
+	var req Request
+	if err := json.Unmarshal(payload, &req); err != nil {
+		s.sendError(conn, "invalid request")
+		return
+	}
+
+	switch req.Action {
+	case ActionNewSession:
+		s.handleNewSession(conn, req)
+	case ActionAttach:
+		s.handleAttach(conn, req)
+	case ActionList:
+		s.handleList(conn)
+	case ActionKill:
+		s.handleKill(conn, req)
+	case ActionKillServer:
+		s.handleKillServer(conn)
+	default:
+		s.sendError(conn, fmt.Sprintf("unknown action: %s", req.Action))
+	}
+}
+
+func (s *Server) handleNewSession(conn net.Conn, req Request) {
+	name := req.Session
+	if name == "" {
+		s.mu.Lock()
+		name = autoSessionName(req.Command, s.sessions)
+		s.mu.Unlock()
+	}
+
+	s.mu.Lock()
+	if _, exists := s.sessions[name]; exists {
+		s.mu.Unlock()
+		s.sendError(conn, fmt.Sprintf("session %q already exists", name))
+		return
+	}
+	s.mu.Unlock()
+
+	sess, err := newDaemonSession(name, req.Command, req.Cols, req.Rows)
+	if err != nil {
+		s.sendError(conn, fmt.Sprintf("start session: %v", err))
+		return
+	}
+
+	s.mu.Lock()
+	s.sessions[name] = sess
+	s.mu.Unlock()
+
+	go s.watchSession(sess)
+
+	resp := Response{OK: true, Session: name}
+	WriteFrame(conn, FrameResponse, MarshalJSON(resp))
+
+	s.runAttachedClient(conn, sess)
+}
+
+func (s *Server) handleAttach(conn net.Conn, req Request) {
+	s.mu.Lock()
+	var sess *DaemonSession
+	if req.Session != "" {
+		sess = s.sessions[req.Session]
+	} else {
+		var latest time.Time
+		for _, ss := range s.sessions {
+			if !ss.isExited() && ss.CreatedAt.After(latest) {
+				sess = ss
+				latest = ss.CreatedAt
+			}
+		}
+	}
+	s.mu.Unlock()
+
+	if sess == nil {
+		s.sendError(conn, "no session found")
+		return
+	}
+	if sess.isExited() {
+		s.sendError(conn, fmt.Sprintf("session %q has exited", sess.Name))
+		return
+	}
+
+	resp := Response{OK: true, Session: sess.Name}
+	WriteFrame(conn, FrameResponse, MarshalJSON(resp))
+	s.runAttachedClient(conn, sess)
+}
+
+func (s *Server) handleList(conn net.Conn) {
+	s.mu.Lock()
+	infos := make([]SessionInfo, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		infos = append(infos, sess.Info())
+	}
+	s.mu.Unlock()
+
+	resp := Response{OK: true, Sessions: infos}
+	WriteFrame(conn, FrameResponse, MarshalJSON(resp))
+}
+
+func (s *Server) handleKill(conn net.Conn, req Request) {
+	s.mu.Lock()
+	sess, exists := s.sessions[req.Session]
+	s.mu.Unlock()
+
+	if !exists {
+		s.sendError(conn, fmt.Sprintf("session %q not found", req.Session))
+		return
+	}
+
+	sess.Kill()
+	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
+}
+
+func (s *Server) handleKillServer(conn net.Conn) {
+	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
+	go s.Stop()
+}
+
+func (s *Server) runAttachedClient(conn net.Conn, sess *DaemonSession) {
+	client := newClient(conn, sess)
+	sess.addClient(client)
+	defer sess.removeClient(client)
+
+	// Send screen snapshot for immediate restore
+	if snap := sess.Screen.Snapshot(); len(snap) > 0 {
+		WriteFrame(conn, FrameOutput, snap)
+	}
+
+	client.Run(s)
+}
+
+func (s *Server) watchSession(sess *DaemonSession) {
+	<-sess.doneCh
+
+	notif := Notification{Event: "session_exited", Session: sess.Name, ExitCode: sess.exitCode}
+	sess.mu.Lock()
+	clients := append([]*Client(nil), sess.clients...)
+	sess.mu.Unlock()
+	for _, c := range clients {
+		c.SendNotification(notif)
+	}
+
+	if sess.Hub != nil {
+		sess.Hub.Stop()
+	}
+
+	s.mu.Lock()
+	delete(s.sessions, sess.Name)
+	remaining := len(s.sessions)
+	s.mu.Unlock()
+
+	if remaining == 0 {
+		go s.Stop()
+	}
+}
+
+func (s *Server) sendError(conn net.Conn, msg string) {
+	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: false, Error: msg}))
+}
+
+// SessionByName returns a session by name (for client session switching).
+func (s *Server) SessionByName(name string) *DaemonSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessions[name]
+}
+
+// SessionNames returns session names in iteration order.
+func (s *Server) SessionNames() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	names := make([]string, 0, len(s.sessions))
+	for name := range s.sessions {
+		names = append(names, name)
+	}
+	return names
+}
