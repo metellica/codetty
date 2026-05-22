@@ -3,21 +3,12 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"syscall"
 )
 
 // cmdRun runs the legacy one-shot CLI mode (codetty-cli behavior).
-// It exec's codetty-cli for backwards compatibility.
+// TODO: embed CLI logic directly once cmd/codetty-cli is refactored into a library.
 func cmdRun(args []string) {
-	cliBin, err := exec.LookPath("codetty-cli")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "codetty-cli not found in PATH (legacy run mode requires codetty-cli)\n")
-		os.Exit(1)
-	}
-	argv := append([]string{cliBin}, args...)
-	if err := syscall.Exec(cliBin, argv, os.Environ()); err != nil {
-		fmt.Fprintf(os.Stderr, "exec codetty-cli: %v\n", err)
-		os.Exit(1)
-	}
+	fmt.Fprintf(os.Stderr, "run subcommand not yet embedded — build and use codetty-cli directly:\n")
+	fmt.Fprintf(os.Stderr, "  go build -o codetty-cli ./cmd/codetty-cli && ./codetty-cli %s\n", formatArgs(args))
+	os.Exit(1)
 }
