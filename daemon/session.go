@@ -24,15 +24,6 @@ type DaemonSession struct {
 	doneCh   chan struct{}
 }
 
-// HubConfig holds hub connection parameters for a session.
-type HubConfig struct {
-	ServerURL string
-	CertFile  string
-	KeyFile   string
-	CAFile    string
-	Insecure  bool
-}
-
 func newDaemonSession(name string, command []string, cols, rows uint16) (*DaemonSession, error) {
 	term, err := terminal.Start(command, cols, rows)
 	if err != nil {
