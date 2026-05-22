@@ -37,6 +37,16 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
+			// Ctrl+Click: switch panel focus (no selection)
+			if msg.Ctrl {
+				if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
+					m.selected = idx
+				}
+				m.sel = textSelection{}
+				return nil
+			}
+
+			// Plain click: start text selection
 			regions := m.panelRegions()
 			for _, r := range regions {
 				localX := msg.X - r.contentX
@@ -54,10 +64,6 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					}
 					return nil
 				}
-			}
-			// Click outside any content area — just try panel selection
-			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
-				m.selected = idx
 			}
 			m.sel = textSelection{}
 		}

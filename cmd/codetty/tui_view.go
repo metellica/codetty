@@ -225,7 +225,7 @@ func (m *tuiModel) statusBar() string {
 	case modeFullscreen:
 		modeName = "fullscreen"
 	}
-	right := fmt.Sprintf(" %s | ^A prefix | shift+tab switch ", modeName)
+	right := fmt.Sprintf(" %s | ^A prefix | ctrl+click switch ", modeName)
 	contentW := max(0, m.width-2)
 	mid := strings.Repeat(" ", max(0, contentW-lipgloss.Width(left)-lipgloss.Width(right)))
 
