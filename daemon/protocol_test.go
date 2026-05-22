@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -107,4 +108,40 @@ func TestFrameRoundTrip_Resize(t *testing.T) {
 	if got.Cols != 120 || got.Rows != 40 {
 		t.Errorf("got %+v", got)
 	}
+}
+
+func TestTaggedOutputRoundTrip(t *testing.T) {
+	data := []byte("hello world")
+	encoded := EncodeTaggedOutput("my-session", data)
+	name, decoded, err := DecodeTaggedOutput(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "my-session" {
+		t.Errorf("name = %q, want my-session", name)
+	}
+	if string(decoded) != "hello world" {
+		t.Errorf("data = %q, want hello world", string(decoded))
+	}
+}
+
+func TestTaggedOutputEmptyPayload(t *testing.T) {
+	encoded := EncodeTaggedOutput("sess", nil)
+	name, data, err := DecodeTaggedOutput(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "sess" || len(data) != 0 {
+		t.Errorf("got name=%q data=%v", name, data)
+	}
+}
+
+func TestTaggedOutputSessionNameTooLongPanics(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for session name longer than 255 bytes")
+		}
+	}()
+
+	EncodeTaggedOutput(strings.Repeat("a", 256), []byte("x"))
 }
