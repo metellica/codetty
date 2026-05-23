@@ -53,13 +53,10 @@ func TestGridView_RendersPanelsAndFocusedMarker(t *testing.T) {
 	}
 }
 
-func TestGlyphANSI_CursorOnDefaultColorsUsesReverseVideo(t *testing.T) {
+func TestGlyphANSI_CursorOnDefaultColorsUsesGreenBlock(t *testing.T) {
 	start, end := glyphANSI(vt10x.Glyph{FG: vt10x.DefaultFG, BG: vt10x.DefaultBG}, true)
-	if !strings.Contains(start, "\x1b[7m") {
-		t.Fatalf("glyphANSI() start = %q, want reverse-video sequence", start)
-	}
-	if strings.Contains(start, "16777216") || strings.Contains(start, "16777217") {
-		t.Fatalf("glyphANSI() start = %q, want no raw default color indices", start)
+	if !strings.Contains(start, "\x1b[30;102m") {
+		t.Fatalf("glyphANSI() start = %q, want bright green cursor block", start)
 	}
 	if end != "\x1b[0m" {
 		t.Fatalf("glyphANSI() end = %q, want reset", end)

@@ -93,7 +93,6 @@ func (s *tuiSession) Resize(cols, rows uint16) {
 func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 	cols, rows := term.Size()
 	cursor := term.Cursor()
-	curVisible := term.CursorVisible()
 
 	lastVisibleRow := 0
 	for y := 0; y < rows; y++ {
@@ -144,7 +143,7 @@ func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 				break
 			}
 
-			isCursor := curVisible && x == cursor.X && srcRow == cursor.Y
+			isCursor := x == cursor.X && srcRow == cursor.Y
 			if isCursor {
 				curX = visualCol
 				curY = displayRow
@@ -176,18 +175,9 @@ func glyphANSI(g vt10x.Glyph, isCursor bool) (string, string) {
 	bg := g.BG
 
 	if isCursor {
-		// Force visible cursor: white bg with black fg via reverse video.
-		// If the cell has an explicit fg color that would become the bg
-		// when reversed, override it to ensure cursor visibility.
-		if fg == vt10x.DefaultFG || uint32(fg) == 0 {
-			start.WriteString("\x1b[37m") // white fg → becomes white bg when reversed
-		} else {
-			start.WriteString(colorToANSIFG(fg))
-		}
-		if bg != vt10x.DefaultBG {
-			start.WriteString(colorToANSIBG(bg))
-		}
-		start.WriteString("\x1b[7m")
+		// Force a clearly visible cursor block: bright green background.
+		// Use explicit colors that stand out regardless of cell content.
+		start.WriteString("\x1b[30;102m") // black fg, bright green bg
 		needReset = true
 	} else {
 		if fg != vt10x.DefaultFG {
