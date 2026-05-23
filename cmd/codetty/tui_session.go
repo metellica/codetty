@@ -174,17 +174,34 @@ func glyphANSI(g vt10x.Glyph, isCursor bool) (string, string) {
 
 	fg := g.FG
 	bg := g.BG
-	if fg != vt10x.DefaultFG {
-		start.WriteString(colorToANSIFG(fg))
-		needReset = true
-	}
-	if bg != vt10x.DefaultBG {
-		start.WriteString(colorToANSIBG(bg))
-		needReset = true
-	}
-	if g.Mode&glyphReverse != 0 || isCursor {
+
+	if isCursor {
+		// Force visible cursor: white bg with black fg via reverse video.
+		// If the cell has an explicit fg color that would become the bg
+		// when reversed, override it to ensure cursor visibility.
+		if fg == vt10x.DefaultFG || uint32(fg) == 0 {
+			start.WriteString("\x1b[37m") // white fg → becomes white bg when reversed
+		} else {
+			start.WriteString(colorToANSIFG(fg))
+		}
+		if bg != vt10x.DefaultBG {
+			start.WriteString(colorToANSIBG(bg))
+		}
 		start.WriteString("\x1b[7m")
 		needReset = true
+	} else {
+		if fg != vt10x.DefaultFG {
+			start.WriteString(colorToANSIFG(fg))
+			needReset = true
+		}
+		if bg != vt10x.DefaultBG {
+			start.WriteString(colorToANSIBG(bg))
+			needReset = true
+		}
+		if g.Mode&glyphReverse != 0 {
+			start.WriteString("\x1b[7m")
+			needReset = true
+		}
 	}
 	if g.Mode&glyphBold != 0 {
 		start.WriteString("\x1b[1m")
