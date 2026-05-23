@@ -38,11 +38,16 @@ type tuiModel struct {
 	conn     *daemonConn
 	sessions []*tuiSession
 	order    []string // session names in display order
-	selected int
+	selected int      // primary/big panel in focus-big mode
 	mode     layoutMode
 	prefix   bool // Ctrl+A prefix active
 	width    int
 	height   int
+
+	// inputFocus overrides which session receives keyboard input.
+	// -1 means use m.selected. Set by clicking a side panel.
+	// Reset to -1 when m.selected changes (via hotkey/ctrl+click).
+	inputFocus int
 
 	// Rename mode
 	renaming   bool
@@ -63,6 +68,7 @@ func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tui
 		mode:        modeFocusBig,
 		width:       120,
 		height:      40,
+		inputFocus:  -1,
 		focusTarget: focusTarget,
 		autoCreate:  autoCreate,
 	}
@@ -220,6 +226,20 @@ func (m *tuiModel) selectedSession() *tuiSession {
 		return nil
 	}
 	return ordered[m.selected]
+}
+
+// focusedSession returns the session that should receive keyboard input.
+// This may differ from selectedSession() when a side panel is clicked.
+func (m *tuiModel) focusedSession() *tuiSession {
+	ordered := m.orderedSessions()
+	if len(ordered) == 0 {
+		return nil
+	}
+	idx := m.selected
+	if m.inputFocus >= 0 && m.inputFocus < len(ordered) {
+		idx = m.inputFocus
+	}
+	return ordered[idx]
 }
 
 func (m *tuiModel) maybeAutoCreate() {

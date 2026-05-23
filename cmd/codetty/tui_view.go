@@ -67,8 +67,9 @@ func (m *tuiModel) focusBigWide(sessions []*tuiSession, availH int) string {
 		mainW = m.width - sideW
 	}
 
+	mainFocused := m.inputFocus < 0 || m.inputFocus == m.selected
 	mainTitle := fmt.Sprintf("[%d] %s", m.selected+1, primary.Name)
-	mainPanel := m.renderPanel(primary, mainTitle, mainW, availH, true)
+	mainPanel := m.renderPanel(primary, mainTitle, mainW, availH, mainFocused)
 
 	secondaryCount := len(sessions) - 1
 	if secondaryCount == 0 {
@@ -97,7 +98,8 @@ func (m *tuiModel) focusBigWide(sessions []*tuiSession, availH int) string {
 			h = availH - slotH*idx
 		}
 		title := fmt.Sprintf("[%d] %s", i+1, sess.Name)
-		sides = append(sides, m.renderPanel(sess, title, sideW, h, false))
+		sideFocused := m.inputFocus == i
+		sides = append(sides, m.renderPanel(sess, title, sideW, h, sideFocused))
 		idx++
 	}
 
@@ -110,14 +112,16 @@ func (m *tuiModel) focusBigNarrow(sessions []*tuiSession, availH int) string {
 	mainH := availH * 7 / 10
 	sideH := availH - mainH
 
+	mainFocused := m.inputFocus < 0 || m.inputFocus == m.selected
 	mainTitle := fmt.Sprintf("[%d] %s", m.selected+1, primary.Name)
-	mainPanel := m.renderPanel(primary, mainTitle, m.width, mainH, true)
+	mainPanel := m.renderPanel(primary, mainTitle, m.width, mainH, mainFocused)
 
 	var bottomPanel string
 	for i, sess := range sessions {
 		if i != m.selected {
 			title := fmt.Sprintf("[%d] %s", i+1, sess.Name)
-			bottomPanel = m.renderPanel(sess, title, m.width, sideH, false)
+			sideFocused := m.inputFocus == i
+			bottomPanel = m.renderPanel(sess, title, m.width, sideH, sideFocused)
 			break
 		}
 	}
@@ -154,7 +158,10 @@ func (m *tuiModel) gridView() string {
 			}
 			sess := sessions[idx]
 			title := fmt.Sprintf("[%d] %s", idx+1, sess.Name)
-			focused := idx == m.selected
+			focused := idx == m.selected && m.inputFocus < 0
+			if m.inputFocus >= 0 {
+				focused = idx == m.inputFocus
+			}
 			if focused {
 				title = "▶ " + title
 			}
@@ -205,7 +212,7 @@ func (m *tuiModel) statusBar() string {
 		return tuiStatusStyle.Width(m.width).Render(prompt)
 	}
 
-	sess := m.selectedSession()
+	sess := m.focusedSession()
 	var name string
 	if sess != nil {
 		name = sess.Name

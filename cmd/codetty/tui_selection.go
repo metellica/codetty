@@ -40,17 +40,17 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
-			// Ctrl+Click: switch panel focus (no selection)
+			// Ctrl+Click: promote panel to big (switch m.selected)
 			if msg.Ctrl {
 				if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
 					m.selected = idx
+					m.inputFocus = -1
 				}
 				m.sel = textSelection{}
 				return nil
 			}
 
-			// Plain click: interact with focused panel, or switch focus
-			// if clicking a different panel (focus-big side panels).
+			// Plain click: focus for input (without changing big panel layout).
 			regions := m.panelRegions()
 			sessions := m.orderedSessions()
 			for _, r := range regions {
@@ -58,12 +58,13 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				localY := msg.Y - r.contentY
 				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
 					if r.sessionIdx != m.selected {
-						// Clicking a non-focused panel: switch focus to it
-						m.selected = r.sessionIdx
+						// Clicking a non-big panel: direct input there
+						m.inputFocus = r.sessionIdx
 						m.sel = textSelection{}
 						return nil
 					}
-					// Clicking the focused panel: start pending selection
+					// Clicking the big panel: reset inputFocus, start selection
+					m.inputFocus = -1
 					sess := sessions[r.sessionIdx]
 					m.sel = textSelection{
 						pending:  true,
@@ -78,9 +79,13 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					return nil
 				}
 			}
-			// Click on border/title area of any panel: switch focus
-			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 && idx != m.selected {
-				m.selected = idx
+			// Click on border/title area: focus for input
+			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
+				if idx != m.selected {
+					m.inputFocus = idx
+				} else {
+					m.inputFocus = -1
+				}
 			}
 			m.sel = textSelection{}
 		}

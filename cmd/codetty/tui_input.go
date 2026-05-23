@@ -131,6 +131,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			idx := int(msg.Runes[0]-'0') - 1
 			if idx < len(m.orderedSessions()) {
 				m.selected = idx
+				m.inputFocus = -1
 				m.mode = modeFocusBig
 			}
 			return nil
@@ -159,7 +160,7 @@ func (m *tuiModel) handleGridKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *tuiModel) forwardKey(msg tea.KeyMsg) {
-	sess := m.selectedSession()
+	sess := m.focusedSession()
 	if sess == nil || m.conn == nil {
 		return
 	}
@@ -177,6 +178,7 @@ func (m *tuiModel) selectDelta(delta int) {
 		return
 	}
 	m.selected = ((m.selected+delta)%len(ordered) + len(ordered)) % len(ordered)
+	m.inputFocus = -1
 }
 
 // moveOrder swaps the selected session's position in the display order.
