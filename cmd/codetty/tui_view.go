@@ -69,6 +69,9 @@ func (m *tuiModel) focusBigWide(sessions []*tuiSession, availH int) string {
 
 	mainFocused := m.inputFocus < 0 || m.inputFocus == m.selected
 	mainTitle := fmt.Sprintf("[%d] %s", m.selected+1, primary.Name)
+	if mainFocused {
+		mainTitle = "▶ " + mainTitle
+	}
 	mainPanel := m.renderPanel(primary, mainTitle, mainW, availH, mainFocused)
 
 	secondaryCount := len(sessions) - 1
@@ -99,6 +102,9 @@ func (m *tuiModel) focusBigWide(sessions []*tuiSession, availH int) string {
 		}
 		title := fmt.Sprintf("[%d] %s", i+1, sess.Name)
 		sideFocused := m.inputFocus == i
+		if sideFocused {
+			title = "▶ " + title
+		}
 		sides = append(sides, m.renderPanel(sess, title, sideW, h, sideFocused))
 		idx++
 	}
@@ -114,6 +120,9 @@ func (m *tuiModel) focusBigNarrow(sessions []*tuiSession, availH int) string {
 
 	mainFocused := m.inputFocus < 0 || m.inputFocus == m.selected
 	mainTitle := fmt.Sprintf("[%d] %s", m.selected+1, primary.Name)
+	if mainFocused {
+		mainTitle = "▶ " + mainTitle
+	}
 	mainPanel := m.renderPanel(primary, mainTitle, m.width, mainH, mainFocused)
 
 	var bottomPanel string
@@ -121,6 +130,9 @@ func (m *tuiModel) focusBigNarrow(sessions []*tuiSession, availH int) string {
 		if i != m.selected {
 			title := fmt.Sprintf("[%d] %s", i+1, sess.Name)
 			sideFocused := m.inputFocus == i
+			if sideFocused {
+				title = "▶ " + title
+			}
 			bottomPanel = m.renderPanel(sess, title, m.width, sideH, sideFocused)
 			break
 		}

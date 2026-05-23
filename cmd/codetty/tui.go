@@ -18,7 +18,7 @@ var (
 
 	tuiFocusBorder = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("86"))
+			BorderForeground(lipgloss.Color("15"))
 
 	tuiNormalBorder = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
