@@ -93,6 +93,7 @@ func (s *tuiSession) Resize(cols, rows uint16) {
 func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 	cols, rows := term.Size()
 	cursor := term.Cursor()
+	curVisible := term.CursorVisible()
 
 	lastVisibleRow := 0
 	for y := 0; y < rows; y++ {
@@ -143,7 +144,7 @@ func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 				break
 			}
 
-			isCursor := x == cursor.X && srcRow == cursor.Y
+			isCursor := curVisible && x == cursor.X && srcRow == cursor.Y
 			if isCursor {
 				curX = visualCol
 				curY = displayRow
@@ -180,17 +181,31 @@ func glyphANSI(g vt10x.Glyph, isCursor bool) (string, string) {
 		start.WriteString("\x1b[30;102m") // black fg, bright green bg
 		needReset = true
 	} else {
-		if fg != vt10x.DefaultFG {
-			start.WriteString(colorToANSIFG(fg))
-			needReset = true
-		}
-		if bg != vt10x.DefaultBG {
-			start.WriteString(colorToANSIBG(bg))
-			needReset = true
-		}
 		if g.Mode&glyphReverse != 0 {
-			start.WriteString("\x1b[7m")
+			// Reverse video: swap fg↔bg and emit directly as normal colors.
+			// This avoids issues where \x1b[7m with explicit color 0 (black)
+			// would produce invisible results.
+			visualFG := bg // bg becomes visible foreground
+			visualBG := fg // fg becomes visible background
+			if visualFG != vt10x.DefaultBG && visualFG != vt10x.DefaultFG {
+				start.WriteString(colorToANSIFG(vt10x.Color(uint32(visualFG))))
+			}
+			if visualBG != vt10x.DefaultFG && visualBG != vt10x.DefaultBG {
+				start.WriteString(colorToANSIBG(vt10x.Color(uint32(visualBG))))
+			} else {
+				// fg was default → visual bg should be default fg color (white)
+				start.WriteString("\x1b[7m")
+			}
 			needReset = true
+		} else {
+			if fg != vt10x.DefaultFG {
+				start.WriteString(colorToANSIFG(fg))
+				needReset = true
+			}
+			if bg != vt10x.DefaultBG {
+				start.WriteString(colorToANSIBG(bg))
+				needReset = true
+			}
 		}
 	}
 	if g.Mode&glyphBold != 0 {
