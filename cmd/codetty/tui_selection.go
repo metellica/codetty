@@ -49,14 +49,18 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				return nil
 			}
 
-			// Plain click: start pending selection (will become real on drag)
+			// Plain click: start pending selection on focused panel only
+			// (click does NOT switch panels — use Ctrl+click for that)
 			regions := m.panelRegions()
+			sessions := m.orderedSessions()
 			for _, r := range regions {
+				if r.sessionIdx != m.selected {
+					continue
+				}
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
 				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
-					m.selected = r.sessionIdx
-					sess := m.orderedSessions()[r.sessionIdx]
+					sess := sessions[r.sessionIdx]
 					m.sel = textSelection{
 						pending:  true,
 						session:  sess.Name,
@@ -69,10 +73,6 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					}
 					return nil
 				}
-			}
-			// Click on border/title area — switch focus
-			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
-				m.selected = idx
 			}
 			m.sel = textSelection{}
 		}
