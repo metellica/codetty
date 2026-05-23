@@ -176,9 +176,8 @@ func glyphANSI(g vt10x.Glyph, isCursor bool) (string, string) {
 	bg := g.BG
 
 	if isCursor {
-		// Force a clearly visible cursor block: bright green background.
-		// Use explicit colors that stand out regardless of cell content.
-		start.WriteString("\x1b[30;102m") // black fg, bright green bg
+		// Force visible cursor: white background with black text.
+		start.WriteString("\x1b[30;107m") // black fg, bright white bg
 		needReset = true
 	} else {
 		if g.Mode&glyphReverse != 0 {
