@@ -56,7 +56,6 @@ func TestServer_NewSession(t *testing.T) {
 		Command: []string{"echo", "hello"},
 		Cols:    80,
 		Rows:    24,
-		NoHub:   true,
 	}
 	WriteFrame(conn, FrameRequest, MarshalJSON(req))
 
@@ -86,7 +85,7 @@ func TestServer_ListSessions(t *testing.T) {
 
 	// Create a session
 	conn1, _ := net.Dial("unix", sockPath)
-	req := Request{Action: ActionNewSession, Session: "s1", Command: []string{"sleep", "10"}, Cols: 80, Rows: 24, NoHub: true}
+	req := Request{Action: ActionNewSession, Session: "s1", Command: []string{"cat"}, Cols: 80, Rows: 24}
 	WriteFrame(conn1, FrameRequest, MarshalJSON(req))
 	ReadFrame(conn1) // consume response
 
@@ -123,15 +122,15 @@ func TestServer_KillSession(t *testing.T) {
 
 	// Create two sessions so server doesn't auto-exit when we kill one
 	conn1, _ := net.Dial("unix", sockPath)
-	req := Request{Action: ActionNewSession, Session: "keep", Command: []string{"sleep", "60"}, Cols: 80, Rows: 24, NoHub: true}
+	req := Request{Action: ActionNewSession, Session: "killme", Command: []string{"cat"}, Cols: 80, Rows: 24}
 	WriteFrame(conn1, FrameRequest, MarshalJSON(req))
 	ReadFrame(conn1)
 	WriteFrame(conn1, FrameDetach, nil)
 	conn1.Close()
 
 	conn2, _ := net.Dial("unix", sockPath)
-	req = Request{Action: ActionNewSession, Session: "killme", Command: []string{"sleep", "60"}, Cols: 80, Rows: 24, NoHub: true}
-	WriteFrame(conn2, FrameRequest, MarshalJSON(req))
+	req2 := Request{Action: ActionNewSession, Session: "keep", Command: []string{"cat"}, Cols: 80, Rows: 24}
+	WriteFrame(conn2, FrameRequest, MarshalJSON(req2))
 	ReadFrame(conn2)
 	WriteFrame(conn2, FrameDetach, nil)
 	conn2.Close()
@@ -178,7 +177,7 @@ func TestServer_AutoSessionName(t *testing.T) {
 	// Create without explicit name
 	conn, _ := net.Dial("unix", sockPath)
 	defer conn.Close()
-	req := Request{Action: ActionNewSession, Command: []string{"bash"}, Cols: 80, Rows: 24, NoHub: true}
+	req := Request{Action: ActionNewSession, Command: []string{"bash"}, Cols: 80, Rows: 24}
 	WriteFrame(conn, FrameRequest, MarshalJSON(req))
 	ft, payload, _ := ReadFrame(conn)
 	if ft != FrameResponse {

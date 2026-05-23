@@ -35,7 +35,6 @@ func TestIntegration_FullLifecycle(t *testing.T) {
 		Command: []string{"sh", "-c", "echo hello && sleep 60"},
 		Cols:    80,
 		Rows:    24,
-		NoHub:   true,
 	}
 	daemon.WriteFrame(conn1, daemon.FrameRequest, daemon.MarshalJSON(req))
 
@@ -157,7 +156,6 @@ func TestIntegration_SessionSwitch(t *testing.T) {
 			Command: []string{"sleep", "60"},
 			Cols:    80,
 			Rows:    24,
-			NoHub:   true,
 		}))
 		daemon.ReadFrame(conn) // response
 		daemon.WriteFrame(conn, daemon.FrameDetach, nil)
@@ -216,7 +214,6 @@ func TestIntegration_SessionExitNotification(t *testing.T) {
 		Command: []string{"echo", "bye"},
 		Cols:    80,
 		Rows:    24,
-		NoHub:   true,
 	}))
 	daemon.ReadFrame(conn) // response
 

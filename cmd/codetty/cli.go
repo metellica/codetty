@@ -19,12 +19,6 @@ import (
 func cmdNew(args []string) {
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
 	session := fs.String("s", "", "session name")
-	noHub := fs.Bool("no-hub", false, "do not connect to hub")
-	hubURL := fs.String("hub-url", "", "hub WebSocket URL (e.g. wss://host:8080/ws)")
-	insecure := fs.Bool("insecure", false, "skip TLS verification for hub")
-	certFile := fs.String("cert", "", "client TLS certificate for hub")
-	keyFile := fs.String("key", "", "client TLS key for hub")
-	caFile := fs.String("ca", "", "CA certificate for hub verification")
 	fs.Parse(args)
 
 	command := fs.Args()
@@ -44,17 +38,11 @@ func cmdNew(args []string) {
 
 	cols, rows := terminalSize()
 	req := daemon.Request{
-		Action:      daemon.ActionNewSession,
-		Session:     *session,
-		Command:     command,
-		Cols:        cols,
-		Rows:        rows,
-		NoHub:       *noHub,
-		HubServer:   *hubURL,
-		HubInsecure: *insecure,
-		HubCertFile: *certFile,
-		HubKeyFile:  *keyFile,
-		HubCAFile:   *caFile,
+		Action:  daemon.ActionNewSession,
+		Session: *session,
+		Command: command,
+		Cols:    cols,
+		Rows:    rows,
 	}
 	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(req))
 
@@ -136,9 +124,9 @@ func cmdList(args []string) {
 		return
 	}
 
-	fmt.Printf("%-16s %-12s %-8s %-10s %s\n", "NAME", "COMMAND", "CLIENTS", "HUB", "CREATED")
+	fmt.Printf("%-16s %-12s %-8s %s\n", "NAME", "COMMAND", "CLIENTS", "CREATED")
 	for _, s := range resp.Sessions {
-		fmt.Printf("%-16s %-12s %-8d %-10s %s\n", s.Name, s.Command, s.Attached, s.HubStatus, s.CreatedAt)
+		fmt.Printf("%-16s %-12s %-8d %s\n", s.Name, s.Command, s.Attached, s.CreatedAt)
 	}
 }
 
@@ -212,7 +200,7 @@ func formatSessionList(sessions []daemon.SessionInfo) string {
 	}
 	var sb strings.Builder
 	for _, s := range sessions {
-		fmt.Fprintf(&sb, "%s: %s (clients: %d, hub: %s)\n", s.Name, s.Command, s.Attached, s.HubStatus)
+		fmt.Fprintf(&sb, "%s: %s (clients: %d)\n", s.Name, s.Command, s.Attached)
 	}
 	return sb.String()
 }

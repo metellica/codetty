@@ -29,7 +29,6 @@ func TestSubscriber_ReceivesAllSessionOutput(t *testing.T) {
 		Command: []string{"sh", "-c", "echo hello && sleep 30"},
 		Cols:    80,
 		Rows:    24,
-		NoHub:   true,
 	}))
 	if _, _, err := ReadFrame(c1); err != nil {
 		t.Fatal(err)
@@ -132,7 +131,6 @@ func TestSubscriber_ReceivesLiveOutput(t *testing.T) {
 		Command: []string{"echo", "world"},
 		Cols:    80,
 		Rows:    24,
-		NoHub:   true,
 	}))
 	if _, _, err := ReadFrame(c1); err != nil {
 		t.Fatal(err)
@@ -244,7 +242,6 @@ func TestSubscriber_CreateSessionRejectsDuplicateName(t *testing.T) {
 		Command: []string{"sh", "-c", "sleep 30"},
 		Cols:    80,
 		Rows:    24,
-		NoHub:   true,
 	}))
 	if _, _, err := ReadFrame(creator); err != nil {
 		t.Fatal(err)
@@ -326,7 +323,6 @@ func TestSubscriber_Detach(t *testing.T) {
 		Command: []string{"sleep", "60"},
 		Cols:    80,
 		Rows:    24,
-		NoHub:   true,
 	}))
 	if _, _, err := ReadFrame(c1); err != nil {
 		t.Fatal(err)
@@ -386,7 +382,6 @@ func TestSubscriber_KillSession(t *testing.T) {
 		Command: []string{"sleep", "60"},
 		Cols:    80,
 		Rows:    24,
-		NoHub:   true,
 	}))
 	if _, _, err := ReadFrame(c1); err != nil {
 		t.Fatal(err)

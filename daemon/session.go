@@ -14,7 +14,6 @@ type DaemonSession struct {
 	Command   []string
 	Terminal  terminal.Session
 	Screen    *terminal.ScreenMirror
-	Hub       *HubConn
 	CreatedAt time.Time
 	onOutput  func(session string, data []byte)
 
@@ -60,9 +59,6 @@ func (s *DaemonSession) readLoop() {
 				broadcast := make([]byte, len(data))
 				copy(broadcast, data)
 				s.onOutput(s.Name, broadcast)
-			}
-			if s.Hub != nil {
-				s.Hub.SendOutput(data)
 			}
 		}
 		if err != nil {
@@ -125,9 +121,6 @@ func (s *DaemonSession) isExited() bool {
 func (s *DaemonSession) Resize(cols, rows uint16) {
 	s.Terminal.Resize(cols, rows)
 	s.Screen.Resize(cols, rows)
-	if s.Hub != nil {
-		s.Hub.Resize(cols, rows)
-	}
 }
 
 // Kill terminates the session's PTY process.
@@ -142,16 +135,11 @@ func (s *DaemonSession) Info() SessionInfo {
 	if len(s.Command) > 0 {
 		cmd = s.Command[0]
 	}
-	hubStatus := "none"
-	if s.Hub != nil {
-		hubStatus = s.Hub.Status()
-	}
 	return SessionInfo{
 		Name:      s.Name,
 		Command:   cmd,
 		Attached:  s.clientCount(),
 		CreatedAt: s.CreatedAt.Format(time.RFC3339),
-		HubStatus: hubStatus,
 	}
 }
 

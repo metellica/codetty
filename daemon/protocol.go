@@ -47,13 +47,6 @@ type Request struct {
 	Env     []string `json:"env,omitempty"`
 	Cols    uint16   `json:"cols,omitempty"`
 	Rows    uint16   `json:"rows,omitempty"`
-	NoHub   bool     `json:"no_hub,omitempty"`
-	// Hub connection config (passed at session creation)
-	HubServer   string `json:"hub_server,omitempty"`
-	HubCertFile string `json:"hub_cert_file,omitempty"`
-	HubKeyFile  string `json:"hub_key_file,omitempty"`
-	HubCAFile   string `json:"hub_ca_file,omitempty"`
-	HubInsecure bool   `json:"hub_insecure,omitempty"`
 }
 
 // Response is the JSON payload for FrameResponse.
@@ -70,7 +63,6 @@ type SessionInfo struct {
 	Command   string `json:"command"`
 	Attached  int    `json:"attached"`
 	CreatedAt string `json:"created_at"`
-	HubStatus string `json:"hub_status"`
 }
 
 // ResizePayload for FrameResize.

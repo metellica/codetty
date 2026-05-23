@@ -9,7 +9,7 @@ import (
 	"codetty/terminal"
 )
 
-const usage = `codetty — terminal multiplexer with hub integration
+const usage = `codetty — terminal multiplexer
 
 Usage:
   codetty                                      Open TUI (auto-create shell if no sessions)
@@ -18,7 +18,6 @@ Usage:
   codetty ls                                   List active sessions
   codetty kill [-s name]                       Kill a session
   codetty kill-server                          Stop the daemon and all sessions
-  codetty hub [flags]                          Start the hub WebSocket/TUI server
 
 TUI Keys (Ctrl+A prefix):
   d       Detach (exit TUI, sessions keep running)
@@ -39,9 +38,6 @@ Other keys:
 
 Options:
   -s, --session NAME   Target session name
-  --no-hub             Do not connect session to hub
-  --hub-url URL        Hub WebSocket URL
-  --insecure           Skip TLS verification
   --help, -h           Show this help
 `
 
@@ -65,10 +61,6 @@ func main() {
 		cmdKill(args)
 	case "kill-server":
 		cmdKillServer(args)
-	case "hub":
-		cmdHub(args)
-	case "run":
-		cmdRun(args)
 	case "__server":
 		cmdServer(args)
 	case "--help", "-h", "help":

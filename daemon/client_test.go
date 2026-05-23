@@ -30,7 +30,6 @@ func TestClient_ReceiveOutput(t *testing.T) {
 		Command: []string{"echo", "hello world"},
 		Cols:    80,
 		Rows:    24,
-		NoHub:   true,
 	}
 	WriteFrame(conn, FrameRequest, MarshalJSON(req))
 
@@ -76,7 +75,7 @@ func TestClient_Detach(t *testing.T) {
 	defer conn.Close()
 
 	// Create session
-	req := Request{Action: ActionNewSession, Session: "det-sess", Command: []string{"sleep", "30"}, Cols: 80, Rows: 24, NoHub: true}
+	req := Request{Action: ActionNewSession, Session: "detach-sess", Command: []string{"cat"}, Cols: 80, Rows: 24}
 	WriteFrame(conn, FrameRequest, MarshalJSON(req))
 	ReadFrame(conn) // consume response
 
@@ -115,7 +114,7 @@ func TestClient_Input(t *testing.T) {
 	defer conn.Close()
 
 	// Use cat which echoes input back
-	req := Request{Action: ActionNewSession, Session: "input-sess", Command: []string{"cat"}, Cols: 80, Rows: 24, NoHub: true}
+	req := Request{Action: ActionNewSession, Session: "input-sess", Command: []string{"cat"}, Cols: 80, Rows: 24}
 	WriteFrame(conn, FrameRequest, MarshalJSON(req))
 	ReadFrame(conn) // response
 
@@ -150,7 +149,7 @@ func TestClient_Resize(t *testing.T) {
 	conn, _ := net.Dial("unix", sockPath)
 	defer conn.Close()
 
-	req := Request{Action: ActionNewSession, Session: "resize-sess", Command: []string{"sleep", "30"}, Cols: 80, Rows: 24, NoHub: true}
+	req := Request{Action: ActionNewSession, Session: "resize-sess", Command: []string{"cat"}, Cols: 80, Rows: 24}
 	WriteFrame(conn, FrameRequest, MarshalJSON(req))
 	ReadFrame(conn)
 
@@ -191,13 +190,13 @@ func TestClient_SessionSwitch(t *testing.T) {
 
 	// Create two sessions
 	c1, _ := net.Dial("unix", sockPath)
-	WriteFrame(c1, FrameRequest, MarshalJSON(Request{Action: ActionNewSession, Session: "s1", Command: []string{"sleep", "30"}, Cols: 80, Rows: 24, NoHub: true}))
+	WriteFrame(c1, FrameRequest, MarshalJSON(Request{Action: ActionNewSession, Session: "s1", Command: []string{"cat"}, Cols: 80, Rows: 24}))
 	ReadFrame(c1)
 	WriteFrame(c1, FrameDetach, nil)
 	c1.Close()
 
 	c2, _ := net.Dial("unix", sockPath)
-	WriteFrame(c2, FrameRequest, MarshalJSON(Request{Action: ActionNewSession, Session: "s2", Command: []string{"sleep", "30"}, Cols: 80, Rows: 24, NoHub: true}))
+	WriteFrame(c2, FrameRequest, MarshalJSON(Request{Action: ActionNewSession, Session: "s2", Command: []string{"cat"}, Cols: 80, Rows: 24}))
 	ReadFrame(c2)
 	WriteFrame(c2, FrameDetach, nil)
 	c2.Close()
