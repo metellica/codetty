@@ -153,9 +153,10 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			m.sel = textSelection{}
 		} else if m.sel.pending {
-			// Click without drag: forward press+release to PTY
+			// Click without drag: just focus the panel (already done on press).
+			// Don't forward mouse to PTY in split mode — programs like bash
+			// don't enable mouse reporting and would echo garbage.
 			m.sel.pending = false
-			m.forwardClickToPTY(m.sel.startX, m.sel.startY)
 			m.sel = textSelection{}
 		}
 	}
