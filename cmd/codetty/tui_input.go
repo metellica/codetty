@@ -16,6 +16,29 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleCreateKey(msg)
 	}
 
+	// Floating window mode: Esc closes, Ctrl+A prefix still works, all else forwards
+	if m.floatingIdx >= 0 {
+		if msg.Type == tea.KeyEscape {
+			m.floatingIdx = -1
+			return nil
+		}
+		if msg.Type == tea.KeyCtrlA {
+			if m.prefix {
+				m.prefix = false
+				m.forwardKeyTo(msg, m.floatingIdx)
+				return nil
+			}
+			m.prefix = true
+			return nil
+		}
+		if m.prefix {
+			m.prefix = false
+			return m.handlePrefixKey(msg)
+		}
+		m.forwardKeyTo(msg, m.floatingIdx)
+		return nil
+	}
+
 	if msg.Type == tea.KeyShiftTab {
 		m.selectDelta(1)
 		return nil
@@ -196,6 +219,19 @@ func (m *tuiModel) forwardKey(msg tea.KeyMsg) {
 	raw := tuiKeyToBytes(msg)
 	if len(raw) > 0 {
 		m.conn.SendInput(sess.Name, raw)
+	}
+}
+
+// forwardKeyTo sends a key to the session at the given index.
+func (m *tuiModel) forwardKeyTo(msg tea.KeyMsg, idx int) {
+	sessions := m.orderedSessions()
+	if idx < 0 || idx >= len(sessions) || m.conn == nil {
+		return
+	}
+	m.sel = textSelection{}
+	raw := tuiKeyToBytes(msg)
+	if len(raw) > 0 {
+		m.conn.SendInput(sessions[idx].Name, raw)
 	}
 }
 

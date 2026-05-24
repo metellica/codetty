@@ -40,6 +40,7 @@ type tuiModel struct {
 	order    []string // session names in display order
 	selected int      // primary/big panel in focus-big mode
 	mode     layoutMode
+
 	prefix   bool // Ctrl+A prefix active
 	width    int
 	height   int
@@ -48,6 +49,9 @@ type tuiModel struct {
 	// -1 means use m.selected. Set by clicking a side panel.
 	// Reset to -1 when m.selected changes (via hotkey/ctrl+click).
 	inputFocus int
+
+	// floatingIdx: index of session shown in floating overlay, -1 means none.
+	floatingIdx int
 
 	// Rename mode
 	renaming   bool
@@ -73,6 +77,7 @@ func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tui
 		width:       120,
 		height:      40,
 		inputFocus:  -1,
+		floatingIdx: -1,
 		focusTarget: focusTarget,
 		autoCreate:  autoCreate,
 	}
@@ -126,14 +131,22 @@ func (m *tuiModel) View() string {
 				"No sessions. Creating one...")
 	}
 
+	var base string
 	switch m.mode {
 	case modeFullscreen:
-		return m.fullscreenView()
+		base = m.fullscreenView()
 	case modeGrid:
-		return m.gridView()
+		base = m.gridView()
 	default:
-		return m.focusBigView()
+		base = m.focusBigView()
 	}
+
+	// Overlay floating window if active
+	if m.floatingIdx >= 0 && m.floatingIdx < len(m.sessions) {
+		base = m.overlayFloating(base)
+	}
+
+	return base
 }
 
 func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {

@@ -37,6 +37,14 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return m.handleFullscreenMouse(msg)
 	}
 
+	// If floating window is open, clicking outside dismisses it
+	if m.floatingIdx >= 0 {
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			m.floatingIdx = -1
+		}
+		return nil
+	}
+
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
@@ -58,8 +66,9 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				localY := msg.Y - r.contentY
 				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
 					if r.sessionIdx != m.selected {
-						// Clicking a non-big panel: direct input there
-						m.inputFocus = r.sessionIdx
+						// Clicking a side panel: open floating window
+						m.floatingIdx = r.sessionIdx
+						m.inputFocus = -1
 						m.sel = textSelection{}
 						return nil
 					}
@@ -79,10 +88,11 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					return nil
 				}
 			}
-			// Click on border/title area: focus for input
+			// Click on border/title area: open floating if side panel
 			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
 				if idx != m.selected {
-					m.inputFocus = idx
+					m.floatingIdx = idx
+					m.inputFocus = -1
 				} else {
 					m.inputFocus = -1
 				}

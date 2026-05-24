@@ -268,6 +268,30 @@ func dimLine(line string) string {
 	return lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(plain)
 }
 
+// overlayFloating renders a floating window on top of the base view.
+func (m *tuiModel) overlayFloating(base string) string {
+	sess := m.sessions[m.floatingIdx]
+
+	// Floating window is 80% of terminal size
+	fw := m.width * 8 / 10
+	fh := m.height * 8 / 10
+	if fw < 40 {
+		fw = min(40, m.width)
+	}
+	if fh < 10 {
+		fh = min(10, m.height)
+	}
+
+	title := fmt.Sprintf("▶ [%d] %s  (Esc to close)", m.floatingIdx+1, sess.Name)
+	floatPanel := m.renderPanel(sess, title, fw, fh, true)
+
+	// Center the floating panel over the base
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		floatPanel,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
+}
+
 func (m *tuiModel) statusBar() string {
 	if m.renaming {
 		prompt := fmt.Sprintf(" Rename: %s█  (Enter confirm, Esc cancel)", m.renameText)
