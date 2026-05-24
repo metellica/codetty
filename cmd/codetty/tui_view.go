@@ -15,22 +15,8 @@ const (
 	tuiSidePanelContentThreshold = 6
 )
 
-// sessionColors is a palette for distinguishing side panel titles at a glance.
-var sessionColors = []lipgloss.Color{
-	lipgloss.Color("62"),  // steel blue
-	lipgloss.Color("132"), // mauve
-	lipgloss.Color("72"),  // teal
-	lipgloss.Color("172"), // orange
-	lipgloss.Color("134"), // purple
-	lipgloss.Color("107"), // olive green
-	lipgloss.Color("167"), // salmon
-	lipgloss.Color("68"),  // cornflower
-}
-
-// sessionColor returns a stable color for a session based on its index.
-func sessionColor(idx int) lipgloss.Color {
-	return sessionColors[idx%len(sessionColors)]
-}
+// sidePanelTitleColor is a light green used for all side panel title bars.
+var sidePanelTitleColor = lipgloss.Color("78") // light green
 
 // fullscreenView renders only the selected session filling the entire terminal.
 func (m *tuiModel) fullscreenView() string {
@@ -211,9 +197,9 @@ func (m *tuiModel) renderPanel(sess *tuiSession, title string, w, h int, focused
 	return m.renderPanelWithColor(sess, title, w, h, focused, -1, true)
 }
 
-// renderPanelWithColor renders a panel with an optional color index for the title.
-// If colorIdx >= 0, the title gets a colored background. If showContent is false,
-// only the title is rendered (useful for very small side panels).
+// renderPanelWithColor renders a panel with a highlighted title bar for side panels.
+// If colorIdx >= 0, the title gets a light green background and content is dimmed.
+// If showContent is false, only the title is rendered (useful for very small side panels).
 func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int, focused bool, colorIdx int, showContent bool) string {
 	style := tuiNormalBorder.Width(w - 2).Height(h - 2)
 	if focused {
@@ -231,14 +217,15 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 		return style.Render(title)
 	}
 
-	// Build title with optional color background
+	isSidePanel := colorIdx >= 0
+
+	// Build title
 	var header string
-	if colorIdx >= 0 {
-		clr := sessionColor(colorIdx)
+	if isSidePanel {
 		titleStyle := lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("255")).
-			Background(clr).
+			Foreground(lipgloss.Color("232")).
+			Background(sidePanelTitleColor).
 			Width(innerW)
 		header = titleStyle.Render(" " + title)
 	} else {
@@ -246,7 +233,6 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 	}
 
 	if !showContent {
-		// Center the title vertically in the available space
 		padding := strings.Repeat("\n", innerH/2)
 		return style.Render(padding + header)
 	}
@@ -260,9 +246,26 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 	} else {
 		lines, _, _ = sess.RenderANSI(innerW, innerH)
 	}
-	content := strings.Join(lines, "\n")
 
+	// Dim content for non-focused side panels
+	if isSidePanel && !focused {
+		for i, line := range lines {
+			lines[i] = dimLine(line)
+		}
+	}
+
+	content := strings.Join(lines, "\n")
 	return style.Render(header + "\n" + content)
+}
+
+// dimLine strips existing colors and renders the text in a dim gray.
+func dimLine(line string) string {
+	// Strip all ANSI sequences and re-render as dim gray
+	plain := ansi.Strip(line)
+	if plain == "" {
+		return line
+	}
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(plain)
 }
 
 func (m *tuiModel) statusBar() string {
