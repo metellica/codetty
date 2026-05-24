@@ -62,8 +62,8 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
 				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
-					if r.sessionIdx != m.selected {
-						// Clicking a side panel: open floating window
+					if m.mode == modeGrid || r.sessionIdx != m.selected {
+						// Grid mode or side panel: open floating window
 						m.openFloating(r.sessionIdx)
 						m.sel = textSelection{}
 						return nil
@@ -84,9 +84,9 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					return nil
 				}
 			}
-			// Click on border/title area: open floating if side panel
+			// Click on border/title area
 			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
-				if idx != m.selected {
+				if m.mode == modeGrid || idx != m.selected {
 					m.openFloating(idx)
 				} else {
 					m.inputFocus = -1
