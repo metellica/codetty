@@ -152,7 +152,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 				m.renameText = sess.Name
 			}
 			return nil
-		case 'T':
+		case 't':
 			if m.conn != nil {
 				m.conn.RefreshTmux()
 			}

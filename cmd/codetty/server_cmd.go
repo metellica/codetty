@@ -22,9 +22,6 @@ func cmdServer(args []string) {
 		log.Fatalf("daemon start: %v", err)
 	}
 
-	// Auto-discover tmux sessions on startup
-	srv.DiscoverAndAttachTmux()
-
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	<-sigCh

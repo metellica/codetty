@@ -264,9 +264,9 @@ func TestHandlePrefixKey_RefreshTmux(t *testing.T) {
 		}
 	}()
 
-	// Press Ctrl+A T — should send FrameRefreshTmux
+	// Press Ctrl+A t — should send FrameRefreshTmux
 	m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlA})
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 
 	<-done
 }
