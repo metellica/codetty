@@ -237,27 +237,22 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 		return style.Render(padding + header)
 	}
 
-	// For tmux side panels, request one extra line so we can drop the status bar
-	// without leaving a blank gap (lipgloss fills to fixed Height).
-	renderH := innerH
-	hideTmuxStatus := isSidePanel && sess.Type == "tmux"
-	if hideTmuxStatus {
-		renderH = innerH + 1
-	}
-
 	var lines []string
 	if m.sel.session == sess.Name && (m.sel.active || m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY) {
 		selFn := func(col, row int) bool {
 			return m.selectionCovers(sess.Name, col, row)
 		}
-		lines = sess.RenderANSIWithSelection(innerW, renderH, selFn)
+		lines = sess.RenderANSIWithSelection(innerW, innerH, selFn)
 	} else {
-		lines, _, _ = sess.RenderANSI(innerW, renderH)
+		lines, _, _ = sess.RenderANSI(innerW, innerH)
 	}
 
-	// Hide tmux status bar (last line) in side panels to reclaim space
-	if hideTmuxStatus && len(lines) > 1 {
-		lines = lines[:len(lines)-1]
+	// For tmux side panels, trim trailing empty lines from bottom
+	// (status bar and blank padding) to maximize useful content area
+	if isSidePanel && sess.Type == "tmux" {
+		for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
+			lines = lines[:len(lines)-1]
+		}
 	}
 
 	// Dim content for non-focused side panels
