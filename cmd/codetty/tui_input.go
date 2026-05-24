@@ -235,15 +235,25 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *tuiModel) handleGridKey(msg tea.KeyMsg) tea.Cmd {
+	n := len(m.orderedSessions())
+	cols := gridCols(n, m.width)
 	switch msg.Type {
 	case tea.KeyLeft:
-		m.selectDelta(-1)
+		if m.selected%cols > 0 {
+			m.selected--
+		}
 	case tea.KeyRight:
-		m.selectDelta(1)
+		if m.selected%cols < cols-1 && m.selected+1 < n {
+			m.selected++
+		}
 	case tea.KeyUp:
-		m.selectDelta(-1)
+		if m.selected-cols >= 0 {
+			m.selected -= cols
+		}
 	case tea.KeyDown:
-		m.selectDelta(1)
+		if m.selected+cols < n {
+			m.selected += cols
+		}
 	}
 	return nil
 }
@@ -283,23 +293,22 @@ func (m *tuiModel) selectDelta(delta int) {
 	m.inputFocus = -1
 }
 
-// cycleSideHighlight cycles inputFocus among side panels (non-big) in focus-big mode.
+// cycleSideHighlight cycles inputFocus among all panels in focus-big mode.
+// When inputFocus lands on m.selected, it means the big panel is highlighted.
 func (m *tuiModel) cycleSideHighlight() {
 	n := len(m.orderedSessions())
 	if n <= 1 {
 		return
 	}
-	// Find next index that isn't the big panel
 	cur := m.inputFocus
 	if cur < 0 {
 		cur = m.selected
 	}
-	for i := 1; i < n; i++ {
-		next := (cur + i) % n
-		if next != m.selected {
-			m.inputFocus = next
-			return
-		}
+	next := (cur + 1) % n
+	if next == m.selected {
+		m.inputFocus = -1 // big panel highlighted
+	} else {
+		m.inputFocus = next
 	}
 }
 
