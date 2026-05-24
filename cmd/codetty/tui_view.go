@@ -237,18 +237,26 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 		return style.Render(padding + header)
 	}
 
+	// For tmux side panels, request one extra line so we can drop the status bar
+	// without leaving a blank gap (lipgloss fills to fixed Height).
+	renderH := innerH
+	hideTmuxStatus := isSidePanel && sess.Type == "tmux"
+	if hideTmuxStatus {
+		renderH = innerH + 1
+	}
+
 	var lines []string
 	if m.sel.session == sess.Name && (m.sel.active || m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY) {
 		selFn := func(col, row int) bool {
 			return m.selectionCovers(sess.Name, col, row)
 		}
-		lines = sess.RenderANSIWithSelection(innerW, innerH, selFn)
+		lines = sess.RenderANSIWithSelection(innerW, renderH, selFn)
 	} else {
-		lines, _, _ = sess.RenderANSI(innerW, innerH)
+		lines, _, _ = sess.RenderANSI(innerW, renderH)
 	}
 
-	// Hide tmux status bar in side panels to reclaim space
-	if isSidePanel && sess.Type == "tmux" && len(lines) > 1 {
+	// Hide tmux status bar (last line) in side panels to reclaim space
+	if hideTmuxStatus && len(lines) > 1 {
 		lines = lines[:len(lines)-1]
 	}
 
