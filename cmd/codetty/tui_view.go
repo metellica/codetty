@@ -282,7 +282,7 @@ func (m *tuiModel) overlayFloating(base string) string {
 		fh = min(10, m.height)
 	}
 
-	title := fmt.Sprintf("▶ [%d] %s  (Esc to close)", m.floatingIdx+1, sess.Name)
+	title := fmt.Sprintf("▶ [%d] %s  (^A q close)", m.floatingIdx+1, sess.Name)
 	floatPanel := m.renderPanel(sess, title, fw, fh, true)
 
 	// Center the floating panel over the base

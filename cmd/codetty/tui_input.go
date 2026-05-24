@@ -16,12 +16,8 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleCreateKey(msg)
 	}
 
-	// Floating window mode: Esc closes, Ctrl+A prefix still works, all else forwards
+	// Floating window mode: Ctrl+A q closes, Ctrl+A prefix still works, all else forwards
 	if m.floatingIdx >= 0 {
-		if msg.Type == tea.KeyEscape {
-			m.closeFloating()
-			return nil
-		}
 		if msg.Type == tea.KeyCtrlA {
 			if m.prefix {
 				m.prefix = false
@@ -33,6 +29,10 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		if m.prefix {
 			m.prefix = false
+			if msg.Type == tea.KeyRunes && string(msg.Runes) == "q" {
+				m.closeFloating()
+				return nil
+			}
 			return m.handlePrefixKey(msg)
 		}
 		m.forwardKeyTo(msg, m.floatingIdx)
