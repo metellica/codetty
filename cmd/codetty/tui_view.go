@@ -301,7 +301,7 @@ func (m *tuiModel) statusBar() string {
 	n := len(m.sessions)
 
 	if m.prefix {
-		help := "^A: d detach  c new  m shell  x kill  r rename  n/p nav  f full/float  g grid  h/l move  t tmux  q close  1-9 jump"
+		help := "Ctrl+A: d detach  c new  m shell  x kill  r rename  n/p nav  f full/float  g grid  h/l move  t tmux  q close  1-9 jump"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 
@@ -313,7 +313,7 @@ func (m *tuiModel) statusBar() string {
 	case modeFullscreen:
 		modeName = "fullscreen"
 	}
-	right := fmt.Sprintf(" %s | ^A prefix | ctrl+click switch ", modeName)
+	right := fmt.Sprintf(" %s | Ctrl+A prefix | Ctrl+click switch ", modeName)
 	contentW := max(0, m.width-2)
 	mid := strings.Repeat(" ", max(0, contentW-lipgloss.Width(left)-lipgloss.Width(right)))
 
