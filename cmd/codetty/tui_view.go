@@ -11,7 +11,26 @@ import (
 const (
 	tuiMinPanelW = 14
 	tuiMinPanelH = 3
+	// Side panels shorter than this threshold show only the title, no content.
+	tuiSidePanelContentThreshold = 6
 )
+
+// sessionColors is a palette for distinguishing side panel titles at a glance.
+var sessionColors = []lipgloss.Color{
+	lipgloss.Color("62"),  // steel blue
+	lipgloss.Color("132"), // mauve
+	lipgloss.Color("72"),  // teal
+	lipgloss.Color("172"), // orange
+	lipgloss.Color("134"), // purple
+	lipgloss.Color("107"), // olive green
+	lipgloss.Color("167"), // salmon
+	lipgloss.Color("68"),  // cornflower
+}
+
+// sessionColor returns a stable color for a session based on its index.
+func sessionColor(idx int) lipgloss.Color {
+	return sessionColors[idx%len(sessionColors)]
+}
 
 // fullscreenView renders only the selected session filling the entire terminal.
 func (m *tuiModel) fullscreenView() string {
@@ -105,7 +124,8 @@ func (m *tuiModel) focusBigWide(sessions []*tuiSession, availH int) string {
 		if sideFocused {
 			title = "▶ " + title
 		}
-		sides = append(sides, m.renderPanel(sess, title, sideW, h, sideFocused))
+		showContent := h >= tuiSidePanelContentThreshold
+		sides = append(sides, m.renderPanelWithColor(sess, title, sideW, h, sideFocused, i, showContent))
 		idx++
 	}
 
@@ -133,7 +153,8 @@ func (m *tuiModel) focusBigNarrow(sessions []*tuiSession, availH int) string {
 			if sideFocused {
 				title = "▶ " + title
 			}
-			bottomPanel = m.renderPanel(sess, title, m.width, sideH, sideFocused)
+			showContent := sideH >= tuiSidePanelContentThreshold
+			bottomPanel = m.renderPanelWithColor(sess, title, m.width, sideH, sideFocused, i, showContent)
 			break
 		}
 	}
@@ -187,6 +208,13 @@ func (m *tuiModel) gridView() string {
 }
 
 func (m *tuiModel) renderPanel(sess *tuiSession, title string, w, h int, focused bool) string {
+	return m.renderPanelWithColor(sess, title, w, h, focused, -1, true)
+}
+
+// renderPanelWithColor renders a panel with an optional color index for the title.
+// If colorIdx >= 0, the title gets a colored background. If showContent is false,
+// only the title is rendered (useful for very small side panels).
+func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int, focused bool, colorIdx int, showContent bool) string {
 	style := tuiNormalBorder.Width(w - 2).Height(h - 2)
 	if focused {
 		style = tuiFocusBorder.Width(w - 2).Height(h - 2)
@@ -203,6 +231,26 @@ func (m *tuiModel) renderPanel(sess *tuiSession, title string, w, h int, focused
 		return style.Render(title)
 	}
 
+	// Build title with optional color background
+	var header string
+	if colorIdx >= 0 {
+		clr := sessionColor(colorIdx)
+		titleStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("255")).
+			Background(clr).
+			Width(innerW)
+		header = titleStyle.Render(" " + title)
+	} else {
+		header = lipgloss.NewStyle().Bold(focused).Render(title)
+	}
+
+	if !showContent {
+		// Center the title vertically in the available space
+		padding := strings.Repeat("\n", innerH/2)
+		return style.Render(padding + header)
+	}
+
 	var lines []string
 	if m.sel.session == sess.Name && (m.sel.active || m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY) {
 		selFn := func(col, row int) bool {
@@ -214,7 +262,6 @@ func (m *tuiModel) renderPanel(sess *tuiSession, title string, w, h int, focused
 	}
 	content := strings.Join(lines, "\n")
 
-	header := lipgloss.NewStyle().Bold(focused).Render(title)
 	return style.Render(header + "\n" + content)
 }
 
