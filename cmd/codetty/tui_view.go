@@ -247,14 +247,6 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 		lines, _, _ = sess.RenderANSI(innerW, innerH)
 	}
 
-	// For tmux side panels: remove status bar (last line) then trim trailing blanks
-	if isSidePanel && sess.Type == "tmux" && len(lines) > 1 {
-		lines = lines[:len(lines)-1] // drop status bar
-		for len(lines) > 0 && strings.TrimSpace(ansi.Strip(lines[len(lines)-1])) == "" {
-			lines = lines[:len(lines)-1]
-		}
-	}
-
 	// Dim content for non-focused side panels
 	if isSidePanel && !focused {
 		for i, line := range lines {
