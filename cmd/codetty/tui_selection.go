@@ -55,7 +55,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				return nil
 			}
 
-			// Plain click: focus for input (without changing big panel layout).
+			// Plain click on panels
 			regions := m.panelRegions()
 			sessions := m.orderedSessions()
 			for _, r := range regions {
@@ -68,8 +68,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 						m.sel = textSelection{}
 						return nil
 					}
-					// Clicking the big panel: reset inputFocus, start selection
-					m.inputFocus = -1
+					// Clicking the big panel: start selection
 					sess := sessions[r.sessionIdx]
 					m.sel = textSelection{
 						pending:  true,
@@ -88,8 +87,6 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
 				if m.mode == modeGrid || idx != m.selected {
 					m.openFloating(idx)
-				} else {
-					m.inputFocus = -1
 				}
 			}
 			m.sel = textSelection{}

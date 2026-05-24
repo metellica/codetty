@@ -257,9 +257,6 @@ func (m *tuiModel) focusedSession() *tuiSession {
 		return nil
 	}
 	idx := m.selected
-	if m.inputFocus >= 0 && m.inputFocus < len(ordered) {
-		idx = m.inputFocus
-	}
 	if idx >= len(ordered) {
 		return nil
 	}

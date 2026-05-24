@@ -72,12 +72,8 @@ func (m *tuiModel) focusBigWide(sessions []*tuiSession, availH int) string {
 		mainW = m.width - sideW
 	}
 
-	mainFocused := m.inputFocus < 0 || m.inputFocus == m.selected
-	mainTitle := fmt.Sprintf("[%d] %s", m.selected+1, primary.Name)
-	if mainFocused {
-		mainTitle = "▶ " + mainTitle
-	}
-	mainPanel := m.renderPanel(primary, mainTitle, mainW, availH, mainFocused)
+	mainTitle := fmt.Sprintf("▶ [%d] %s", m.selected+1, primary.Name)
+	mainPanel := m.renderPanel(primary, mainTitle, mainW, availH, true)
 
 	secondaryCount := len(sessions) - 1
 	if secondaryCount == 0 {
@@ -106,12 +102,8 @@ func (m *tuiModel) focusBigWide(sessions []*tuiSession, availH int) string {
 			h = availH - slotH*idx
 		}
 		title := fmt.Sprintf("[%d] %s", i+1, sess.Name)
-		sideFocused := m.inputFocus == i
-		if sideFocused {
-			title = "▶ " + title
-		}
 		showContent := h >= tuiSidePanelContentThreshold
-		sides = append(sides, m.renderPanelWithColor(sess, title, sideW, h, sideFocused, i, showContent))
+		sides = append(sides, m.renderPanelWithColor(sess, title, sideW, h, false, i, showContent))
 		idx++
 	}
 
@@ -124,23 +116,15 @@ func (m *tuiModel) focusBigNarrow(sessions []*tuiSession, availH int) string {
 	mainH := availH * 7 / 10
 	sideH := availH - mainH
 
-	mainFocused := m.inputFocus < 0 || m.inputFocus == m.selected
-	mainTitle := fmt.Sprintf("[%d] %s", m.selected+1, primary.Name)
-	if mainFocused {
-		mainTitle = "▶ " + mainTitle
-	}
-	mainPanel := m.renderPanel(primary, mainTitle, m.width, mainH, mainFocused)
+	mainTitle := fmt.Sprintf("▶ [%d] %s", m.selected+1, primary.Name)
+	mainPanel := m.renderPanel(primary, mainTitle, m.width, mainH, true)
 
 	var bottomPanel string
 	for i, sess := range sessions {
 		if i != m.selected {
 			title := fmt.Sprintf("[%d] %s", i+1, sess.Name)
-			sideFocused := m.inputFocus == i
-			if sideFocused {
-				title = "▶ " + title
-			}
 			showContent := sideH >= tuiSidePanelContentThreshold
-			bottomPanel = m.renderPanelWithColor(sess, title, m.width, sideH, sideFocused, i, showContent)
+			bottomPanel = m.renderPanelWithColor(sess, title, m.width, sideH, false, i, showContent)
 			break
 		}
 	}
@@ -177,10 +161,7 @@ func (m *tuiModel) gridView() string {
 			}
 			sess := sessions[idx]
 			title := fmt.Sprintf("[%d] %s", idx+1, sess.Name)
-			focused := idx == m.selected && m.inputFocus < 0
-			if m.inputFocus >= 0 {
-				focused = idx == m.inputFocus
-			}
+			focused := idx == m.selected
 			if focused {
 				title = "▶ " + title
 				colViews = append(colViews, m.renderPanel(sess, title, panelW, panelH, true))

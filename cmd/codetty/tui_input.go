@@ -40,24 +40,14 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	if msg.Type == tea.KeyShiftTab {
-		m.cycleInputFocus()
+		m.selectDelta(1)
 		return nil
 	}
 
-	// Enter on a focused side/grid panel opens floating window
-	if msg.Type == tea.KeyEnter && m.floatingIdx < 0 {
-		if m.mode == modeGrid {
-			cur := m.inputFocus
-			if cur < 0 {
-				cur = m.selected
-			}
-			m.openFloating(cur)
-			return nil
-		}
-		if m.mode == modeFocusBig && m.inputFocus >= 0 && m.inputFocus != m.selected {
-			m.openFloating(m.inputFocus)
-			return nil
-		}
+	// Enter on a focused panel in grid mode opens floating window
+	if msg.Type == tea.KeyEnter && m.floatingIdx < 0 && m.mode == modeGrid {
+		m.openFloating(m.selected)
+		return nil
 	}
 
 	if msg.Type == tea.KeyCtrlA {
@@ -79,6 +69,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleGridKey(msg)
 	}
 
+	// Focus-big mode: always forward to big panel
 	m.forwardKey(msg)
 	return nil
 }
@@ -165,13 +156,10 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			} else if m.mode == modeFullscreen {
 				m.mode = modeFocusBig
 				m.resizeSessionPTYs()
-			} else if m.mode == modeFocusBig && (m.inputFocus < 0 || m.inputFocus == m.selected) {
-				// Big panel focused → fullscreen
+			} else if m.mode == modeFocusBig {
+				// Big panel → fullscreen
 				m.mode = modeFullscreen
 				m.resizeSessionPTYs()
-			} else if m.mode == modeFocusBig && m.inputFocus >= 0 && m.inputFocus != m.selected {
-				// Side panel focused → open floating
-				m.openFloating(m.inputFocus)
 			} else if m.mode == modeGrid {
 				// Grid mode → open floating for selected
 				m.openFloating(m.selected)
@@ -233,8 +221,6 @@ func (m *tuiModel) handleGridKey(msg tea.KeyMsg) tea.Cmd {
 		m.selectDelta(-1)
 	case tea.KeyDown:
 		m.selectDelta(1)
-	default:
-		m.forwardKey(msg)
 	}
 	return nil
 }
@@ -272,25 +258,6 @@ func (m *tuiModel) selectDelta(delta int) {
 	}
 	m.selected = ((m.selected+delta)%len(ordered) + len(ordered)) % len(ordered)
 	m.inputFocus = -1
-}
-
-// cycleInputFocus cycles through sessions for input focus without changing layout.
-func (m *tuiModel) cycleInputFocus() {
-	n := len(m.orderedSessions())
-	if n <= 1 {
-		return
-	}
-	// Current effective focus
-	cur := m.inputFocus
-	if cur < 0 {
-		cur = m.selected
-	}
-	next := (cur + 1) % n
-	if next == m.selected {
-		m.inputFocus = -1 // back to big panel
-	} else {
-		m.inputFocus = next
-	}
 }
 
 // moveOrder swaps the selected session's position in the display order.
