@@ -208,6 +208,7 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 		if m.floatingTarget != "" && evt.Session == m.floatingTarget {
 			idx := m.indexByName(evt.Session)
 			if idx >= 0 {
+				sess.Temporary = true
 				m.openFloating(idx)
 			}
 			m.floatingTarget = ""
@@ -348,7 +349,15 @@ func (m *tuiModel) openFloating(idx int) {
 }
 
 // closeFloating closes the floating window and restores the previous state.
+// If the floating session is temporary (Ctrl+A m), kill it.
 func (m *tuiModel) closeFloating() {
+	// Check if the floating session is temporary before popping state
+	if m.floatingIdx >= 0 && m.floatingIdx < len(m.orderedSessions()) {
+		sess := m.orderedSessions()[m.floatingIdx]
+		if sess.Temporary && m.conn != nil {
+			m.conn.KillSession(sess.Name)
+		}
+	}
 	if !m.popMode() {
 		m.floatingIdx = -1
 	}

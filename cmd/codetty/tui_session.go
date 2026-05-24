@@ -29,6 +29,7 @@ type tuiSession struct {
 	Exited    bool
 	ExitCode  int
 	CreatedAt string
+	Temporary bool // created via Ctrl+A m, killed on floating close
 
 	term vt10x.Terminal
 	mu   sync.Mutex
