@@ -53,6 +53,9 @@ type tuiModel struct {
 	// floatingIdx: index of session shown in floating overlay, -1 means none.
 	floatingIdx int
 
+	// modeStack records previous states for Ctrl+A f back-navigation.
+	modeStack []modeState
+
 	// Rename mode
 	renaming   bool
 	renameText string
@@ -68,6 +71,35 @@ type tuiModel struct {
 	focusTarget string
 	// Auto-create session on start
 	autoCreate []string // command to auto-create
+}
+
+// modeState captures a view state for back-navigation.
+type modeState struct {
+	mode        layoutMode
+	selected    int
+	floatingIdx int
+}
+
+// pushMode saves current state and transitions to a new mode/floating state.
+func (m *tuiModel) pushMode() {
+	m.modeStack = append(m.modeStack, modeState{
+		mode:        m.mode,
+		selected:    m.selected,
+		floatingIdx: m.floatingIdx,
+	})
+}
+
+// popMode restores the previous state. Returns false if stack is empty.
+func (m *tuiModel) popMode() bool {
+	if len(m.modeStack) == 0 {
+		return false
+	}
+	prev := m.modeStack[len(m.modeStack)-1]
+	m.modeStack = m.modeStack[:len(m.modeStack)-1]
+	m.mode = prev.mode
+	m.selected = prev.selected
+	m.floatingIdx = prev.floatingIdx
+	return true
 }
 
 func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tuiModel {
@@ -292,6 +324,7 @@ func (m *tuiModel) resizeSessionPTYs() {
 
 // openFloating opens the floating window for the given session index and resizes its PTY.
 func (m *tuiModel) openFloating(idx int) {
+	m.pushMode()
 	m.floatingIdx = idx
 	m.inputFocus = -1
 	// Resize the floating session to match the floating window content area
@@ -305,9 +338,11 @@ func (m *tuiModel) openFloating(idx int) {
 	}
 }
 
-// closeFloating closes the floating window and restores the session size.
+// closeFloating closes the floating window and restores the previous state.
 func (m *tuiModel) closeFloating() {
-	m.floatingIdx = -1
+	if !m.popMode() {
+		m.floatingIdx = -1
+	}
 	m.resizeSessionPTYs()
 }
 

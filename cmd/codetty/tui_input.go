@@ -149,19 +149,24 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 		case 'f':
 			if m.floatingIdx >= 0 {
 				// Floating window → fullscreen that session
+				m.pushMode()
 				m.selected = m.floatingIdx
 				m.floatingIdx = -1
 				m.mode = modeFullscreen
 				m.resizeSessionPTYs()
 			} else if m.mode == modeFullscreen {
-				m.mode = modeFocusBig
+				// Fullscreen → pop back or fall back to focus-big
+				if !m.popMode() {
+					m.mode = modeFocusBig
+				}
 				m.resizeSessionPTYs()
 			} else if m.mode == modeFocusBig {
 				// Big panel → fullscreen
+				m.pushMode()
 				m.mode = modeFullscreen
 				m.resizeSessionPTYs()
 			} else if m.mode == modeGrid {
-				// Grid mode → open floating for selected
+				// Grid mode → open floating for selected (openFloating pushes)
 				m.openFloating(m.selected)
 			}
 			return nil
