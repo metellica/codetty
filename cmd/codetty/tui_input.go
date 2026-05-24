@@ -166,21 +166,24 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 				m.mode = modeFullscreen
 				m.resizeSessionPTYs()
 			} else if m.mode == modeFullscreen {
-				// Fullscreen → pop back, skipping any floating states
-				// If the fullscreen session is temporary, kill it
-				if sess := m.selectedSession(); sess != nil && sess.Temporary && m.conn != nil {
-					m.conn.KillSession(sess.Name)
-				}
-				popped := false
-				for m.popMode() {
-					popped = true
-					if m.floatingIdx < 0 {
-						break
+				// Fullscreen → pop back
+				sess := m.selectedSession()
+				if sess != nil && sess.Temporary {
+					// Temp session: return to floating (single pop)
+					m.popMode()
+				} else {
+					// Normal session: pop back skipping floating states
+					popped := false
+					for m.popMode() {
+						popped = true
+						if m.floatingIdx < 0 {
+							break
+						}
 					}
-				}
-				if !popped || m.floatingIdx >= 0 {
-					m.mode = modeFocusBig
-					m.floatingIdx = -1
+					if !popped || m.floatingIdx >= 0 {
+						m.mode = modeFocusBig
+						m.floatingIdx = -1
+					}
 				}
 				m.resizeSessionPTYs()
 			} else if m.mode == modeFocusBig {
