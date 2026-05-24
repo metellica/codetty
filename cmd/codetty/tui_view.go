@@ -301,7 +301,7 @@ func (m *tuiModel) statusBar() string {
 	n := len(m.sessions)
 
 	if m.prefix {
-		help := "^A: d detach  c new  x kill  r rename  n/p nav  f full  g grid  b focus  a auto  h/l move  1-9 jump"
+		help := "^A: d detach  c new  m shell  x kill  r rename  n/p nav  f full/float  g grid  h/l move  t tmux  q close  1-9 jump"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"codetty/terminal"
+	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -219,6 +220,15 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 		case 't':
 			if m.conn != nil {
 				m.conn.RefreshTmux()
+			}
+			return nil
+		case 'm':
+			// Create a temporary floating shell (only in grid/focus-big modes)
+			if m.floatingIdx < 0 && m.mode != modeFullscreen && m.conn != nil {
+				_, _, cw, ch := m.floatingContentRect()
+				name := fmt.Sprintf("tmp-%d", len(m.sessions)+1)
+				m.floatingTarget = name
+				m.conn.CreateSession(name, []string{terminal.DefaultShell()}, uint16(cw), uint16(ch))
 			}
 			return nil
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':

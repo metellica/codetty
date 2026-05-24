@@ -69,6 +69,8 @@ type tuiModel struct {
 
 	// Initial focus target (from new/attach command)
 	focusTarget string
+	// When set, open this session in a floating window once created
+	floatingTarget string
 	// Auto-create session on start
 	autoCreate []string // command to auto-create
 }
@@ -202,6 +204,13 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 		if m.focusTarget != "" && evt.Session == m.focusTarget {
 			m.selected = m.indexByName(evt.Session)
 			m.focusTarget = ""
+		}
+		if m.floatingTarget != "" && evt.Session == m.floatingTarget {
+			idx := m.indexByName(evt.Session)
+			if idx >= 0 {
+				m.openFloating(idx)
+			}
+			m.floatingTarget = ""
 		}
 
 	case "renamed":
