@@ -44,6 +44,22 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	// Enter on a focused side/grid panel opens floating window
+	if msg.Type == tea.KeyEnter && m.floatingIdx < 0 {
+		if m.mode == modeGrid {
+			cur := m.inputFocus
+			if cur < 0 {
+				cur = m.selected
+			}
+			m.openFloating(cur)
+			return nil
+		}
+		if m.mode == modeFocusBig && m.inputFocus >= 0 && m.inputFocus != m.selected {
+			m.openFloating(m.inputFocus)
+			return nil
+		}
+	}
+
 	if msg.Type == tea.KeyCtrlA {
 		if m.prefix {
 			m.prefix = false
