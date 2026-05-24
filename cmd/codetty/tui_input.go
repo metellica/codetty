@@ -40,14 +40,24 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	if msg.Type == tea.KeyShiftTab {
-		m.selectDelta(1)
+		if m.mode == modeFocusBig {
+			m.cycleSideHighlight()
+		} else {
+			m.selectDelta(1)
+		}
 		return nil
 	}
 
-	// Enter on a focused panel in grid mode opens floating window
-	if msg.Type == tea.KeyEnter && m.floatingIdx < 0 && m.mode == modeGrid {
-		m.openFloating(m.selected)
-		return nil
+	// Enter on a highlighted panel opens floating window
+	if msg.Type == tea.KeyEnter && m.floatingIdx < 0 {
+		if m.mode == modeGrid {
+			m.openFloating(m.selected)
+			return nil
+		}
+		if m.mode == modeFocusBig && m.inputFocus >= 0 && m.inputFocus != m.selected {
+			m.openFloating(m.inputFocus)
+			return nil
+		}
 	}
 
 	if msg.Type == tea.KeyCtrlA {
@@ -271,6 +281,26 @@ func (m *tuiModel) selectDelta(delta int) {
 	}
 	m.selected = ((m.selected+delta)%len(ordered) + len(ordered)) % len(ordered)
 	m.inputFocus = -1
+}
+
+// cycleSideHighlight cycles inputFocus among side panels (non-big) in focus-big mode.
+func (m *tuiModel) cycleSideHighlight() {
+	n := len(m.orderedSessions())
+	if n <= 1 {
+		return
+	}
+	// Find next index that isn't the big panel
+	cur := m.inputFocus
+	if cur < 0 {
+		cur = m.selected
+	}
+	for i := 1; i < n; i++ {
+		next := (cur + i) % n
+		if next != m.selected {
+			m.inputFocus = next
+			return
+		}
+	}
 }
 
 // moveOrder swaps the selected session's position in the display order.

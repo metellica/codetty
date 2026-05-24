@@ -102,8 +102,12 @@ func (m *tuiModel) focusBigWide(sessions []*tuiSession, availH int) string {
 			h = availH - slotH*idx
 		}
 		title := fmt.Sprintf("[%d] %s", i+1, sess.Name)
+		highlighted := m.inputFocus == i
+		if highlighted {
+			title = "▶ " + title
+		}
 		showContent := h >= tuiSidePanelContentThreshold
-		sides = append(sides, m.renderPanelWithColor(sess, title, sideW, h, false, i, showContent))
+		sides = append(sides, m.renderPanelWithColor(sess, title, sideW, h, highlighted, i, showContent))
 		idx++
 	}
 
@@ -123,8 +127,12 @@ func (m *tuiModel) focusBigNarrow(sessions []*tuiSession, availH int) string {
 	for i, sess := range sessions {
 		if i != m.selected {
 			title := fmt.Sprintf("[%d] %s", i+1, sess.Name)
+			highlighted := m.inputFocus == i
+			if highlighted {
+				title = "▶ " + title
+			}
 			showContent := sideH >= tuiSidePanelContentThreshold
-			bottomPanel = m.renderPanelWithColor(sess, title, m.width, sideH, false, i, showContent)
+			bottomPanel = m.renderPanelWithColor(sess, title, m.width, sideH, highlighted, i, showContent)
 			break
 		}
 	}
