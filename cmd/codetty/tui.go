@@ -239,6 +239,9 @@ func (m *tuiModel) focusedSession() *tuiSession {
 	if m.inputFocus >= 0 && m.inputFocus < len(ordered) {
 		idx = m.inputFocus
 	}
+	if idx >= len(ordered) {
+		return nil
+	}
 	return ordered[idx]
 }
 

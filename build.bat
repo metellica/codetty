@@ -4,10 +4,7 @@ setlocal
 cd /d "%~dp0"
 
 echo Building codetty...
-go build -o codetty-hub.exe .\cmd\codetty-hub
+go build -o codetty.exe .\cmd\codetty
 if errorlevel 1 exit /b 1
 
-go build -o codetty-cli.exe .\cmd\codetty-cli
-if errorlevel 1 exit /b 1
-
-echo Done: codetty-hub.exe, codetty-cli.exe
+echo Done: codetty.exe

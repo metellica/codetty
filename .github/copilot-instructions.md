@@ -1,77 +1,81 @@
 # Copilot instructions for CodeTTY
 
-CodeTTY is a Go 1.25+ cross-platform terminal multiplexer made of two
-binaries: `codetty-hub`, a Bubble Tea TUI/WebSocket server, and `codetty-cli`,
-a PTY client that connects back to the hub. The CLI uses Unix PTY on
-Linux/macOS and Windows ConPTY on Windows.
+CodeTTY is a Go 1.25+ cross-platform local terminal multiplexer with a daemon
+architecture. A single binary `codetty` provides both the TUI frontend and the
+background daemon. The daemon manages PTY sessions that persist beyond the TUI
+lifetime (like tmux). Uses Unix PTY on Linux/macOS and Windows ConPTY on Windows.
 
 ## Build and test commands
 
-- Build both binaries: `./build.sh`
-- Install built binaries to `/usr/local/bin`: `./build.sh install`
-- Build one binary directly: `go build ./cmd/codetty-hub` or `go build ./cmd/codetty-cli`
-- Build Windows binaries: `GOOS=windows GOARCH=amd64 go build -o codetty-cli.exe ./cmd/codetty-cli`
+- Build: `./build.sh`
+- Install to `/usr/local/bin`: `./build.sh install`
+- Build directly: `go build ./cmd/codetty`
+- Build Windows: `GOOS=windows GOARCH=amd64 go build -o codetty.exe ./cmd/codetty`
 - Run all tests: `go test ./...`
-- Run one package's tests: `go test ./hub`, `go test ./protocol`, or `go test ./cmd/codetty-cli`
-- Run a single test: `go test ./hub -run '^TestModel_UsesCtrlAPrefixForHubCommands$'`
-- Cross-compile tests without executing target binaries: `GOOS=windows GOARCH=amd64 go test -exec=/bin/true ./...`
+- Run one package's tests: `go test ./daemon`, `go test ./terminal`, `go test ./vt10x`
+- Run a single test: `go test ./cmd/codetty -run '^TestTuiModel_'`
+- Cross-compile check: `GOOS=windows GOARCH=amd64 go test -exec=/bin/true ./...`
 
 ## Architecture
 
-- `cmd/codetty-hub/main.go` starts the Bubble Tea program and an HTTP
-  WebSocket endpoint at `/ws`. Each accepted WebSocket is handed to
-  `hub.Hub.HandleConn`.
-- `hub.Hub` owns connected `ClientSession`s, active-session ordering, and the
-  fullscreen output path. `HandleConn` expects a register message before output
-  or replay messages, replaces existing sessions with the same ID, and sends
-  Bubble Tea messages for connect/disconnect/screen updates.
-- `hub.ClientSession` wraps a `vt10x.Terminal` for the hub-side screen model.
-  Grid/focus views call `RenderANSI`/`SnapshotANSI` instead of reading raw PTY
-  bytes directly.
-- The TUI model in `hub/tui.go` uses Ctrl+A as the hub command prefix. Normal
-  keys are forwarded to the selected remote session; prefix keys change
-  selection, layout, fullscreen, or quit. Fullscreen mode runs through
-  `tea.Exec` and forwards live session output through `Hub.fsWriter` because the
-  Bubble Tea event loop is blocked while the exec handler runs.
-- Layout code is split by concern: `layout.go` maintains ordering and mode,
-  `layout_view.go` renders grid/focus-big panels and status bars, and
-  `layout_geometry.go` computes hit regions for mouse selection.
-- `cmd/codetty-cli/main.go` starts the requested command through the
-  `terminalSession` abstraction, mirrors terminal output to local stdout, a hub
-  output channel, and a `ScreenMirror`, then runs a reconnecting WebSocket loop.
-  On reconnect, the CLI registers, sends a replay snapshot from `ScreenMirror`,
-  and resumes forwarding output/input.
-- `cmd/codetty-cli/terminal_unix.go` uses `creack/pty` for Linux/macOS;
-  `terminal_windows.go` uses `UserExistsError/conpty` and Windows ConPTY.
-- `protocol/protocol.go` defines the WebSocket binary frame format: the first
-  byte is the message type; register/resize payloads are JSON, while
-  output/input/replay payloads are raw terminal bytes.
+- `cmd/codetty/main.go` is the CLI entry point. `codetty` with no args opens
+  the TUI (auto-creating a shell session if none exist). Subcommands: `new`,
+  `attach`, `ls`, `kill`, `kill-server`.
+- `cmd/codetty/daemonize.go` auto-starts the daemon (`__server` subcommand) if
+  no Unix socket is found. The daemon runs as a background process.
+- `daemon/server.go` is the background daemon. It listens on a Unix socket,
+  manages PTY sessions (`DaemonSession`), handles client connections, and
+  broadcasts output to attached TUI clients and subscribers.
+- `daemon/session.go` wraps a `terminal.Session` (PTY) with a `ScreenMirror`
+  for snapshot replay. Output flows: PTY → ScreenMirror + broadcast to clients.
+- `daemon/client.go` handles a single attached TUI client: input forwarding,
+  output streaming, resize, detach, session switching.
+- `daemon/subscriber.go` provides an event subscription channel for the TUI
+  to receive session lifecycle events and live output from all sessions.
+- `cmd/codetty/tui.go` is the Bubble Tea TUI model. It connects to the daemon
+  via subscriber mode to receive all session output, maintaining local
+  `tuiSession` objects with vt10x terminals for rendering.
+- `cmd/codetty/tui_input.go` handles keyboard input with Ctrl+A prefix for
+  commands. Normal keys are forwarded to the focused session's PTY. Supports
+  Shift/Ctrl/Alt + arrow keys with proper xterm encoding.
+- `cmd/codetty/tui_selection.go` handles mouse events: click to focus panel,
+  Ctrl+click to promote to big panel, scroll wheel forwarding.
+- `cmd/codetty/tui_view.go` renders the TUI layout: split mode (grid),
+  focus-big mode (one large + side panels), fullscreen mode.
+- `cmd/codetty/tui_session.go` renders terminal content from vt10x state to
+  ANSI strings. Handles cursor rendering, reverse video, wide characters.
+- `terminal/session.go` defines the `Session` interface for PTY processes.
+  Platform-specific implementations in `session_unix.go` (creack/pty) and
+  `session_windows.go` (ConPTY).
+- `terminal/screen.go` provides `ScreenMirror` using vt10x for snapshot replay.
+- `vt10x/` is a local fork of `hinshun/vt10x` with wide character (CJK) support.
+  The key patch is in `parse.go`: cursor advances by `runewidth.RuneWidth(c)`
+  instead of always 1, with NUL continuation cells for wide characters.
+- `daemon/protocol.go` defines the binary frame protocol over Unix socket:
+  length-prefixed frames with a type byte, JSON for requests/responses, raw
+  bytes for input/output.
 
 ## Project-specific conventions
 
-- Use the helpers in `protocol` to encode/decode frames; do not duplicate type
-  byte handling in callers.
-- Route all hub-to-client WebSocket writes through `ConnWriter`. Gorilla
-  WebSocket does not support concurrent writes, and this project protects slow
-  clients by dropping messages when the write channel is full.
-- Preserve the two vt10x screen models when changing terminal behavior:
-  `ClientSession` is the hub display state, while CLI `ScreenMirror` is the
-  reconnect replay source. Resize handling must update the PTY and the relevant
-  vt10x state.
-- Keep platform-specific terminal process code behind `terminalSession`.
-  Connection logic should call `Read`, `Write`, `Resize`, `Wait`, and `Close`
-  on the interface rather than importing PTY packages directly.
-- Avoid `program.Send` from hub output handling while fullscreen is active; use
-  the fullscreen writer path guarded by `fsMu` to prevent blocking the Bubble Tea
-  event loop.
-- Keep user-controlled session order in `layoutState.order`. Synchronize it with
-  active hub sessions on connect/disconnect instead of sorting sessions ad hoc.
+- The TUI separates `m.selected` (which session is the big panel in focus-big
+  mode) from `m.inputFocus` (which session receives keyboard input). When
+  `inputFocus == -1`, input goes to `m.selected`.
+- Mouse clicks in split mode do NOT forward SGR mouse sequences to the PTY
+  (bash doesn't enable mouse reporting, causing garbage echo). Only scroll
+  wheel is forwarded. Fullscreen mode forwards all mouse events.
+- Terminal rendering uses the local vt10x fork which properly handles wide
+  characters. The `skipNext` logic in `renderTerminalANSI` skips NUL
+  continuation cells placed by vt10x after wide characters.
+- Cursor rendering: white block (`\x1b[30;107m`) when cursor is visible.
+  When a program hides the cursor (e.g., tmux), we respect `CursorVisible()`
+  and don't draw our own cursor. Reverse-video cells swap fg↔bg explicitly.
+- Keep platform-specific PTY code behind the `terminal.Session` interface.
 - When rendering terminal UI text, use `lipgloss.Width` or
   `charmbracelet/x/ansi` helpers for visual width and ANSI-aware truncation.
   Raw `len` is only safe for byte protocol or non-rendered data.
-- CLI local input intentionally filters terminal focus events (`CSI I`/`CSI O`)
-  before writing to the PTY while preserving other escape sequences.
-- Tests generally stay close to the affected package: protocol frame round trips
-  in `protocol`, WebSocket/session behavior in `hub` with `httptest`, Bubble Tea
-  model updates by constructing `tea.Msg` values directly, and CLI PTY-adjacent
-  helpers in `cmd/codetty-cli`.
+- Tests stay close to the affected package: daemon protocol/client tests in
+  `daemon/`, Bubble Tea model tests by constructing `tea.Msg` values directly
+  in `cmd/codetty/`, terminal helpers in `terminal/`.
+- The daemon auto-exits when all sessions have exited and no clients are
+  connected. This avoids orphaned background processes.
+
