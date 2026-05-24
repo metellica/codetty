@@ -172,10 +172,9 @@ func (m *tuiModel) gridView() string {
 			focused := idx == m.selected
 			if focused {
 				title = "▶ " + title
-				colViews = append(colViews, m.renderPanel(sess, title, panelW, panelH, true))
-			} else {
-				colViews = append(colViews, m.renderPanelWithColor(sess, title, panelW, panelH, false, idx, panelH >= tuiSidePanelContentThreshold))
 			}
+			// All grid panels use colored title; only non-selected panels dim content
+			colViews = append(colViews, m.renderPanelWithColor(sess, title, panelW, panelH, focused, idx, panelH >= tuiSidePanelContentThreshold))
 		}
 		rowViews = append(rowViews, lipgloss.JoinHorizontal(lipgloss.Top, colViews...))
 	}

@@ -23,7 +23,7 @@ func TestFocusBigView_RendersPrimaryPanelAndStatus(t *testing.T) {
 	m.order = []string{"alpha", "beta"}
 
 	view := xansi.Strip(m.focusBigView())
-	for _, want := range []string{"[1] alpha", "[2] beta", "hello alpha", "^A prefix", "[alpha] 1/2"} {
+	for _, want := range []string{"[1] alpha", "[2] beta", "hello alpha", "Ctrl+A prefix", "[alpha] 1/2"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("focusBigView() missing %q in:\n%s", want, view)
 		}
@@ -46,7 +46,7 @@ func TestGridView_RendersPanelsAndFocusedMarker(t *testing.T) {
 	m.order = []string{"alpha", "beta"}
 
 	view := xansi.Strip(m.gridView())
-	for _, want := range []string{"[1] alpha", "▶ [2] beta", "hello beta", "^A prefix", "[beta] 2/2"} {
+	for _, want := range []string{"[1] alpha", "▶ [2] beta", "hello beta", "Ctrl+A prefix", "[beta] 2/2"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("gridView() missing %q in:\n%s", want, view)
 		}
