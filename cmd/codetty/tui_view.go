@@ -247,12 +247,13 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 		lines, _, _ = sess.RenderANSI(innerW, innerH)
 	}
 
+	// Hide tmux status bar in side panels to reclaim space
+	if isSidePanel && sess.Type == "tmux" && len(lines) > 1 {
+		lines = lines[:len(lines)-1]
+	}
+
 	// Dim content for non-focused side panels
 	if isSidePanel && !focused {
-		// Hide tmux status bar (bottom line) for tmux sessions
-		if sess.Type == "tmux" && len(lines) > 1 {
-			lines = lines[:len(lines)-1]
-		}
 		for i, line := range lines {
 			lines[i] = dimLine(line)
 		}
