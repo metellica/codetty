@@ -155,9 +155,17 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 				m.mode = modeFullscreen
 				m.resizeSessionPTYs()
 			} else if m.mode == modeFullscreen {
-				// Fullscreen → pop back or fall back to focus-big
-				if !m.popMode() {
+				// Fullscreen → pop back, skipping any floating states
+				popped := false
+				for m.popMode() {
+					popped = true
+					if m.floatingIdx < 0 {
+						break
+					}
+				}
+				if !popped || m.floatingIdx >= 0 {
 					m.mode = modeFocusBig
+					m.floatingIdx = -1
 				}
 				m.resizeSessionPTYs()
 			} else if m.mode == modeFocusBig {
