@@ -134,6 +134,14 @@ func TestHandlePrefixKey_CreateSessionUsesDefaultShell(t *testing.T) {
 	m.width = 90
 	m.height = 33
 
+	// Press 'c' in prefix mode — should enter creating mode, not send frame yet
+	if cmd := m.handlePrefixKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}}); cmd != nil {
+		t.Fatal("create session should not return a command")
+	}
+	if !m.creating {
+		t.Fatal("creating = false, want true after prefix+c")
+	}
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -159,9 +167,8 @@ func TestHandlePrefixKey_CreateSessionUsesDefaultShell(t *testing.T) {
 		}
 	}()
 
-	if cmd := m.handlePrefixKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}}); cmd != nil {
-		t.Fatal("create session should not return a command")
-	}
+	// Press Enter — should send CreateSession frame
+	m.handleCreateKey(tea.KeyMsg{Type: tea.KeyEnter})
 
 	<-done
 }

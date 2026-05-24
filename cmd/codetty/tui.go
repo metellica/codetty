@@ -53,6 +53,10 @@ type tuiModel struct {
 	renaming   bool
 	renameText string
 
+	// Create session mode (name input)
+	creating   bool
+	createText string
+
 	// Text selection
 	sel textSelection
 
@@ -104,7 +108,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleKey(msg)
 
 	case tea.MouseMsg:
-		if m.renaming {
+		if m.renaming || m.creating {
 			return m, nil
 		}
 		return m, m.handleMouse(msg)

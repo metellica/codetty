@@ -223,6 +223,10 @@ func (m *tuiModel) statusBar() string {
 		prompt := fmt.Sprintf(" Rename: %s█  (Enter confirm, Esc cancel)", m.renameText)
 		return tuiStatusStyle.Width(m.width).Render(prompt)
 	}
+	if m.creating {
+		prompt := fmt.Sprintf(" New session name: %s█  (Enter confirm, Esc cancel)", m.createText)
+		return tuiStatusStyle.Width(m.width).Render(prompt)
+	}
 
 	sess := m.focusedSession()
 	var name string

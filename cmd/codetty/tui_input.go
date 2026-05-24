@@ -11,6 +11,10 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if m.renaming {
 		return m.handleRenameKey(msg)
 	}
+	// Create session mode: capture name input
+	if m.creating {
+		return m.handleCreateKey(msg)
+	}
 
 	if msg.Type == tea.KeyShiftTab {
 		m.selectDelta(1)
@@ -66,6 +70,29 @@ func (m *tuiModel) handleRenameKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+func (m *tuiModel) handleCreateKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.Type {
+	case tea.KeyEnter:
+		name := m.createText
+		m.creating = false
+		m.createText = ""
+		if m.conn != nil {
+			cols, rows := m.focusedContentSize()
+			m.conn.CreateSession(name, []string{terminal.DefaultShell()}, uint16(cols), uint16(rows))
+		}
+	case tea.KeyEscape:
+		m.creating = false
+		m.createText = ""
+	case tea.KeyBackspace:
+		if len(m.createText) > 0 {
+			m.createText = m.createText[:len(m.createText)-1]
+		}
+	case tea.KeyRunes:
+		m.createText += string(msg.Runes)
+	}
+	return nil
+}
+
 func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
 		switch msg.Runes[0] {
@@ -80,10 +107,8 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return nil
 		case 'c':
-			if m.conn != nil {
-				cols, rows := m.focusedContentSize()
-				m.conn.CreateSession("", []string{terminal.DefaultShell()}, uint16(cols), uint16(rows))
-			}
+			m.creating = true
+			m.createText = ""
 			return nil
 		case 'n':
 			m.selectDelta(1)
