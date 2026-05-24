@@ -416,14 +416,5 @@ func gridCols(n, width int) int {
 	if n <= 1 {
 		return 1
 	}
-	if width >= 160 && n >= 4 {
-		return 4
-	}
-	if width >= 120 && n >= 3 {
-		return 3
-	}
-	if n >= 2 {
-		return 2
-	}
-	return 1
+	return 2
 }
