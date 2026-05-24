@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hinshun/vt10x"
+	"codetty/vt10x"
 )
 
 const (

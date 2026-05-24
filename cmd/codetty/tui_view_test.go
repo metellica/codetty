@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/hinshun/vt10x"
+	"codetty/vt10x"
 )
 
 func TestFocusBigView_RendersPrimaryPanelAndStatus(t *testing.T) {

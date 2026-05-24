@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/hinshun/vt10x"
+	"codetty/vt10x"
 	"github.com/mattn/go-runewidth"
 )
 

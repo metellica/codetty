@@ -6,7 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hinshun/vt10x"
+	"codetty/vt10x"
+
 	"github.com/mattn/go-runewidth"
 )
 
