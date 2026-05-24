@@ -96,6 +96,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case daemonSessionEventMsg:
 		m.handleSessionEvent(msg.Event)
+		if msg.Event.Type == "created" {
+			m.resizeSessionPTYs()
+		}
 		return m, tea.ClearScreen
 
 	case daemonSubscribedMsg:
