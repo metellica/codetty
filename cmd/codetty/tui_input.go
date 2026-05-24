@@ -172,9 +172,6 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 
 func (m *tuiModel) handleGridKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.Type {
-	case tea.KeyEnter:
-		m.mode = modeFocusBig
-		return nil
 	case tea.KeyLeft:
 		m.selectDelta(-1)
 	case tea.KeyRight:
