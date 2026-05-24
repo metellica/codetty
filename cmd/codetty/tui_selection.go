@@ -92,15 +92,19 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			m.sel = textSelection{}
 		}
 		// Forward scroll wheel to PTY (with local coordinate translation)
+		// Only forward if the session has mouse reporting enabled.
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 			regions := m.panelRegions()
+			sessions := m.orderedSessions()
 			for _, r := range regions {
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
 				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
 					if r.sessionIdx == m.selected || m.mode == modeGrid {
-						sessions := m.orderedSessions()
-						m.forwardMouseToSession(sessions[r.sessionIdx].Name, msg, localX, localY)
+						sess := sessions[r.sessionIdx]
+						if sess.MouseEnabled() {
+							m.forwardMouseToSession(sess.Name, msg, localX, localY)
+						}
 					}
 					break
 				}
@@ -165,19 +169,20 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				return nil
 			}
 		} else if m.mode == modeFocusBig {
-			// Forward motion to big panel for mouse-aware programs (tmux drag etc.)
-			regions := m.panelRegions()
-			for _, r := range regions {
-				if r.sessionIdx != m.selected {
-					continue
+			// Forward motion to big panel only if mouse reporting is enabled.
+			if sess := m.selectedSession(); sess != nil && sess.MouseEnabled() {
+				regions := m.panelRegions()
+				for _, r := range regions {
+					if r.sessionIdx != m.selected {
+						continue
+					}
+					localX := msg.X - r.contentX
+					localY := msg.Y - r.contentY
+					if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
+						m.forwardMouseToSession(sess.Name, msg, localX, localY)
+					}
+					break
 				}
-				localX := msg.X - r.contentX
-				localY := msg.Y - r.contentY
-				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
-					sessions := m.orderedSessions()
-					m.forwardMouseToSession(sessions[r.sessionIdx].Name, msg, localX, localY)
-				}
-				break
 			}
 		}
 
@@ -192,11 +197,13 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			m.sel = textSelection{}
 		} else if m.sel.pending {
-			// Click without drag on big panel: forward to PTY for mouse-aware
-			// programs (tmux, vim, etc.).
+			// Click without drag on big panel: forward to PTY only if the
+			// session has mouse reporting enabled (tmux, vim, etc.).
 			m.sel.pending = false
 			if m.mode == modeFocusBig {
-				m.forwardClickToPTY(m.sel.startX, m.sel.startY)
+				if sess := m.selectedSession(); sess != nil && sess.MouseEnabled() {
+					m.forwardClickToPTY(m.sel.startX, m.sel.startY)
+				}
 			}
 			m.sel = textSelection{}
 		}
@@ -206,15 +213,15 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 // handleFullscreenMouse handles mouse in fullscreen mode (entire screen is one session).
 func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
-	// In fullscreen, forward all mouse events directly to PTY
-	// except for drag selection
+	sess := m.selectedSession()
+	if sess == nil {
+		return nil
+	}
+	mouseOn := sess.MouseEnabled()
+
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
-			sess := m.selectedSession()
-			if sess == nil {
-				return nil
-			}
 			m.sel = textSelection{
 				pending:  true,
 				session:  sess.Name,
@@ -228,7 +235,9 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			return nil
 		}
 		// Forward scroll and other buttons directly
-		m.forwardMouseToPTY(msg)
+		if mouseOn {
+			m.forwardMouseToPTY(msg)
+		}
 	case tea.MouseActionMotion:
 		if m.sel.pending {
 			if msg.X != m.sel.startX || msg.Y != m.sel.startY {
@@ -253,7 +262,7 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			m.sel.endX = x
 			m.sel.endY = y
-		} else {
+		} else if mouseOn {
 			m.forwardMouseToPTY(msg)
 		}
 	case tea.MouseActionRelease:
@@ -267,9 +276,10 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			m.sel = textSelection{}
 		} else if m.sel.pending {
-			// Click without drag: forward to PTY
 			m.sel.pending = false
-			m.forwardClickToPTY(m.sel.startX, m.sel.startY)
+			if mouseOn {
+				m.forwardClickToPTY(m.sel.startX, m.sel.startY)
+			}
 			m.sel = textSelection{}
 		} else {
 			m.forwardMouseToPTY(msg)
@@ -355,13 +365,15 @@ func (m *tuiModel) floatingContentRect() (int, int, int, int) {
 }
 
 // handleFloatingMouse handles mouse events when a floating window is open.
-// All events inside the floating area are forwarded to the session PTY.
+// Events inside the floating area are forwarded to the session PTY only if
+// the session has mouse reporting enabled. Click-outside always closes.
 func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 	sessions := m.orderedSessions()
 	if m.floatingIdx < 0 || m.floatingIdx >= len(sessions) {
 		return nil
 	}
 	sess := sessions[m.floatingIdx]
+	mouseOn := sess.MouseEnabled()
 
 	cx, cy, cw, ch := m.floatingContentRect()
 	localX := msg.X - cx
@@ -371,24 +383,26 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
-			if inside {
+			if inside && mouseOn {
 				m.forwardMouseToSession(sess.Name, msg, localX, localY)
 			}
 			return nil
 		}
 		if msg.Button == tea.MouseButtonLeft {
 			if inside {
-				m.forwardMouseToSession(sess.Name, msg, localX, localY)
+				if mouseOn {
+					m.forwardMouseToSession(sess.Name, msg, localX, localY)
+				}
 			} else {
 				m.closeFloating()
 			}
 		}
 	case tea.MouseActionMotion:
-		if inside {
+		if inside && mouseOn {
 			m.forwardMouseToSession(sess.Name, msg, localX, localY)
 		}
 	case tea.MouseActionRelease:
-		if inside {
+		if inside && mouseOn {
 			m.forwardMouseToSession(sess.Name, msg, localX, localY)
 		}
 	}

@@ -92,6 +92,15 @@ func (s *tuiSession) Resize(cols, rows uint16) {
 	s.term.Resize(int(cols), int(rows))
 }
 
+// MouseEnabled returns true if the session's terminal has mouse reporting on.
+func (s *tuiSession) MouseEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.term.Lock()
+	defer s.term.Unlock()
+	return s.term.Mode()&vt10x.ModeMouseMask != 0
+}
+
 func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 	cols, rows := term.Size()
 	cursor := term.Cursor()
