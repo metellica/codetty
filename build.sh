@@ -8,6 +8,8 @@ go build -o codetty ./cmd/codetty
 echo "Done: codetty"
 
 if [[ "${1:-}" == "install" ]]; then
+    echo "Stopping running codetty processes..."
+    pkill -f codetty || true
     echo "Installing to /usr/local/bin..."
     cp codetty /usr/local/bin/
     echo "Installed: /usr/local/bin/codetty"
