@@ -255,6 +255,15 @@ func (m *tuiModel) indexByName(name string) int {
 }
 
 func (m *tuiModel) removeSession(name string) {
+	// Find the ordered index of the removed session before removal
+	removedIdx := -1
+	for i, n := range m.order {
+		if n == name {
+			removedIdx = i
+			break
+		}
+	}
+
 	for i, s := range m.sessions {
 		if s.Name == name {
 			m.sessions = append(m.sessions[:i], m.sessions[i+1:]...)
@@ -267,10 +276,35 @@ func (m *tuiModel) removeSession(name string) {
 			break
 		}
 	}
+
 	orderedLen := len(m.orderedSessions())
+
+	// If the floating window was showing the removed session, close it
+	if m.floatingIdx >= 0 {
+		if m.floatingIdx == removedIdx {
+			m.floatingIdx = -1
+			m.modeStack = nil
+		} else if m.floatingIdx > removedIdx {
+			m.floatingIdx--
+		}
+	}
+
+	// If in fullscreen and the displayed session was removed, fall back
+	if m.mode == modeFullscreen && m.selected == removedIdx {
+		m.mode = modeFocusBig
+		m.modeStack = nil
+	}
+
+	// Adjust selected index
+	if removedIdx >= 0 && m.selected > removedIdx {
+		m.selected--
+	}
 	if m.selected >= orderedLen {
 		m.selected = max(0, orderedLen-1)
 	}
+
+	// Reset inputFocus
+	m.inputFocus = -1
 }
 
 func (m *tuiModel) orderedSessions() []*tuiSession {
