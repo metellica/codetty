@@ -8,14 +8,22 @@ import (
 	"codetty/terminal"
 )
 
+// SessionType identifies the kind of session.
+const (
+	SessionTypeNative = "native"
+	SessionTypeTmux   = "tmux"
+)
+
 // DaemonSession represents a managed PTY session within the daemon.
 type DaemonSession struct {
-	Name      string
-	Command   []string
-	Terminal  terminal.Session
-	Screen    *terminal.ScreenMirror
-	CreatedAt time.Time
-	onOutput  func(session string, data []byte)
+	Name       string
+	Command    []string
+	Type       string // SessionTypeNative or SessionTypeTmux
+	TmuxTarget string // original tmux session name (only when Type==SessionTypeTmux)
+	Terminal   terminal.Session
+	Screen     *terminal.ScreenMirror
+	CreatedAt  time.Time
+	onOutput   func(session string, data []byte)
 
 	mu       sync.Mutex
 	clients  []*Client
@@ -33,6 +41,7 @@ func newDaemonSession(name string, command []string, cols, rows uint16, onOutput
 	s := &DaemonSession{
 		Name:      name,
 		Command:   command,
+		Type:      SessionTypeNative,
 		Terminal:  term,
 		Screen:    terminal.NewScreenMirror(cols, rows),
 		CreatedAt: time.Now(),
@@ -138,6 +147,7 @@ func (s *DaemonSession) Info() SessionInfo {
 	return SessionInfo{
 		Name:      s.Name,
 		Command:   cmd,
+		Type:      s.Type,
 		Attached:  s.clientCount(),
 		CreatedAt: s.CreatedAt.Format(time.RFC3339),
 	}

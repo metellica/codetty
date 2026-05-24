@@ -241,3 +241,62 @@ func TestTUIKeyToBytes_CommonMappings(t *testing.T) {
 		})
 	}
 }
+
+func TestHandlePrefixKey_RefreshTmux(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	m := newTUIModel(&daemonConn{conn: client}, "", nil)
+	m.sessions = []*tuiSession{newTUISession("sess", "bash", 80, 24)}
+	m.order = []string{"sess"}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ft, _, err := daemon.ReadFrame(server)
+		if err != nil {
+			t.Errorf("ReadFrame: %v", err)
+			return
+		}
+		if ft != daemon.FrameRefreshTmux {
+			t.Errorf("frame type = %v, want %v", ft, daemon.FrameRefreshTmux)
+		}
+	}()
+
+	// Press Ctrl+A T — should send FrameRefreshTmux
+	m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlA})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'T'}})
+
+	<-done
+}
+
+func TestHandleSessionEvent_TmuxTypePreserved(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 100
+	m.height = 30
+
+	m.handleSessionEvent(daemon.SessionEvent{
+		Type:    "created",
+		Session: "[tmux] myserver",
+		Cols:    80,
+		Rows:    24,
+		Info: daemon.SessionInfo{
+			Command:   "tmux",
+			Type:      "tmux",
+			CreatedAt: "2025-01-01T00:00:00Z",
+		},
+	})
+
+	sess := m.sessionByName("[tmux] myserver")
+	if sess == nil {
+		t.Fatal("tmux session not found")
+	}
+	if sess.Type != "tmux" {
+		t.Fatalf("session Type = %q, want %q", sess.Type, "tmux")
+	}
+	if sess.Command != "tmux" {
+		t.Fatalf("session Command = %q, want %q", sess.Command, "tmux")
+	}
+}
+

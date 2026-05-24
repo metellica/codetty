@@ -24,6 +24,7 @@ TUI Keys (Ctrl+A prefix):
   x       Kill focused session
   c       Create new session
   r       Rename focused session
+  T       Refresh tmux sessions
   n/p     Next/previous session
   f       Toggle fullscreen (no borders/status)
   g       Toggle grid view

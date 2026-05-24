@@ -117,6 +117,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.handleKillServer(conn)
 	case ActionSubscribeAll:
 		s.handleSubscribeAll(conn, req)
+	case ActionRefreshTmux:
+		s.handleRefreshTmux(conn)
 	default:
 		s.sendError(conn, fmt.Sprintf("unknown action: %s", req.Action))
 	}
@@ -434,3 +436,60 @@ func (s *Server) SessionNames() []string {
 	}
 	return names
 }
+
+// DiscoverAndAttachTmux discovers tmux sessions and creates DaemonSessions for them.
+// It skips sessions that are already managed. Returns the number of newly attached sessions.
+func (s *Server) DiscoverAndAttachTmux() int {
+	tmuxSessions, err := DiscoverTmuxSessions()
+	if err != nil || len(tmuxSessions) == 0 {
+		return 0
+	}
+
+	s.mu.Lock()
+	// Build set of already-managed tmux targets
+	managed := make(map[string]bool)
+	for _, sess := range s.sessions {
+		if sess.Type == SessionTypeTmux {
+			managed[sess.TmuxTarget] = true
+		}
+	}
+	s.mu.Unlock()
+
+	count := 0
+	for _, tmuxName := range tmuxSessions {
+		if managed[tmuxName] {
+			continue
+		}
+
+		name := "[tmux] " + tmuxName
+		cmd := []string{"tmux", "attach-session", "-t", tmuxName}
+
+		sess, err := newDaemonSession(name, cmd, 80, 24, s.broadcastToSubscribers)
+		if err != nil {
+			log.Printf("tmux attach %q failed: %v", tmuxName, err)
+			continue
+		}
+		sess.Type = SessionTypeTmux
+		sess.TmuxTarget = tmuxName
+
+		s.mu.Lock()
+		if _, exists := s.sessions[name]; exists {
+			s.mu.Unlock()
+			sess.Kill()
+			continue
+		}
+		s.sessions[name] = sess
+		s.mu.Unlock()
+
+		s.notifySubscribers(SessionEvent{Type: "created", Session: name, Info: sess.Info()})
+		go s.watchSession(sess)
+		count++
+	}
+	return count
+}
+
+func (s *Server) handleRefreshTmux(conn net.Conn) {
+	n := s.DiscoverAndAttachTmux()
+	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true, Session: fmt.Sprintf("%d new tmux sessions", n)}))
+}
+

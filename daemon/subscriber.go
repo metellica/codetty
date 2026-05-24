@@ -123,6 +123,9 @@ func (s *Subscriber) Run(srv *Server) {
 				srv.renameSessionForSubscriber(req)
 			}
 
+		case FrameRefreshTmux:
+			srv.DiscoverAndAttachTmux()
+
 		case FrameDetach:
 			return
 		}

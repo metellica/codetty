@@ -147,6 +147,7 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 			}
 			sess = newTUISession(evt.Session, evt.Info.Command, cols, rows)
 			sess.CreatedAt = evt.Info.CreatedAt
+			sess.Type = evt.Info.Type
 			m.sessions = append(m.sessions, sess)
 			m.order = append(m.order, evt.Session)
 		}

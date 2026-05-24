@@ -152,6 +152,11 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 				m.renameText = sess.Name
 			}
 			return nil
+		case 'T':
+			if m.conn != nil {
+				m.conn.RefreshTmux()
+			}
+			return nil
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			idx := int(msg.Runes[0]-'0') - 1
 			if idx < len(m.orderedSessions()) {

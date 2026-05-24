@@ -25,6 +25,7 @@ const (
 	FrameCreateSession FrameType = 0x13 // C→S: JSON create session request
 	FrameKillSession   FrameType = 0x14 // C→S: JSON kill session request
 	FrameRenameSession FrameType = 0x15 // C→S: JSON rename session request
+	FrameRefreshTmux   FrameType = 0x16 // C→S: request tmux session refresh (no payload)
 )
 
 // Action identifies the requested operation in a Request frame.
@@ -37,6 +38,7 @@ const (
 	ActionKill         Action = "kill"
 	ActionKillServer   Action = "kill_server"
 	ActionSubscribeAll Action = "subscribe_all"
+	ActionRefreshTmux  Action = "refresh_tmux"
 )
 
 // Request is the JSON payload for FrameRequest.
@@ -61,6 +63,7 @@ type Response struct {
 type SessionInfo struct {
 	Name      string `json:"name"`
 	Command   string `json:"command"`
+	Type      string `json:"type,omitempty"`
 	Attached  int    `json:"attached"`
 	CreatedAt string `json:"created_at"`
 }

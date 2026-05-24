@@ -125,3 +125,8 @@ func (dc *daemonConn) Detach() {
 	daemon.WriteFrame(dc.conn, daemon.FrameDetach, nil)
 	dc.conn.Close()
 }
+
+// RefreshTmux requests the daemon to discover and attach new tmux sessions.
+func (dc *daemonConn) RefreshTmux() {
+	daemon.WriteFrame(dc.conn, daemon.FrameRefreshTmux, nil)
+}
