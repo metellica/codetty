@@ -351,8 +351,12 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			return nil
 		}
-		if msg.Button == tea.MouseButtonLeft && inside {
-			m.forwardMouseToSession(sess.Name, msg, localX, localY)
+		if msg.Button == tea.MouseButtonLeft {
+			if inside {
+				m.forwardMouseToSession(sess.Name, msg, localX, localY)
+			} else {
+				m.closeFloating()
+			}
 		}
 	case tea.MouseActionMotion:
 		if inside {
