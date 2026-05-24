@@ -293,6 +293,27 @@ func (m *tuiModel) resizeSessionPTYs() {
 	}
 }
 
+// openFloating opens the floating window for the given session index and resizes its PTY.
+func (m *tuiModel) openFloating(idx int) {
+	m.floatingIdx = idx
+	m.inputFocus = -1
+	// Resize the floating session to match the floating window content area
+	if m.conn != nil && idx >= 0 && idx < len(m.sessions) {
+		_, _, cw, ch := m.floatingContentRect()
+		if cw > 0 && ch > 0 {
+			sess := m.orderedSessions()[idx]
+			sess.Resize(uint16(cw), uint16(ch))
+			m.conn.SendResizeSession(sess.Name, uint16(cw), uint16(ch))
+		}
+	}
+}
+
+// closeFloating closes the floating window and restores the session size.
+func (m *tuiModel) closeFloating() {
+	m.floatingIdx = -1
+	m.resizeSessionPTYs()
+}
+
 // focusedContentSize returns the inner content dimensions for the focused session.
 func (m *tuiModel) focusedContentSize() (int, int) {
 	if m.mode == modeFullscreen {

@@ -98,6 +98,13 @@ func (dc *daemonConn) SendResize(cols, rows uint16) {
 	}))
 }
 
+// SendResizeSession sends resize to a specific session by name.
+func (dc *daemonConn) SendResizeSession(name string, cols, rows uint16) {
+	daemon.WriteFrame(dc.conn, daemon.FrameResize, daemon.MarshalJSON(daemon.ResizePayload{
+		Cols: cols, Rows: rows, Name: name,
+	}))
+}
+
 // CreateSession requests the daemon to create a new session.
 func (dc *daemonConn) CreateSession(name string, command []string, cols, rows uint16) {
 	daemon.WriteFrame(dc.conn, daemon.FrameCreateSession, daemon.MarshalJSON(daemon.CreateSessionRequest{

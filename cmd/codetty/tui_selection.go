@@ -37,12 +37,9 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return m.handleFullscreenMouse(msg)
 	}
 
-	// If floating window is open, clicking outside dismisses it
+	// If floating window is open, forward mouse events to the floating session
 	if m.floatingIdx >= 0 {
-		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
-			m.floatingIdx = -1
-		}
-		return nil
+		return m.handleFloatingMouse(msg)
 	}
 
 	switch msg.Action {
@@ -67,8 +64,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
 					if r.sessionIdx != m.selected {
 						// Clicking a side panel: open floating window
-						m.floatingIdx = r.sessionIdx
-						m.inputFocus = -1
+						m.openFloating(r.sessionIdx)
 						m.sel = textSelection{}
 						return nil
 					}
@@ -91,8 +87,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			// Click on border/title area: open floating if side panel
 			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
 				if idx != m.selected {
-					m.floatingIdx = idx
-					m.inputFocus = -1
+					m.openFloating(idx)
 				} else {
 					m.inputFocus = -1
 				}
@@ -313,6 +308,103 @@ func (m *tuiModel) forwardClickToPTY(localX, localY int) {
 	press := fmt.Sprintf("\x1b[<0;%d;%dM", x, y)
 	release := fmt.Sprintf("\x1b[<0;%d;%dm", x, y)
 	m.conn.SendInput(sess.Name, []byte(press+release))
+}
+
+// floatingContentRect returns the content area (x, y, w, h) of the floating window.
+func (m *tuiModel) floatingContentRect() (int, int, int, int) {
+	fw := m.width * 8 / 10
+	fh := m.height * 8 / 10
+	if fw < 40 {
+		fw = min(40, m.width)
+	}
+	if fh < 10 {
+		fh = min(10, m.height)
+	}
+	// Panel has 1-cell border on each side, 1 title line at top
+	contentW := fw - 2
+	contentH := fh - 3
+	// Centered: offset = (total - panel) / 2, then +1 for border
+	x := (m.width-fw)/2 + 1
+	y := (m.height-fh)/2 + 2 // +1 border + 1 title
+	return x, y, contentW, contentH
+}
+
+// handleFloatingMouse handles mouse events when a floating window is open.
+// All events inside the floating area are forwarded to the session PTY.
+func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
+	sessions := m.orderedSessions()
+	if m.floatingIdx < 0 || m.floatingIdx >= len(sessions) {
+		return nil
+	}
+	sess := sessions[m.floatingIdx]
+
+	cx, cy, cw, ch := m.floatingContentRect()
+	localX := msg.X - cx
+	localY := msg.Y - cy
+	inside := localX >= 0 && localX < cw && localY >= 0 && localY < ch
+
+	switch msg.Action {
+	case tea.MouseActionPress:
+		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+			if inside {
+				m.forwardMouseToSession(sess.Name, msg, localX, localY)
+			}
+			return nil
+		}
+		if msg.Button == tea.MouseButtonLeft && inside {
+			m.forwardMouseToSession(sess.Name, msg, localX, localY)
+		}
+	case tea.MouseActionMotion:
+		if inside {
+			m.forwardMouseToSession(sess.Name, msg, localX, localY)
+		}
+	case tea.MouseActionRelease:
+		if inside {
+			m.forwardMouseToSession(sess.Name, msg, localX, localY)
+		}
+	}
+	return nil
+}
+
+// forwardMouseToSession sends a mouse event as SGR sequence to a named session.
+func (m *tuiModel) forwardMouseToSession(name string, msg tea.MouseMsg, localX, localY int) {
+	if m.conn == nil {
+		return
+	}
+	var btn int
+	switch msg.Button {
+	case tea.MouseButtonLeft:
+		btn = 0
+	case tea.MouseButtonMiddle:
+		btn = 1
+	case tea.MouseButtonRight:
+		btn = 2
+	case tea.MouseButtonWheelUp:
+		btn = 64
+	case tea.MouseButtonWheelDown:
+		btn = 65
+	default:
+		btn = 3
+	}
+	if msg.Shift {
+		btn |= 4
+	}
+	if msg.Alt {
+		btn |= 8
+	}
+	if msg.Ctrl {
+		btn |= 16
+	}
+	if msg.Action == tea.MouseActionMotion {
+		btn |= 32
+	}
+	x, y := localX+1, localY+1
+	var suffix byte = 'M'
+	if msg.Action == tea.MouseActionRelease {
+		suffix = 'm'
+	}
+	seq := fmt.Sprintf("\x1b[<%d;%d;%d%c", btn, x, y, suffix)
+	m.conn.SendInput(name, []byte(seq))
 }
 
 // panelRegions computes the on-screen content rectangles for all visible sessions.

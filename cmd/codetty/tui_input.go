@@ -19,7 +19,7 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	// Floating window mode: Esc closes, Ctrl+A prefix still works, all else forwards
 	if m.floatingIdx >= 0 {
 		if msg.Type == tea.KeyEscape {
-			m.floatingIdx = -1
+			m.closeFloating()
 			return nil
 		}
 		if msg.Type == tea.KeyCtrlA {

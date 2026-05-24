@@ -102,7 +102,13 @@ func (s *Subscriber) Run(srv *Server) {
 		case FrameResize:
 			var rp ResizePayload
 			if json.Unmarshal(payload, &rp) == nil {
-				srv.resizeAllSessions(rp.Cols, rp.Rows)
+				if rp.Name != "" {
+					if sess := srv.SessionByName(rp.Name); sess != nil {
+						sess.Resize(rp.Cols, rp.Rows)
+					}
+				} else {
+					srv.resizeAllSessions(rp.Cols, rp.Rows)
+				}
 			}
 
 		case FrameCreateSession:

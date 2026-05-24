@@ -72,6 +72,7 @@ type SessionInfo struct {
 type ResizePayload struct {
 	Cols uint16 `json:"cols"`
 	Rows uint16 `json:"rows"`
+	Name string `json:"name,omitempty"` // if set, resize only this session
 }
 
 // SwitchPayload for FrameSessionSwitch.
