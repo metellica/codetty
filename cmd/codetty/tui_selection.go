@@ -91,9 +91,20 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			m.sel = textSelection{}
 		}
-		// Forward scroll wheel to PTY
+		// Forward scroll wheel to PTY (with local coordinate translation)
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
-			m.forwardMouseToPTY(msg)
+			regions := m.panelRegions()
+			for _, r := range regions {
+				localX := msg.X - r.contentX
+				localY := msg.Y - r.contentY
+				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
+					if r.sessionIdx == m.selected || m.mode == modeGrid {
+						sessions := m.orderedSessions()
+						m.forwardMouseToSession(sessions[r.sessionIdx].Name, msg, localX, localY)
+					}
+					break
+				}
+			}
 		}
 
 	case tea.MouseActionMotion:
@@ -153,6 +164,21 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				m.sel.endY = localY
 				return nil
 			}
+		} else if m.mode == modeFocusBig {
+			// Forward motion to big panel for mouse-aware programs (tmux drag etc.)
+			regions := m.panelRegions()
+			for _, r := range regions {
+				if r.sessionIdx != m.selected {
+					continue
+				}
+				localX := msg.X - r.contentX
+				localY := msg.Y - r.contentY
+				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
+					sessions := m.orderedSessions()
+					m.forwardMouseToSession(sessions[r.sessionIdx].Name, msg, localX, localY)
+				}
+				break
+			}
 		}
 
 	case tea.MouseActionRelease:
@@ -166,10 +192,12 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			m.sel = textSelection{}
 		} else if m.sel.pending {
-			// Click without drag: just focus the panel (already done on press).
-			// Don't forward mouse to PTY in split mode — programs like bash
-			// don't enable mouse reporting and would echo garbage.
+			// Click without drag on big panel: forward to PTY for mouse-aware
+			// programs (tmux, vim, etc.).
 			m.sel.pending = false
+			if m.mode == modeFocusBig {
+				m.forwardClickToPTY(m.sel.startX, m.sel.startY)
+			}
 			m.sel = textSelection{}
 		}
 	}
