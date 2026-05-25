@@ -151,19 +151,24 @@ func (m *tuiModel) applyTmuxPickerSelection() {
 func (m *tuiModel) renderTmuxPicker(base string) string {
 	p := &m.tmuxPicker
 
-	// Picker dimensions — adaptive to content
+	// Picker dimensions — generous sizing
 	longestName := 0
 	for _, item := range p.items {
 		if len(item.Name) > longestName {
 			longestName = len(item.Name)
 		}
 	}
-	innerW := longestName + 10 // cursor + checkbox + padding
-	if innerW < 36 {
-		innerW = 36
+	innerW := longestName + 16 // cursor + checkbox + extra breathing room
+	if innerW < 48 {
+		innerW = 48
 	}
-	if innerW > m.width-6 {
-		innerW = m.width - 6
+	// Use up to 60% of terminal width
+	maxW := m.width * 6 / 10
+	if maxW < 48 {
+		maxW = m.width - 4
+	}
+	if innerW > maxW {
+		innerW = maxW
 	}
 
 	// Styles
@@ -216,6 +221,7 @@ func (m *tuiModel) renderTmuxPicker(base string) string {
 	}
 	lines = append(lines, subtitleStyle.Render(
 		fmt.Sprintf("%d/%d selected", selected, len(p.items))))
+	lines = append(lines, "")
 
 	// Separator
 	lines = append(lines, separatorStyle.Render(strings.Repeat("─", innerW)))
@@ -244,6 +250,7 @@ func (m *tuiModel) renderTmuxPicker(base string) string {
 		}
 	}
 
+	lines = append(lines, "")
 	// Separator
 	lines = append(lines, separatorStyle.Render(strings.Repeat("─", innerW)))
 
@@ -255,6 +262,7 @@ func (m *tuiModel) renderTmuxPicker(base string) string {
 	help2 := helpKeyStyle.Render("enter") + helpDescStyle.Render(" confirm  ") +
 		helpKeyStyle.Render("esc") + helpDescStyle.Render(" cancel")
 
+	lines = append(lines, "")
 	lines = append(lines, " "+help1)
 	lines = append(lines, " "+help2)
 
@@ -263,8 +271,8 @@ func (m *tuiModel) renderTmuxPicker(base string) string {
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("86")).
-		Padding(1, 2).
-		Width(innerW + 6)
+		Padding(1, 3).
+		Width(innerW + 10)
 
 	box := boxStyle.Render(content)
 
