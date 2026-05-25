@@ -391,20 +391,17 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 		if msg.Button == tea.MouseButtonLeft {
 			if inside {
-				if mouseOn {
-					m.forwardMouseToSession(sess.Name, msg, localX, localY)
-				} else {
-					// Start text selection
-					m.sel = textSelection{
-						pending: true,
-						session: sess.Name,
-						startX:  localX,
-						startY:  localY,
-						endX:    localX,
-						endY:    localY,
-						screenX: msg.X,
-						screenY: msg.Y,
-					}
+				// Always start pending selection; on release we decide
+				// whether to copy text or forward click to PTY.
+				m.sel = textSelection{
+					pending: true,
+					session: sess.Name,
+					startX:  localX,
+					startY:  localY,
+					endX:    localX,
+					endY:    localY,
+					screenX: msg.X,
+					screenY: msg.Y,
 				}
 			} else {
 				m.closeFloating()
