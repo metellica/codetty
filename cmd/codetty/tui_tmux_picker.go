@@ -151,47 +151,120 @@ func (m *tuiModel) applyTmuxPickerSelection() {
 func (m *tuiModel) renderTmuxPicker(base string) string {
 	p := &m.tmuxPicker
 
-	// Picker dimensions
-	maxW := 50
-	if m.width < maxW+4 {
-		maxW = m.width - 4
+	// Picker dimensions — adaptive to content
+	longestName := 0
+	for _, item := range p.items {
+		if len(item.Name) > longestName {
+			longestName = len(item.Name)
+		}
 	}
-	if maxW < 20 {
-		maxW = 20
+	innerW := longestName + 10 // cursor + checkbox + padding
+	if innerW < 36 {
+		innerW = 36
+	}
+	if innerW > m.width-6 {
+		innerW = m.width - 6
 	}
 
+	// Styles
+	titleStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("86")).
+		Padding(0, 1)
+
+	subtitleStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("243")).
+		Padding(0, 1)
+
+	itemStyle := lipgloss.NewStyle().
+		Padding(0, 1)
+
+	cursorItemStyle := lipgloss.NewStyle().
+		Background(lipgloss.Color("237")).
+		Foreground(lipgloss.Color("255")).
+		Bold(true).
+		Padding(0, 1).
+		Width(innerW)
+
+	checkOnStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86"))
+
+	checkOffStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("241"))
+
+	separatorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("238"))
+
+	helpKeyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("86")).Bold(true)
+
+	helpDescStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245"))
+
+	// Build content
 	var lines []string
-	lines = append(lines, " Tmux Sessions")
-	lines = append(lines, " "+strings.Repeat("─", maxW-3))
 
-	for i, item := range p.items {
-		check := "○"
+	// Title
+	lines = append(lines, titleStyle.Render("⬡ Tmux Sessions"))
+
+	// Subtitle with count
+	selected := 0
+	for _, item := range p.items {
 		if item.Selected {
-			check = "●"
+			selected++
 		}
-		cursor := "  "
+	}
+	lines = append(lines, subtitleStyle.Render(
+		fmt.Sprintf("%d/%d selected", selected, len(p.items))))
+
+	// Separator
+	lines = append(lines, separatorStyle.Render(strings.Repeat("─", innerW)))
+
+	// Items
+	for i, item := range p.items {
+		var check string
+		if item.Selected {
+			check = checkOnStyle.Render("◉")
+		} else {
+			check = checkOffStyle.Render("○")
+		}
+
+		name := item.Name
+		maxName := innerW - 8
+		if len(name) > maxName {
+			name = name[:maxName-1] + "…"
+		}
+
+		row := fmt.Sprintf("  %s  %s", check, name)
 		if i == p.cursor {
-			cursor = "▸ "
+			row = fmt.Sprintf("▸ %s  %s", check, name)
+			lines = append(lines, cursorItemStyle.Render(row))
+		} else {
+			lines = append(lines, itemStyle.Render(row))
 		}
-		line := fmt.Sprintf(" %s%s %s", cursor, check, item.Name)
-		// Truncate if too long
-		if len(line) > maxW-1 {
-			line = line[:maxW-4] + "..."
-		}
-		lines = append(lines, line)
 	}
 
-	lines = append(lines, " "+strings.Repeat("─", maxW-3))
-	lines = append(lines, " ↑↓/jk navigate  Space toggle  a all  n none")
-	lines = append(lines, " Enter confirm   Esc cancel")
+	// Separator
+	lines = append(lines, separatorStyle.Render(strings.Repeat("─", innerW)))
+
+	// Help text
+	help1 := helpKeyStyle.Render("↑↓") + helpDescStyle.Render(" nav  ") +
+		helpKeyStyle.Render("space") + helpDescStyle.Render(" toggle  ") +
+		helpKeyStyle.Render("a") + helpDescStyle.Render("/") +
+		helpKeyStyle.Render("n") + helpDescStyle.Render(" all/none")
+	help2 := helpKeyStyle.Render("enter") + helpDescStyle.Render(" confirm  ") +
+		helpKeyStyle.Render("esc") + helpDescStyle.Render(" cancel")
+
+	lines = append(lines, " "+help1)
+	lines = append(lines, " "+help2)
 
 	content := strings.Join(lines, "\n")
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("86")).
-		Padding(0, 1).
-		Width(maxW)
+		Padding(1, 2).
+		Width(innerW + 6)
 
 	box := boxStyle.Render(content)
 
