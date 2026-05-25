@@ -134,12 +134,21 @@ func TestHandlePrefixKey_CreateSessionUsesDefaultShell(t *testing.T) {
 	m.width = 90
 	m.height = 33
 
-	// Press 'c' in prefix mode — should enter creating mode, not send frame yet
+	// Press 'c' in prefix mode
 	if cmd := m.handlePrefixKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}}); cmd != nil {
 		t.Fatal("create session should not return a command")
 	}
+
+	// If tmux is available, we enter chooser mode first; select 'c' for codetty
+	if daemon.IsTmuxAvailable() {
+		if !m.createChooser {
+			t.Fatal("createChooser = false, want true after prefix+c (tmux available)")
+		}
+		m.handleCreateChooserKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	}
+
 	if !m.creating {
-		t.Fatal("creating = false, want true after prefix+c")
+		t.Fatal("creating = false, want true after type selection")
 	}
 
 	done := make(chan struct{})
@@ -165,12 +174,85 @@ func TestHandlePrefixKey_CreateSessionUsesDefaultShell(t *testing.T) {
 		if req.Cols != 90 || req.Rows != 33 {
 			t.Errorf("size = %dx%d, want 90x33", req.Cols, req.Rows)
 		}
+		if req.Tmux {
+			t.Errorf("tmux = true, want false for codetty session")
+		}
 	}()
 
 	// Press Enter — should send CreateSession frame
 	m.handleCreateKey(tea.KeyMsg{Type: tea.KeyEnter})
 
 	<-done
+}
+
+func TestHandlePrefixKey_CreateTmuxSession(t *testing.T) {
+	if !daemon.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
+
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	m := newTUIModel(&daemonConn{conn: client}, "", nil)
+	m.width = 90
+	m.height = 33
+
+	// Press 'c' in prefix mode — enters chooser
+	m.handlePrefixKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if !m.createChooser {
+		t.Fatal("createChooser = false, want true")
+	}
+
+	// Select 't' for tmux
+	m.handleCreateChooserKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	if !m.creating || !m.createTmux {
+		t.Fatalf("creating=%v createTmux=%v, want both true", m.creating, m.createTmux)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ft, payload, err := daemon.ReadFrame(server)
+		if err != nil {
+			t.Errorf("ReadFrame: %v", err)
+			return
+		}
+		if ft != daemon.FrameCreateSession {
+			t.Errorf("frame type = %v, want %v", ft, daemon.FrameCreateSession)
+			return
+		}
+		var req daemon.CreateSessionRequest
+		if err := json.Unmarshal(payload, &req); err != nil {
+			t.Errorf("json.Unmarshal: %v", err)
+			return
+		}
+		if !req.Tmux {
+			t.Errorf("tmux = false, want true")
+		}
+		if req.Name != "mysess" {
+			t.Errorf("name = %q, want %q", req.Name, "mysess")
+		}
+	}()
+
+	// Type name and press Enter
+	m.handleCreateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("mysess")})
+	m.handleCreateKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	<-done
+}
+
+func TestHandleCreateChooserKey_EscCancels(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.createChooser = true
+
+	m.handleCreateChooserKey(tea.KeyMsg{Type: tea.KeyEscape})
+	if m.createChooser {
+		t.Fatal("createChooser should be false after Esc")
+	}
+	if m.creating {
+		t.Fatal("creating should be false after Esc")
+	}
 }
 
 func TestUpdate_SubscribedAutoCreatesSessionWhenEmpty(t *testing.T) {

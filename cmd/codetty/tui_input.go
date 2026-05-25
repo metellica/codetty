@@ -1,6 +1,7 @@
 package main
 
 import (
+	"codetty/daemon"
 	"codetty/terminal"
 	"fmt"
 
@@ -11,6 +12,10 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	// Rename mode: capture text input
 	if m.renaming {
 		return m.handleRenameKey(msg)
+	}
+	// Create type chooser mode
+	if m.createChooser {
+		return m.handleCreateChooserKey(msg)
 	}
 	// Create session mode: capture name input
 	if m.creating {
@@ -111,6 +116,28 @@ func (m *tuiModel) handleRenameKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+func (m *tuiModel) handleCreateChooserKey(msg tea.KeyMsg) tea.Cmd {
+	if msg.Type == tea.KeyEscape {
+		m.createChooser = false
+		return nil
+	}
+	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
+		switch msg.Runes[0] {
+		case 'c':
+			m.createChooser = false
+			m.creating = true
+			m.createText = ""
+			m.createTmux = false
+		case 't':
+			m.createChooser = false
+			m.creating = true
+			m.createText = ""
+			m.createTmux = true
+		}
+	}
+	return nil
+}
+
 func (m *tuiModel) handleCreateKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.Type {
 	case tea.KeyEnter:
@@ -119,17 +146,25 @@ func (m *tuiModel) handleCreateKey(msg tea.KeyMsg) tea.Cmd {
 		m.createText = ""
 		if m.conn != nil {
 			cols, rows := m.focusedContentSize()
-			m.conn.CreateSession(name, []string{terminal.DefaultShell()}, uint16(cols), uint16(rows))
+			if m.createTmux {
+				m.conn.CreateTmuxSession(name, uint16(cols), uint16(rows))
+			} else {
+				m.conn.CreateSession(name, []string{terminal.DefaultShell()}, uint16(cols), uint16(rows))
+			}
 		}
+		m.createTmux = false
 	case tea.KeyEscape:
 		m.creating = false
 		m.createText = ""
+		m.createTmux = false
 	case tea.KeyBackspace:
 		if len(m.createText) > 0 {
 			m.createText = m.createText[:len(m.createText)-1]
 		}
 	case tea.KeyRunes:
 		m.createText += string(msg.Runes)
+	case tea.KeySpace:
+		m.createText += " "
 	}
 	return nil
 }
@@ -148,8 +183,13 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return nil
 		case 'c':
-			m.creating = true
-			m.createText = ""
+			if daemon.IsTmuxAvailable() {
+				m.createChooser = true
+			} else {
+				m.creating = true
+				m.createText = ""
+				m.createTmux = false
+			}
 			return nil
 		case 'n':
 			m.selectDelta(1)

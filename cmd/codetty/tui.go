@@ -60,9 +60,11 @@ type tuiModel struct {
 	renaming   bool
 	renameText string
 
-	// Create session mode (name input)
-	creating   bool
-	createText string
+	// Create session mode (type selection + name input)
+	creating       bool
+	createText     string
+	createChooser  bool // true when showing [c]odetty / [t]mux type chooser
+	createTmux     bool // true when creating a tmux session (after chooser)
 
 	// Text selection
 	sel textSelection
@@ -150,7 +152,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleKey(msg)
 
 	case tea.MouseMsg:
-		if m.renaming || m.creating {
+		if m.renaming || m.creating || m.createChooser {
 			return m, nil
 		}
 		return m, m.handleMouse(msg)

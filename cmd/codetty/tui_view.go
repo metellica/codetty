@@ -287,8 +287,16 @@ func (m *tuiModel) statusBar() string {
 		prompt := fmt.Sprintf(" Rename: %s█  (Enter confirm, Esc cancel)", m.renameText)
 		return tuiStatusStyle.Width(m.width).Render(prompt)
 	}
+	if m.createChooser {
+		prompt := " New session: [c]odetty  [t]mux  (Esc cancel)"
+		return tuiStatusStyle.Width(m.width).Render(prompt)
+	}
 	if m.creating {
-		prompt := fmt.Sprintf(" New session name: %s█  (Enter confirm, Esc cancel)", m.createText)
+		kind := "session"
+		if m.createTmux {
+			kind = "tmux session"
+		}
+		prompt := fmt.Sprintf(" New %s name: %s█  (Enter confirm, Esc cancel)", kind, m.createText)
 		return tuiStatusStyle.Width(m.width).Render(prompt)
 	}
 

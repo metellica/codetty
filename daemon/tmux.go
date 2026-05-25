@@ -11,6 +11,16 @@ func IsTmuxAvailable() bool {
 	return err == nil
 }
 
+// CreateTmuxSession creates a new detached tmux session with the given name.
+func CreateTmuxSession(name string) error {
+	return exec.Command("tmux", "new-session", "-d", "-s", name).Run()
+}
+
+// RenameTmuxSession renames a tmux session from oldName to newName.
+func RenameTmuxSession(oldName, newName string) error {
+	return exec.Command("tmux", "rename-session", "-t", oldName, newName).Run()
+}
+
 // DiscoverTmuxSessions returns the list of active tmux session names.
 // Returns nil and no error if tmux is not available or has no server running.
 func DiscoverTmuxSessions() ([]string, error) {

@@ -112,6 +112,13 @@ func (dc *daemonConn) CreateSession(name string, command []string, cols, rows ui
 	}))
 }
 
+// CreateTmuxSession requests the daemon to create a new tmux session.
+func (dc *daemonConn) CreateTmuxSession(name string, cols, rows uint16) {
+	daemon.WriteFrame(dc.conn, daemon.FrameCreateSession, daemon.MarshalJSON(daemon.CreateSessionRequest{
+		Name: name, Cols: cols, Rows: rows, Tmux: true,
+	}))
+}
+
 // KillSession requests the daemon to kill a session.
 func (dc *daemonConn) KillSession(name string) {
 	daemon.WriteFrame(dc.conn, daemon.FrameKillSession, daemon.MarshalJSON(daemon.KillSessionRequest{

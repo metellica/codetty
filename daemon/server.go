@@ -287,6 +287,10 @@ func (s *Server) resizeAllSessions(cols, rows uint16) {
 }
 
 func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRequest) {
+	if req.Tmux {
+		s.createTmuxSessionForSubscriber(sub, req)
+		return
+	}
 	name := req.Name
 	if name == "" {
 		s.mu.Lock()
@@ -323,6 +327,49 @@ func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRe
 	s.notifySubscribers(SessionEvent{Type: "created", Session: name, Info: sess.Info()})
 }
 
+func (s *Server) createTmuxSessionForSubscriber(sub *Subscriber, req CreateSessionRequest) {
+	tmuxName := req.Name
+	if tmuxName == "" {
+		tmuxName = "codetty"
+	}
+	// Create the tmux session (detached)
+	if err := CreateTmuxSession(tmuxName); err != nil {
+		sub.SendSessionEvent(SessionEvent{Type: "error", Session: tmuxName})
+		return
+	}
+	// Attach it as a daemon session
+	displayName := "[tmux] " + tmuxName
+	cmd := []string{"tmux", "attach-session", "-t", tmuxName}
+
+	s.mu.Lock()
+	if _, exists := s.sessions[displayName]; exists {
+		s.mu.Unlock()
+		sub.SendSessionEvent(SessionEvent{Type: "error", Session: displayName})
+		return
+	}
+	s.mu.Unlock()
+
+	sess, err := newDaemonSession(displayName, cmd, req.Cols, req.Rows, s.broadcastToSubscribers)
+	if err != nil {
+		sub.SendSessionEvent(SessionEvent{Type: "error", Session: displayName})
+		return
+	}
+	sess.Type = SessionTypeTmux
+	sess.TmuxTarget = tmuxName
+
+	s.mu.Lock()
+	if _, exists := s.sessions[displayName]; exists {
+		s.mu.Unlock()
+		sess.Kill()
+		sub.SendSessionEvent(SessionEvent{Type: "error", Session: displayName})
+		return
+	}
+	s.sessions[displayName] = sess
+	s.mu.Unlock()
+	go s.watchSession(sess)
+	s.notifySubscribers(SessionEvent{Type: "created", Session: displayName, Info: sess.Info()})
+}
+
 func (s *Server) killSessionForSubscriber(req KillSessionRequest) {
 	s.mu.Lock()
 	sess, exists := s.sessions[req.Name]
@@ -346,6 +393,21 @@ func (s *Server) renameSessionForSubscriber(req RenameSessionRequest) {
 		s.mu.Unlock()
 		return
 	}
+
+	// For tmux sessions, also rename in tmux server
+	if sess.Type == SessionTypeTmux && sess.TmuxTarget != "" {
+		newTmuxName := req.NewName
+		// Strip "[tmux] " prefix if present to get clean tmux name
+		if len(newTmuxName) > 7 && newTmuxName[:7] == "[tmux] " {
+			newTmuxName = newTmuxName[7:]
+		}
+		if err := RenameTmuxSession(sess.TmuxTarget, newTmuxName); err != nil {
+			s.mu.Unlock()
+			return
+		}
+		sess.TmuxTarget = newTmuxName
+	}
+
 	delete(s.sessions, req.OldName)
 	sess.Name = req.NewName
 	s.sessions[req.NewName] = sess

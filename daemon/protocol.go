@@ -103,6 +103,7 @@ type CreateSessionRequest struct {
 	Command []string `json:"command,omitempty"`
 	Cols    uint16   `json:"cols"`
 	Rows    uint16   `json:"rows"`
+	Tmux    bool     `json:"tmux,omitempty"` // create a new tmux session
 }
 
 // KillSessionRequest is the payload for FrameKillSession.
