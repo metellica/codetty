@@ -165,9 +165,14 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) View() string {
 	if len(m.sessions) == 0 {
-		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		base := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 			tuiTitleStyle.Render("⬡ codetty")+"\n\n"+
 				"No sessions. Creating one...")
+		// Still show tmux picker overlay if active
+		if m.tmuxPicker.active {
+			base = m.renderTmuxPicker(base)
+		}
+		return base
 	}
 
 	var base string
