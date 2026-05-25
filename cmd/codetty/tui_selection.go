@@ -365,8 +365,9 @@ func (m *tuiModel) floatingContentRect() (int, int, int, int) {
 }
 
 // handleFloatingMouse handles mouse events when a floating window is open.
-// Events inside the floating area are forwarded to the session PTY only if
-// the session has mouse reporting enabled. Click-outside always closes.
+// Supports text selection (drag to select, release to copy) when mouse reporting
+// is off. When mouse reporting is on, forwards events to the session PTY.
+// Click-outside always closes the floating window.
 func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 	sessions := m.orderedSessions()
 	if m.floatingIdx < 0 || m.floatingIdx >= len(sessions) {
@@ -392,17 +393,57 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 			if inside {
 				if mouseOn {
 					m.forwardMouseToSession(sess.Name, msg, localX, localY)
+				} else {
+					// Start text selection
+					m.sel = textSelection{
+						pending: true,
+						session: sess.Name,
+						startX:  localX,
+						startY:  localY,
+						endX:    localX,
+						endY:    localY,
+						screenX: msg.X,
+						screenY: msg.Y,
+					}
 				}
 			} else {
 				m.closeFloating()
 			}
 		}
 	case tea.MouseActionMotion:
-		if inside && mouseOn {
+		if m.sel.pending && m.sel.session == sess.Name {
+			lx := clamp(localX, 0, cw-1)
+			ly := clamp(localY, 0, ch-1)
+			if lx != m.sel.startX || ly != m.sel.startY {
+				m.sel.pending = false
+				m.sel.active = true
+				m.sel.endX = lx
+				m.sel.endY = ly
+			}
+		} else if m.sel.active && m.sel.session == sess.Name {
+			m.sel.endX = clamp(localX, 0, cw-1)
+			m.sel.endY = clamp(localY, 0, ch-1)
+		} else if inside && mouseOn {
 			m.forwardMouseToSession(sess.Name, msg, localX, localY)
 		}
 	case tea.MouseActionRelease:
-		if inside && mouseOn {
+		if m.sel.active && m.sel.session == sess.Name {
+			m.sel.active = false
+			if m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY {
+				text := m.extractSelectedText()
+				if text != "" {
+					m.sel = textSelection{}
+					return m.copyToClipboard(text)
+				}
+			}
+			m.sel = textSelection{}
+		} else if m.sel.pending && m.sel.session == sess.Name {
+			m.sel.pending = false
+			if mouseOn {
+				m.forwardClickToPTY(m.sel.startX, m.sel.startY)
+			}
+			m.sel = textSelection{}
+		} else if inside && mouseOn {
 			m.forwardMouseToSession(sess.Name, msg, localX, localY)
 		}
 	}
@@ -841,4 +882,14 @@ func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(c
 		lines[displayRow] = sb.String()
 	}
 	return lines
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
