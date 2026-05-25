@@ -324,34 +324,78 @@ func TestTUIKeyToBytes_CommonMappings(t *testing.T) {
 	}
 }
 
-func TestHandlePrefixKey_RefreshTmux(t *testing.T) {
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
+func TestHandlePrefixKey_TmuxPicker(t *testing.T) {
+	if !daemon.IsTmuxAvailable() {
+		t.Skip("tmux not available")
+	}
 
-	m := newTUIModel(&daemonConn{conn: client}, "", nil)
+	m := newTUIModel(nil, "", nil)
+	m.width = 100
+	m.height = 30
 	m.sessions = []*tuiSession{newTUISession("sess", "bash", 80, 24)}
 	m.order = []string{"sess"}
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ft, _, err := daemon.ReadFrame(server)
-		if err != nil {
-			t.Errorf("ReadFrame: %v", err)
-			return
-		}
-		if ft != daemon.FrameRefreshTmux {
-			t.Errorf("frame type = %v, want %v", ft, daemon.FrameRefreshTmux)
-		}
-	}()
-
-	// Press Ctrl+A t — should send FrameRefreshTmux
+	// Press Ctrl+A t — should open tmux picker
 	m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlA})
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 
-	<-done
+	if !m.tmuxPicker.active {
+		t.Fatal("tmux picker should be active after prefix+t")
+	}
+	if len(m.tmuxPicker.items) == 0 {
+		t.Fatal("tmux picker should have items")
+	}
 }
+
+func TestTmuxPicker_KeyHandling(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 100
+	m.height = 30
+	m.tmuxPicker = tmuxPicker{
+		items: []tmuxPickerItem{
+			{Name: "sess1", Selected: true},
+			{Name: "sess2", Selected: true},
+			{Name: "sess3", Selected: false},
+		},
+		cursor: 0,
+		active: true,
+	}
+
+	// Move down
+	m.handleTmuxPickerKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.tmuxPicker.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", m.tmuxPicker.cursor)
+	}
+
+	// Toggle with space
+	m.handleTmuxPickerKey(tea.KeyMsg{Type: tea.KeySpace})
+	if m.tmuxPicker.items[1].Selected {
+		t.Fatal("item 1 should be deselected after space")
+	}
+
+	// Select all with 'a'
+	m.handleTmuxPickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	for i, item := range m.tmuxPicker.items {
+		if !item.Selected {
+			t.Fatalf("item %d should be selected after 'a'", i)
+		}
+	}
+
+	// Deselect all with 'n'
+	m.handleTmuxPickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	for i, item := range m.tmuxPicker.items {
+		if item.Selected {
+			t.Fatalf("item %d should be deselected after 'n'", i)
+		}
+	}
+
+	// Esc closes picker
+	m.handleTmuxPickerKey(tea.KeyMsg{Type: tea.KeyEscape})
+	if m.tmuxPicker.active {
+		t.Fatal("picker should be inactive after Esc")
+	}
+}
+
 
 func TestHandleSessionEvent_TmuxTypePreserved(t *testing.T) {
 	m := newTUIModel(nil, "", nil)

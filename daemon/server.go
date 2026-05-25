@@ -287,6 +287,10 @@ func (s *Server) resizeAllSessions(cols, rows uint16) {
 }
 
 func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRequest) {
+	if req.TmuxAttach {
+		s.attachTmuxSessionForSubscriber(sub, req)
+		return
+	}
 	if req.Tmux {
 		s.createTmuxSessionForSubscriber(sub, req)
 		return
@@ -362,6 +366,42 @@ func (s *Server) createTmuxSessionForSubscriber(sub *Subscriber, req CreateSessi
 		s.mu.Unlock()
 		sess.Kill()
 		sub.SendSessionEvent(SessionEvent{Type: "error", Session: displayName})
+		return
+	}
+	s.sessions[displayName] = sess
+	s.mu.Unlock()
+	go s.watchSession(sess)
+	s.notifySubscribers(SessionEvent{Type: "created", Session: displayName, Info: sess.Info()})
+}
+
+func (s *Server) attachTmuxSessionForSubscriber(sub *Subscriber, req CreateSessionRequest) {
+	tmuxName := req.Name
+	if tmuxName == "" {
+		return
+	}
+	displayName := "[tmux] " + tmuxName
+	cmd := []string{"tmux", "attach-session", "-t", tmuxName}
+
+	s.mu.Lock()
+	if _, exists := s.sessions[displayName]; exists {
+		s.mu.Unlock()
+		// Already managed, nothing to do
+		return
+	}
+	s.mu.Unlock()
+
+	sess, err := newDaemonSession(displayName, cmd, req.Cols, req.Rows, s.broadcastToSubscribers)
+	if err != nil {
+		sub.SendSessionEvent(SessionEvent{Type: "error", Session: displayName})
+		return
+	}
+	sess.Type = SessionTypeTmux
+	sess.TmuxTarget = tmuxName
+
+	s.mu.Lock()
+	if _, exists := s.sessions[displayName]; exists {
+		s.mu.Unlock()
+		sess.Kill()
 		return
 	}
 	s.sessions[displayName] = sess

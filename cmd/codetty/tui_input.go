@@ -9,6 +9,10 @@ import (
 )
 
 func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
+	// Tmux picker overlay: capture all input
+	if m.tmuxPicker.active {
+		return m.handleTmuxPickerKey(msg)
+	}
 	// Rename mode: capture text input
 	if m.renaming {
 		return m.handleRenameKey(msg)
@@ -265,9 +269,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return nil
 		case 't':
-			if m.conn != nil {
-				m.conn.RefreshTmux()
-			}
+			m.openTmuxPicker()
 			return nil
 		case 'm':
 			// Create a temporary floating shell (only in grid/focus-big modes)

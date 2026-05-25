@@ -99,11 +99,12 @@ type SessionEvent struct {
 
 // CreateSessionRequest is the payload for FrameCreateSession.
 type CreateSessionRequest struct {
-	Name    string   `json:"name,omitempty"`
-	Command []string `json:"command,omitempty"`
-	Cols    uint16   `json:"cols"`
-	Rows    uint16   `json:"rows"`
-	Tmux    bool     `json:"tmux,omitempty"` // create a new tmux session
+	Name       string   `json:"name,omitempty"`
+	Command    []string `json:"command,omitempty"`
+	Cols       uint16   `json:"cols"`
+	Rows       uint16   `json:"rows"`
+	Tmux       bool     `json:"tmux,omitempty"`        // create a new tmux session
+	TmuxAttach bool     `json:"tmux_attach,omitempty"` // attach to an existing tmux session (Name = tmux target)
 }
 
 // KillSessionRequest is the payload for FrameKillSession.

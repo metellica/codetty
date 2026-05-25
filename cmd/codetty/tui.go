@@ -66,6 +66,9 @@ type tuiModel struct {
 	createChooser  bool // true when showing [c]odetty / [t]mux type chooser
 	createTmux     bool // true when creating a tmux session (after chooser)
 
+	// Tmux session picker
+	tmuxPicker tmuxPicker
+
 	// Text selection
 	sel textSelection
 
@@ -152,7 +155,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleKey(msg)
 
 	case tea.MouseMsg:
-		if m.renaming || m.creating || m.createChooser {
+		if m.renaming || m.creating || m.createChooser || m.tmuxPicker.active {
 			return m, nil
 		}
 		return m, m.handleMouse(msg)
@@ -180,6 +183,11 @@ func (m *tuiModel) View() string {
 	// Overlay floating window if active
 	if m.floatingIdx >= 0 && m.floatingIdx < len(m.sessions) {
 		base = m.overlayFloating(base)
+	}
+
+	// Overlay tmux picker if active
+	if m.tmuxPicker.active {
+		base = m.renderTmuxPicker(base)
 	}
 
 	return base

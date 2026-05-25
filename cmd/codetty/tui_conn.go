@@ -119,6 +119,13 @@ func (dc *daemonConn) CreateTmuxSession(name string, cols, rows uint16) {
 	}))
 }
 
+// AttachTmuxSession requests the daemon to attach an existing tmux session.
+func (dc *daemonConn) AttachTmuxSession(tmuxTarget string, cols, rows uint16) {
+	daemon.WriteFrame(dc.conn, daemon.FrameCreateSession, daemon.MarshalJSON(daemon.CreateSessionRequest{
+		Name: tmuxTarget, Cols: cols, Rows: rows, TmuxAttach: true,
+	}))
+}
+
 // KillSession requests the daemon to kill a session.
 func (dc *daemonConn) KillSession(name string) {
 	daemon.WriteFrame(dc.conn, daemon.FrameKillSession, daemon.MarshalJSON(daemon.KillSessionRequest{
