@@ -173,7 +173,6 @@ func (m *tuiModel) renderTmuxPicker(base string) string {
 
 	// Styles
 	titleStyle := lipgloss.NewStyle().
-		Bold(true).
 		Foreground(lipgloss.Color("86")).
 		Padding(0, 1)
 
@@ -187,7 +186,6 @@ func (m *tuiModel) renderTmuxPicker(base string) string {
 	cursorItemStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color("237")).
 		Foreground(lipgloss.Color("255")).
-		Bold(true).
 		Padding(0, 1).
 		Width(innerW)
 
@@ -201,7 +199,7 @@ func (m *tuiModel) renderTmuxPicker(base string) string {
 		Foreground(lipgloss.Color("238"))
 
 	helpKeyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("86")).Bold(true)
+		Foreground(lipgloss.Color("86"))
 
 	helpDescStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245"))
@@ -270,7 +268,7 @@ func (m *tuiModel) renderTmuxPicker(base string) string {
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("86")).
+		BorderForeground(lipgloss.Color("240")).
 		Padding(1, 3).
 		Width(innerW + 10)
 
