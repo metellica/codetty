@@ -437,7 +437,11 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 		} else if m.sel.pending && m.sel.session == sess.Name {
 			m.sel.pending = false
 			if mouseOn {
-				m.forwardClickToPTY(m.sel.startX, m.sel.startY)
+				// Forward click to the floating session's PTY
+				x, y := m.sel.startX+1, m.sel.startY+1
+				press := fmt.Sprintf("\x1b[<0;%d;%dM", x, y)
+				release := fmt.Sprintf("\x1b[<0;%d;%dm", x, y)
+				m.conn.SendInput(sess.Name, []byte(press+release))
 			}
 			m.sel = textSelection{}
 		} else if inside && mouseOn {
