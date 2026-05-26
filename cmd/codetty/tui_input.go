@@ -8,6 +8,40 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// handleConfirmKillKey processes input during kill confirmation.
+func (m *tuiModel) handleConfirmKillKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.Type {
+	case tea.KeyEscape:
+		m.confirmKill = false
+		m.confirmKillName = ""
+		return nil
+	case tea.KeyRunes:
+		if len(msg.Runes) == 1 {
+			switch msg.Runes[0] {
+			case 'y', 'Y':
+				if m.conn != nil && m.confirmKillName != "" {
+					m.conn.KillSession(m.confirmKillName)
+				}
+				m.confirmKill = false
+				m.confirmKillName = ""
+				return nil
+			case 'n', 'N':
+				m.confirmKill = false
+				m.confirmKillName = ""
+				return nil
+			}
+		}
+	case tea.KeyEnter:
+		if m.conn != nil && m.confirmKillName != "" {
+			m.conn.KillSession(m.confirmKillName)
+		}
+		m.confirmKill = false
+		m.confirmKillName = ""
+		return nil
+	}
+	return nil
+}
+
 func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	// Tmux picker overlay: capture all input
 	if m.tmuxPicker.active {
@@ -269,7 +303,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return nil
 		case 't':
-			m.openTmuxPicker()
+			m.openSessionManager()
 			return nil
 		case 'm':
 			// Create a temporary floating shell (only in grid/focus-big modes)
@@ -282,7 +316,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			idx := int(msg.Runes[0]-'0') - 1
-			if idx < len(m.orderedSessions()) {
+			if idx < len(m.visibleSessions()) {
 				m.selected = idx
 				m.inputFocus = -1
 				m.mode = modeFocusBig
@@ -294,7 +328,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *tuiModel) handleGridKey(msg tea.KeyMsg) tea.Cmd {
-	n := len(m.orderedSessions())
+	n := len(m.visibleSessions())
 	cols := gridCols(n, m.width)
 	switch msg.Type {
 	case tea.KeyLeft:
@@ -344,18 +378,18 @@ func (m *tuiModel) forwardKeyTo(msg tea.KeyMsg, idx int) {
 }
 
 func (m *tuiModel) selectDelta(delta int) {
-	ordered := m.orderedSessions()
-	if len(ordered) == 0 {
+	visible := m.visibleSessions()
+	if len(visible) == 0 {
 		return
 	}
-	m.selected = ((m.selected+delta)%len(ordered) + len(ordered)) % len(ordered)
+	m.selected = ((m.selected+delta)%len(visible) + len(visible)) % len(visible)
 	m.inputFocus = -1
 }
 
 // cycleSideHighlight cycles inputFocus among all panels in focus-big mode.
 // When inputFocus lands on m.selected, it means the big panel is highlighted.
 func (m *tuiModel) cycleSideHighlight() {
-	n := len(m.orderedSessions())
+	n := len(m.visibleSessions())
 	if n <= 1 {
 		return
 	}
@@ -380,6 +414,51 @@ func (m *tuiModel) moveOrder(delta int) {
 	target := ((m.selected + delta) % n + n) % n
 	m.order[m.selected], m.order[target] = m.order[target], m.order[m.selected]
 	m.selected = target
+}
+
+// reorderByVisibleIdx moves a session from one visible position to another in m.order.
+func (m *tuiModel) reorderByVisibleIdx(fromVisible, toVisible int) {
+	visible := m.visibleSessions()
+	if fromVisible < 0 || fromVisible >= len(visible) || toVisible < 0 || toVisible >= len(visible) {
+		return
+	}
+	fromName := visible[fromVisible].Name
+	toName := visible[toVisible].Name
+
+	// Find indices in m.order
+	fromOrder := -1
+	toOrder := -1
+	for i, n := range m.order {
+		if n == fromName {
+			fromOrder = i
+		}
+		if n == toName {
+			toOrder = i
+		}
+	}
+	if fromOrder < 0 || toOrder < 0 {
+		return
+	}
+
+	// Remove from original position and insert at target
+	m.order = append(m.order[:fromOrder], m.order[fromOrder+1:]...)
+	// Adjust toOrder if it was after fromOrder
+	if toOrder > fromOrder {
+		toOrder--
+	}
+	// Insert at toOrder position
+	m.order = append(m.order[:toOrder+1], m.order[toOrder:]...)
+	m.order[toOrder] = fromName
+
+	// Adjust m.selected to follow the moved panel if needed
+	if m.selected == fromVisible {
+		m.selected = toVisible
+	} else if fromVisible < m.selected && toVisible >= m.selected {
+		m.selected--
+	} else if fromVisible > m.selected && toVisible <= m.selected {
+		m.selected++
+	}
+	m.inputFocus = -1
 }
 
 // tuiKeyToBytes converts a tea.KeyMsg to raw terminal bytes.

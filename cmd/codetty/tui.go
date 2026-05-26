@@ -72,6 +72,19 @@ type tuiModel struct {
 	// Text selection
 	sel textSelection
 
+	// Panel drag-to-reorder state
+	drag panelDrag
+
+	// Hidden sessions (still running but not displayed)
+	hidden map[string]bool
+
+	// Kill confirmation
+	confirmKill     bool
+	confirmKillName string
+
+	// Session manager overlay
+	sessMgr sessionManager
+
 	// Initial focus target (from new/attach command)
 	focusTarget string
 	// When set, open this session in a floating window once created
@@ -117,6 +130,7 @@ func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tui
 		height:      40,
 		inputFocus:  -1,
 		floatingIdx: -1,
+		hidden:      make(map[string]bool),
 		focusTarget: focusTarget,
 		autoCreate:  autoCreate,
 	}
@@ -152,10 +166,16 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyMsg:
+		if m.confirmKill {
+			return m, m.handleConfirmKillKey(msg)
+		}
+		if m.sessMgr.active {
+			return m, m.handleSessionManagerKey(msg)
+		}
 		return m, m.handleKey(msg)
 
 	case tea.MouseMsg:
-		if m.renaming || m.creating || m.createChooser || m.tmuxPicker.active {
+		if m.renaming || m.creating || m.createChooser || m.tmuxPicker.active || m.confirmKill || m.sessMgr.active {
 			return m, nil
 		}
 		return m, m.handleMouse(msg)
@@ -193,6 +213,16 @@ func (m *tuiModel) View() string {
 	// Overlay tmux picker if active
 	if m.tmuxPicker.active {
 		base = m.renderTmuxPicker(base)
+	}
+
+	// Overlay session manager if active
+	if m.sessMgr.active {
+		base = m.renderSessionManager(base)
+	}
+
+	// Overlay kill confirmation if active
+	if m.confirmKill {
+		base = m.overlayConfirmKill(base)
 	}
 
 	return base
@@ -270,6 +300,9 @@ func (m *tuiModel) indexByName(name string) int {
 }
 
 func (m *tuiModel) removeSession(name string) {
+	// Clean up hidden state
+	delete(m.hidden, name)
+
 	// Find the ordered index of the removed session before removal
 	removedIdx := -1
 	for i, n := range m.order {
@@ -292,7 +325,7 @@ func (m *tuiModel) removeSession(name string) {
 		}
 	}
 
-	orderedLen := len(m.orderedSessions())
+	visibleLen := len(m.visibleSessions())
 
 	// If the floating window was showing the removed session, close it
 	if m.floatingIdx >= 0 {
@@ -310,12 +343,9 @@ func (m *tuiModel) removeSession(name string) {
 		m.modeStack = nil
 	}
 
-	// Adjust selected index
-	if removedIdx >= 0 && m.selected > removedIdx {
-		m.selected--
-	}
-	if m.selected >= orderedLen {
-		m.selected = max(0, orderedLen-1)
+	// Adjust selected index (now indexes into visible sessions)
+	if m.selected >= visibleLen {
+		m.selected = max(0, visibleLen-1)
 	}
 
 	// Reset inputFocus
@@ -332,26 +362,70 @@ func (m *tuiModel) orderedSessions() []*tuiSession {
 	return result
 }
 
+// visibleSessions returns ordered sessions excluding hidden ones.
+func (m *tuiModel) visibleSessions() []*tuiSession {
+	result := make([]*tuiSession, 0, len(m.order))
+	for _, name := range m.order {
+		if m.hidden[name] {
+			continue
+		}
+		if s := m.sessionByName(name); s != nil {
+			result = append(result, s)
+		}
+	}
+	return result
+}
+
+// visibleToOrderIdx converts a visible-sessions index to an index in m.order.
+func (m *tuiModel) visibleToOrderIdx(visibleIdx int) int {
+	visible := m.visibleSessions()
+	if visibleIdx < 0 || visibleIdx >= len(visible) {
+		return -1
+	}
+	name := visible[visibleIdx].Name
+	for i, n := range m.order {
+		if n == name {
+			return i
+		}
+	}
+	return -1
+}
+
+// hideSession hides a session from display without killing it.
+func (m *tuiModel) hideSession(name string) {
+	m.hidden[name] = true
+	visible := m.visibleSessions()
+	if m.selected >= len(visible) {
+		m.selected = max(0, len(visible)-1)
+	}
+	m.inputFocus = -1
+}
+
+// showSession un-hides a previously hidden session.
+func (m *tuiModel) showSession(name string) {
+	delete(m.hidden, name)
+}
+
 func (m *tuiModel) selectedSession() *tuiSession {
-	ordered := m.orderedSessions()
-	if len(ordered) == 0 || m.selected >= len(ordered) {
+	visible := m.visibleSessions()
+	if len(visible) == 0 || m.selected >= len(visible) {
 		return nil
 	}
-	return ordered[m.selected]
+	return visible[m.selected]
 }
 
 // focusedSession returns the session that should receive keyboard input.
 // This may differ from selectedSession() when a side panel is clicked.
 func (m *tuiModel) focusedSession() *tuiSession {
-	ordered := m.orderedSessions()
-	if len(ordered) == 0 {
+	visible := m.visibleSessions()
+	if len(visible) == 0 {
 		return nil
 	}
 	idx := m.selected
-	if idx >= len(ordered) {
+	if idx >= len(visible) {
 		return nil
 	}
-	return ordered[idx]
+	return visible[idx]
 }
 
 func (m *tuiModel) maybeAutoCreate() {

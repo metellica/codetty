@@ -37,7 +37,7 @@ func (m *tuiModel) fullscreenView() string {
 }
 
 func (m *tuiModel) focusBigView() string {
-	sessions := m.orderedSessions()
+	sessions := m.visibleSessions()
 	n := len(sessions)
 	if n == 0 || m.selected >= n {
 		return m.gridView()
@@ -106,6 +106,9 @@ func (m *tuiModel) focusBigWide(sessions []*tuiSession, availH int) string {
 		if highlighted {
 			title = "▶ " + title
 		}
+		if m.drag.active && i == m.drag.targetIdx && i != m.drag.sourceIdx {
+			title = "⬇ " + title
+		}
 		showContent := h >= tuiSidePanelContentThreshold
 		sides = append(sides, m.renderPanelWithColor(sess, title, sideW, h, highlighted, i, showContent))
 		idx++
@@ -131,6 +134,9 @@ func (m *tuiModel) focusBigNarrow(sessions []*tuiSession, availH int) string {
 			if highlighted {
 				title = "▶ " + title
 			}
+			if m.drag.active && i == m.drag.targetIdx && i != m.drag.sourceIdx {
+				title = "⬇ " + title
+			}
 			showContent := sideH >= tuiSidePanelContentThreshold
 			bottomPanel = m.renderPanelWithColor(sess, title, m.width, sideH, highlighted, i, showContent)
 			break
@@ -140,7 +146,7 @@ func (m *tuiModel) focusBigNarrow(sessions []*tuiSession, availH int) string {
 }
 
 func (m *tuiModel) gridView() string {
-	sessions := m.orderedSessions()
+	sessions := m.visibleSessions()
 	n := len(sessions)
 	if n == 0 {
 		return m.statusBar()
@@ -173,6 +179,9 @@ func (m *tuiModel) gridView() string {
 			if focused {
 				title = "▶ " + title
 			}
+			if m.drag.active && idx == m.drag.targetIdx && idx != m.drag.sourceIdx {
+				title = "⬇ " + title
+			}
 			// All grid panels use colored title; only non-selected panels dim content
 			colViews = append(colViews, m.renderPanelWithColor(sess, title, panelW, panelH, focused, idx, panelH >= tuiSidePanelContentThreshold))
 		}
@@ -196,14 +205,13 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 		style = tuiFocusBorder.Width(w - 2).Height(h - 2)
 	}
 
-	maxTitleW := w - 4
-	if maxTitleW > 0 && lipgloss.Width(title) > maxTitleW {
-		title = ansi.Truncate(title, maxTitleW, "…")
-	}
-
 	innerW := w - 2
 	innerH := h - 3
 	if innerW < 1 || innerH < 1 {
+		maxTitleW := w - 4
+		if maxTitleW > 0 && lipgloss.Width(title) > maxTitleW {
+			title = ansi.Truncate(title, maxTitleW, "…")
+		}
 		return style.Render(title)
 	}
 
@@ -212,13 +220,36 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 	// Build title
 	var header string
 	if isSidePanel {
+		// Render [-] and [x] buttons on the right
+		buttons := " [-][x]"
+		buttonsW := lipgloss.Width(buttons)
+		titleMaxW := innerW - buttonsW - 1
+		if titleMaxW < 4 {
+			titleMaxW = 4
+		}
+		displayTitle := title
+		if lipgloss.Width(displayTitle) > titleMaxW {
+			displayTitle = ansi.Truncate(displayTitle, titleMaxW, "…")
+		}
+
+		titleVisualW := lipgloss.Width(displayTitle) + 1
+		padW := innerW - titleVisualW - buttonsW
+		if padW < 0 {
+			padW = 0
+		}
+		pad := strings.Repeat(" ", padW)
+
 		titleStyle := lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("232")).
 			Background(sidePanelTitleColor).
 			Width(innerW)
-		header = titleStyle.Render(" " + title)
+		header = titleStyle.Render(" " + displayTitle + pad + buttons)
 	} else {
+		maxTitleW := w - 4
+		if maxTitleW > 0 && lipgloss.Width(title) > maxTitleW {
+			title = ansi.Truncate(title, maxTitleW, "…")
+		}
 		header = lipgloss.NewStyle().Bold(focused).Render(title)
 	}
 
@@ -282,6 +313,26 @@ func (m *tuiModel) overlayFloating(base string) string {
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
 }
 
+// overlayConfirmKill renders a kill confirmation dialog.
+func (m *tuiModel) overlayConfirmKill(base string) string {
+	msg := fmt.Sprintf("Kill session \"%s\"?", m.confirmKillName)
+	help := "[y/Enter] confirm  [n/Esc] cancel"
+
+	content := lipgloss.NewStyle().Bold(true).Render(msg) + "\n\n" +
+		lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render(help)
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("196")).
+		Padding(1, 3)
+
+	box := boxStyle.Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		box,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
+}
+
 func (m *tuiModel) statusBar() string {
 	if m.renaming {
 		prompt := fmt.Sprintf(" Rename: %s█  (Enter confirm, Esc cancel)", m.renameText)
@@ -305,14 +356,13 @@ func (m *tuiModel) statusBar() string {
 	if sess != nil {
 		name = sess.Name
 	}
-	n := len(m.sessions)
 
 	if m.prefix {
-		help := "Ctrl+A: d detach  c new  m shell  x kill  r rename  n/p nav  f full/float  g grid  h/l move  t tmux  q close  1-9 jump"
+		help := "Ctrl+A: d detach  c new  m shell  x kill  r rename  n/p nav  f full/float  g grid  h/l move  t sessions  q close  1-9 jump"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 
-	left := fmt.Sprintf(" [%s] %d/%d", name, m.selected+1, n)
+	left := fmt.Sprintf(" [%s] %d/%d", name, m.selected+1, len(m.visibleSessions()))
 	modeName := "focus"
 	switch m.mode {
 	case modeGrid:
@@ -328,7 +378,7 @@ func (m *tuiModel) statusBar() string {
 }
 
 func (m *tuiModel) hitTest(x, y int) int {
-	sessions := m.orderedSessions()
+	sessions := m.visibleSessions()
 	n := len(sessions)
 	if n == 0 || m.mode == modeFullscreen {
 		return -1

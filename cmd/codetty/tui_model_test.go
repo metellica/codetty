@@ -324,26 +324,26 @@ func TestTUIKeyToBytes_CommonMappings(t *testing.T) {
 	}
 }
 
-func TestHandlePrefixKey_TmuxPicker(t *testing.T) {
-	if !daemon.IsTmuxAvailable() {
-		t.Skip("tmux not available")
-	}
-
+func TestHandlePrefixKey_SessionManager(t *testing.T) {
 	m := newTUIModel(nil, "", nil)
 	m.width = 100
 	m.height = 30
 	m.sessions = []*tuiSession{newTUISession("sess", "bash", 80, 24)}
 	m.order = []string{"sess"}
 
-	// Press Ctrl+A t — should open tmux picker
+	// Press Ctrl+A t — should open session manager
 	m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlA})
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
 
-	if !m.tmuxPicker.active {
-		t.Fatal("tmux picker should be active after prefix+t")
+	if !m.sessMgr.active {
+		t.Fatal("session manager should be active after prefix+t")
 	}
-	if len(m.tmuxPicker.items) == 0 {
-		t.Fatal("tmux picker should have items")
+	items := m.sessionManagerItems()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 session manager item, got %d", len(items))
+	}
+	if items[0].Name != "sess" {
+		t.Fatalf("expected session name 'sess', got '%s'", items[0].Name)
 	}
 }
 
@@ -426,3 +426,166 @@ func TestHandleSessionEvent_TmuxTypePreserved(t *testing.T) {
 	}
 }
 
+func TestHideShowSession(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 160
+	m.height = 40
+	m.sessions = []*tuiSession{
+		newTUISession("alpha", "bash", 80, 24),
+		newTUISession("beta", "bash", 80, 24),
+		newTUISession("gamma", "bash", 80, 24),
+	}
+	m.order = []string{"alpha", "beta", "gamma"}
+
+	if got := len(m.visibleSessions()); got != 3 {
+		t.Fatalf("expected 3 visible, got %d", got)
+	}
+
+	m.hideSession("beta")
+	visible := m.visibleSessions()
+	if len(visible) != 2 {
+		t.Fatalf("expected 2 visible after hide, got %d", len(visible))
+	}
+	if visible[0].Name != "alpha" || visible[1].Name != "gamma" {
+		t.Fatalf("unexpected visible sessions: %v, %v", visible[0].Name, visible[1].Name)
+	}
+
+	m.showSession("beta")
+	if got := len(m.visibleSessions()); got != 3 {
+		t.Fatalf("expected 3 visible after show, got %d", got)
+	}
+}
+
+func TestHideSession_AdjustsSelected(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 160
+	m.height = 40
+	m.sessions = []*tuiSession{
+		newTUISession("a", "bash", 80, 24),
+		newTUISession("b", "bash", 80, 24),
+	}
+	m.order = []string{"a", "b"}
+	m.selected = 1
+
+	m.hideSession("b")
+	visible := m.visibleSessions()
+	if len(visible) != 1 {
+		t.Fatalf("expected 1 visible, got %d", len(visible))
+	}
+	if m.selected != 0 {
+		t.Fatalf("expected selected=0 after hiding, got %d", m.selected)
+	}
+}
+
+func TestReorderByVisibleIdx(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 160
+	m.height = 40
+	m.sessions = []*tuiSession{
+		newTUISession("a", "bash", 80, 24),
+		newTUISession("b", "bash", 80, 24),
+		newTUISession("c", "bash", 80, 24),
+	}
+	m.order = []string{"a", "b", "c"}
+
+	m.reorderByVisibleIdx(0, 2)
+
+	if m.order[0] != "b" || m.order[1] != "a" || m.order[2] != "c" {
+		t.Fatalf("unexpected order after reorder: %v", m.order)
+	}
+}
+
+func TestReorderByVisibleIdx_WithHidden(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 160
+	m.height = 40
+	m.sessions = []*tuiSession{
+		newTUISession("a", "bash", 80, 24),
+		newTUISession("b", "bash", 80, 24),
+		newTUISession("c", "bash", 80, 24),
+	}
+	m.order = []string{"a", "b", "c"}
+	m.hideSession("b")
+
+	m.reorderByVisibleIdx(1, 0)
+
+	visible := m.visibleSessions()
+	if len(visible) != 2 {
+		t.Fatalf("expected 2 visible, got %d", len(visible))
+	}
+	if visible[0].Name != "c" || visible[1].Name != "a" {
+		t.Fatalf("unexpected visible order: %v, %v", visible[0].Name, visible[1].Name)
+	}
+}
+
+func TestSessionManagerItems(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.sessions = []*tuiSession{
+		newTUISession("shell1", "bash", 80, 24),
+		newTUISession("shell2", "bash", 80, 24),
+	}
+	m.sessions[1].Type = "tmux"
+	m.order = []string{"shell1", "shell2"}
+	m.hideSession("shell1")
+
+	items := m.sessionManagerItems()
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if !items[0].Hidden {
+		t.Fatal("shell1 should be hidden")
+	}
+	if items[1].Hidden {
+		t.Fatal("shell2 should not be hidden")
+	}
+	if items[1].Type != "tmux" {
+		t.Fatal("shell2 should be tmux type")
+	}
+}
+
+func TestSessionManager_ToggleVisibility(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 100
+	m.height = 30
+	m.sessions = []*tuiSession{
+		newTUISession("s1", "bash", 80, 24),
+		newTUISession("s2", "bash", 80, 24),
+	}
+	m.order = []string{"s1", "s2"}
+
+	m.openSessionManager()
+	if !m.sessMgr.active {
+		t.Fatal("session manager should be active")
+	}
+
+	m.handleSessionManagerKey(tea.KeyMsg{Type: tea.KeySpace})
+	if !m.hidden["s1"] {
+		t.Fatal("s1 should be hidden after toggle")
+	}
+
+	m.handleSessionManagerKey(tea.KeyMsg{Type: tea.KeySpace})
+	if m.hidden["s1"] {
+		t.Fatal("s1 should be visible after second toggle")
+	}
+}
+
+func TestRemoveSession_CleansHidden(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 160
+	m.height = 40
+	m.sessions = []*tuiSession{
+		newTUISession("a", "bash", 80, 24),
+		newTUISession("b", "bash", 80, 24),
+	}
+	m.order = []string{"a", "b"}
+	m.hideSession("a")
+
+	if !m.hidden["a"] {
+		t.Fatal("a should be hidden")
+	}
+
+	m.removeSession("a")
+	if m.hidden["a"] {
+		t.Fatal("hidden state should be cleaned up after remove")
+	}
+}

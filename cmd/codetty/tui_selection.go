@@ -23,6 +23,15 @@ type textSelection struct {
 	screenX, screenY int
 }
 
+// panelDrag tracks drag-to-reorder state for side panel titles.
+type panelDrag struct {
+	active     bool
+	sourceIdx  int // visible index of panel being dragged
+	sourceName string
+	startY     int // screen Y where drag started
+	targetIdx  int // current drop target visible index
+}
+
 // panelRegion describes where a session's content is rendered on screen.
 type panelRegion struct {
 	sessionIdx int
@@ -57,7 +66,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 			// Plain click on panels
 			regions := m.panelRegions()
-			sessions := m.orderedSessions()
+			sessions := m.visibleSessions()
 			for _, r := range regions {
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
@@ -83,7 +92,41 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					return nil
 				}
 			}
-			// Click on border/title area
+
+			// Check for button clicks on side panel title bars
+			if idx, action := m.hitTestTitleButton(msg.X, msg.Y); idx >= 0 && action != "" {
+				visible := m.visibleSessions()
+				if idx < len(visible) {
+					sess := visible[idx]
+					switch action {
+					case "hide":
+						m.hideSession(sess.Name)
+						return tea.ClearScreen
+					case "kill":
+						m.confirmKill = true
+						m.confirmKillName = sess.Name
+						return nil
+					}
+				}
+			}
+
+			// Check for title bar drag initiation (not on buttons)
+			if idx := m.hitTestTitleBar(msg.X, msg.Y); idx >= 0 {
+				visible := m.visibleSessions()
+				if idx < len(visible) && (m.mode == modeGrid || idx != m.selected) {
+					m.drag = panelDrag{
+						active:     true,
+						sourceIdx:  idx,
+						sourceName: visible[idx].Name,
+						startY:     msg.Y,
+						targetIdx:  idx,
+					}
+					m.sel = textSelection{}
+					return nil
+				}
+			}
+
+			// Click on border/title area (fallback: open floating)
 			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
 				if m.mode == modeGrid || idx != m.selected {
 					m.openFloating(idx)
@@ -95,7 +138,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		// Only forward if the session has mouse reporting enabled.
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 			regions := m.panelRegions()
-			sessions := m.orderedSessions()
+			sessions := m.visibleSessions()
 			for _, r := range regions {
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
@@ -112,11 +155,21 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 
 	case tea.MouseActionMotion:
+		// Panel drag-to-reorder
+		if m.drag.active {
+			if idx := m.hitTestTitleBar(msg.X, msg.Y); idx >= 0 {
+				m.drag.targetIdx = idx
+			} else if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
+				m.drag.targetIdx = idx
+			}
+			return nil
+		}
+
 		if m.sel.pending {
 			// First motion after press: start real selection
 			regions := m.panelRegions()
 			for _, r := range regions {
-				sess := m.orderedSessions()[r.sessionIdx]
+				sess := m.visibleSessions()[r.sessionIdx]
 				if sess.Name != m.sel.session {
 					continue
 				}
@@ -146,7 +199,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		} else if m.sel.active {
 			regions := m.panelRegions()
 			for _, r := range regions {
-				sess := m.orderedSessions()[r.sessionIdx]
+				sess := m.visibleSessions()[r.sessionIdx]
 				if sess.Name != m.sel.session {
 					continue
 				}
@@ -187,6 +240,17 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 
 	case tea.MouseActionRelease:
+		// Panel drag-to-reorder release
+		if m.drag.active {
+			source := m.drag.sourceIdx
+			target := m.drag.targetIdx
+			m.drag = panelDrag{}
+			if source != target {
+				m.reorderByVisibleIdx(source, target)
+			}
+			return tea.ClearScreen
+		}
+
 		if m.sel.active {
 			m.sel.active = false
 			if m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY {
@@ -492,9 +556,73 @@ func (m *tuiModel) forwardMouseToSession(name string, msg tea.MouseMsg, localX, 
 	m.conn.SendInput(name, []byte(seq))
 }
 
+// titleBarRegion describes a side panel's title bar location.
+type titleBarRegion struct {
+	sessionIdx int // visible index
+	x, y       int // top-left screen coords of title bar
+	w          int // width of title bar
+}
+
+// sidePanelTitleRegions returns screen regions for all side panel title bars.
+func (m *tuiModel) sidePanelTitleRegions() []titleBarRegion {
+	regions := m.panelRegions()
+	var titles []titleBarRegion
+	for _, r := range regions {
+		if r.sessionIdx == m.selected && m.mode != modeGrid {
+			continue // skip big panel
+		}
+		// Title bar is one row above content area
+		titles = append(titles, titleBarRegion{
+			sessionIdx: r.sessionIdx,
+			x:          r.contentX,
+			y:          r.contentY - 1,
+			w:          r.contentW,
+		})
+	}
+	return titles
+}
+
+// hitTestTitleButton checks if (x,y) hits a [-] or [x] button on a title bar.
+// Returns: sessionIdx, "hide"|"kill"|""
+func (m *tuiModel) hitTestTitleButton(x, y int) (int, string) {
+	for _, tb := range m.sidePanelTitleRegions() {
+		if y != tb.y {
+			continue
+		}
+		localX := x - tb.x
+		if localX < 0 || localX >= tb.w {
+			continue
+		}
+		// Buttons are right-aligned: " [-][x]" = 7 chars
+		// [x] occupies rightmost positions: w-3, w-2, w-1
+		// [-] occupies: w-6, w-5, w-4
+		btnOffset := tb.w - 1 - localX // 0 = rightmost char
+		if btnOffset >= 0 && btnOffset <= 2 {
+			// [x] button region
+			return tb.sessionIdx, "kill"
+		}
+		if btnOffset >= 3 && btnOffset <= 5 {
+			// [-] button region
+			return tb.sessionIdx, "hide"
+		}
+		return tb.sessionIdx, ""
+	}
+	return -1, ""
+}
+
+// hitTestTitleBar checks if (x,y) is on any side panel title bar (not on buttons).
+func (m *tuiModel) hitTestTitleBar(x, y int) int {
+	for _, tb := range m.sidePanelTitleRegions() {
+		if y == tb.y && x >= tb.x && x < tb.x+tb.w {
+			return tb.sessionIdx
+		}
+	}
+	return -1
+}
+
 // panelRegions computes the on-screen content rectangles for all visible sessions.
 func (m *tuiModel) panelRegions() []panelRegion {
-	sessions := m.orderedSessions()
+	sessions := m.visibleSessions()
 	n := len(sessions)
 	if n == 0 {
 		return nil
