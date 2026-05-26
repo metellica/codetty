@@ -206,7 +206,7 @@ func (m *tuiModel) View() string {
 	}
 
 	// Overlay floating window if active
-	if m.floatingIdx >= 0 && m.floatingIdx < len(m.sessions) {
+	if m.floatingIdx >= 0 && m.floatingIdx < len(m.orderedSessions()) {
 		base = m.overlayFloating(base)
 	}
 
@@ -247,15 +247,13 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 			m.order = append(m.order, evt.Session)
 		}
 		if m.focusTarget != "" && evt.Session == m.focusTarget {
-			m.selected = m.indexByName(evt.Session)
+			m.selected = m.visibleIndexByName(evt.Session)
 			m.focusTarget = ""
 		}
 		if m.floatingTarget != "" && evt.Session == m.floatingTarget {
-			idx := m.indexByName(evt.Session)
-			if idx >= 0 {
-				sess.Temporary = true
-				m.openFloating(idx)
-			}
+			idx := m.visibleIndexByName(evt.Session)
+			sess.Temporary = true
+			m.openFloating(idx)
 			m.floatingTarget = ""
 		}
 
@@ -293,6 +291,16 @@ func (m *tuiModel) sessionByName(name string) *tuiSession {
 func (m *tuiModel) indexByName(name string) int {
 	for i, n := range m.order {
 		if n == name {
+			return i
+		}
+	}
+	return 0
+}
+
+// visibleIndexByName returns the index of the named session in visibleSessions().
+func (m *tuiModel) visibleIndexByName(name string) int {
+	for i, s := range m.visibleSessions() {
+		if s.Name == name {
 			return i
 		}
 	}
@@ -338,9 +346,12 @@ func (m *tuiModel) removeSession(name string) {
 	}
 
 	// If in fullscreen and the displayed session was removed, fall back
-	if m.mode == modeFullscreen && m.selected == removedIdx {
-		m.mode = modeFocusBig
-		m.modeStack = nil
+	if m.mode == modeFullscreen {
+		// After removal, if selected is out of bounds, fall back
+		if m.selected >= visibleLen {
+			m.mode = modeFocusBig
+			m.modeStack = nil
+		}
 	}
 
 	// Adjust selected index (now indexes into visible sessions)
@@ -455,16 +466,21 @@ func (m *tuiModel) resizeSessionPTYs() {
 	}
 }
 
-// openFloating opens the floating window for the given session index and resizes its PTY.
-func (m *tuiModel) openFloating(idx int) {
+// openFloating opens the floating window for the given visible-session index and resizes its PTY.
+func (m *tuiModel) openFloating(visIdx int) {
+	// Convert visible index to ordered index for floatingIdx
+	orderIdx := m.visibleToOrderIdx(visIdx)
+	if orderIdx < 0 {
+		return
+	}
 	m.pushMode()
-	m.floatingIdx = idx
+	m.floatingIdx = orderIdx
 	m.inputFocus = -1
 	// Resize the floating session to match the floating window content area
-	if m.conn != nil && idx >= 0 && idx < len(m.sessions) {
+	if m.conn != nil && orderIdx >= 0 && orderIdx < len(m.orderedSessions()) {
 		_, _, cw, ch := m.floatingContentRect()
 		if cw > 0 && ch > 0 {
-			sess := m.orderedSessions()[idx]
+			sess := m.orderedSessions()[orderIdx]
 			sess.Resize(uint16(cw), uint16(ch))
 			m.conn.SendResizeSession(sess.Name, uint16(cw), uint16(ch))
 		}
@@ -496,7 +512,7 @@ func (m *tuiModel) focusedContentSize() (int, int) {
 	statusH := 1
 	availH := m.height - statusH
 
-	n := len(m.orderedSessions())
+	n := len(m.visibleSessions())
 	if n == 0 {
 		return m.width, m.height
 	}

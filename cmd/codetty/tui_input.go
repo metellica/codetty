@@ -238,10 +238,18 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 		case 'f':
 			if m.floatingIdx >= 0 {
 				// Floating window → fullscreen that session
+				// Convert ordered index to visible index for m.selected
+				ordered := m.orderedSessions()
+				var sessName string
+				if m.floatingIdx < len(ordered) {
+					sessName = ordered[m.floatingIdx].Name
+				}
 				m.pushMode()
-				m.selected = m.floatingIdx
 				m.floatingIdx = -1
 				m.mode = modeFullscreen
+				if sessName != "" {
+					m.selected = m.visibleIndexByName(sessName)
+				}
 				m.resizeSessionPTYs()
 			} else if m.mode == modeFullscreen {
 				// Fullscreen → pop back
@@ -407,13 +415,14 @@ func (m *tuiModel) cycleSideHighlight() {
 
 // moveOrder swaps the selected session's position in the display order.
 func (m *tuiModel) moveOrder(delta int) {
-	n := len(m.order)
+	visible := m.visibleSessions()
+	n := len(visible)
 	if n < 2 || m.selected < 0 || m.selected >= n {
 		return
 	}
 	target := ((m.selected + delta) % n + n) % n
-	m.order[m.selected], m.order[target] = m.order[target], m.order[m.selected]
-	m.selected = target
+	// Use reorderByVisibleIdx to swap positions in m.order
+	m.reorderByVisibleIdx(m.selected, target)
 }
 
 // reorderByVisibleIdx moves a session from one visible position to another in m.order.

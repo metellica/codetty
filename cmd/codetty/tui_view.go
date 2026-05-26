@@ -291,7 +291,11 @@ func dimLine(line string) string {
 
 // overlayFloating renders a floating window on top of the base view.
 func (m *tuiModel) overlayFloating(base string) string {
-	sess := m.sessions[m.floatingIdx]
+	ordered := m.orderedSessions()
+	if m.floatingIdx < 0 || m.floatingIdx >= len(ordered) {
+		return base
+	}
+	sess := ordered[m.floatingIdx]
 
 	// Floating window is 80% of terminal size
 	fw := m.width * 8 / 10
