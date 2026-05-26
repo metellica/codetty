@@ -25,6 +25,7 @@ TUI Keys (Ctrl+A prefix):
   c       Create new session
   r       Rename focused session
   t       Discover/attach tmux sessions
+  w       Session manager (hide/show/kill)
   n/p     Next/previous session
   f       Toggle fullscreen (no borders/status)
   g       Toggle grid view

@@ -331,12 +331,12 @@ func TestHandlePrefixKey_SessionManager(t *testing.T) {
 	m.sessions = []*tuiSession{newTUISession("sess", "bash", 80, 24)}
 	m.order = []string{"sess"}
 
-	// Press Ctrl+A t — should open session manager
+	// Press Ctrl+A w — should open session manager
 	m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlA})
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'w'}})
 
 	if !m.sessMgr.active {
-		t.Fatal("session manager should be active after prefix+t")
+		t.Fatal("session manager should be active after prefix+w")
 	}
 	items := m.sessionManagerItems()
 	if len(items) != 1 {

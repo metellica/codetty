@@ -362,7 +362,7 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	if m.prefix {
-		help := "Ctrl+A: d detach  c new  m shell  x kill  r rename  n/p nav  f full/float  g grid  h/l move  t sessions  q close  1-9 jump"
+		help := "Ctrl+A: d detach  c new  m shell  x kill  r rename  n/p nav  f full/float  g grid  h/l move  t tmux  w sessions  q close  1-9 jump"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 

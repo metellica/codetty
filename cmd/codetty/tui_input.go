@@ -311,6 +311,9 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return nil
 		case 't':
+			m.openTmuxPicker()
+			return nil
+		case 'w':
 			m.openSessionManager()
 			return nil
 		case 'm':
