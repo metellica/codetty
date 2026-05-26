@@ -589,3 +589,63 @@ func TestRemoveSession_CleansHidden(t *testing.T) {
 		t.Fatal("hidden state should be cleaned up after remove")
 	}
 }
+
+func TestUpdate_PrefixKeyViaUpdate(t *testing.T) {
+	// Test that prefix key works through the full Update() path
+	// (not just handleKey), verifying confirmKill and sessMgr checks don't interfere
+	m := newTUIModel(nil, "", nil)
+	m.width = 100
+	m.height = 30
+	m.sessions = []*tuiSession{newTUISession("sess", "bash", 80, 24)}
+	m.order = []string{"sess"}
+
+	// Send Ctrl+A through Update
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+	if cmd != nil {
+		t.Fatal("Ctrl+A should not return a command")
+	}
+	if !m.prefix {
+		t.Fatal("prefix should be true after Ctrl+A via Update")
+	}
+
+	// Send 'c' through Update (should enter create mode)
+	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if cmd != nil {
+		t.Fatal("prefix+c should not return a command")
+	}
+	if m.prefix {
+		t.Fatal("prefix should be cleared after second key")
+	}
+	if !m.creating && !m.createChooser {
+		t.Fatal("should be in creating or createChooser mode after prefix+c")
+	}
+}
+
+func TestUpdate_PrefixKeyNotInterceptedBySessionManager(t *testing.T) {
+	// Verify that sessMgr.active = false doesn't intercept keys
+	m := newTUIModel(nil, "", nil)
+	m.width = 100
+	m.height = 30
+	m.sessions = []*tuiSession{newTUISession("sess", "bash", 80, 24)}
+	m.order = []string{"sess"}
+
+	// Ensure sessMgr is inactive
+	if m.sessMgr.active {
+		t.Fatal("sessMgr should be inactive by default")
+	}
+	if m.confirmKill {
+		t.Fatal("confirmKill should be false by default")
+	}
+
+	// Ctrl+A should still work
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+	if !m.prefix {
+		t.Fatal("prefix should be true after Ctrl+A")
+	}
+
+	// 'g' should toggle grid mode
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
+	if m.mode != modeGrid {
+		t.Fatalf("mode should be grid after prefix+g, got %d", m.mode)
+	}
+}
