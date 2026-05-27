@@ -189,6 +189,7 @@ codetty kill-server
 | 按键 | 功能 |
 |------|------|
 | `Ctrl+A f` | 全屏切换（根据当前模式智能切换） |
+| `Ctrl+A q` | 关闭浮动窗口 |
 | `Ctrl+A g` | 网格模式 ↔ 焦点放大模式 |
 | `Ctrl+A b` | 切换到焦点放大模式 |
 | `Ctrl+A a` | 切换到网格模式 |
@@ -387,8 +388,8 @@ codetty kill-server
 
 ### 操作浮动窗口
 
+- `Ctrl+A q` — 关闭浮动窗口（临时 shell 会自动 kill）
 - `Ctrl+A f` — 从浮动切换到全屏
-- `Esc`（仅临时 shell）— 关闭浮动窗口并 kill 临时 session
 - 正常操作：键盘输入转发到浮动窗口的 session
 
 ### 临时浮动 Shell
