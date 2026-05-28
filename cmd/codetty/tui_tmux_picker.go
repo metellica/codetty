@@ -24,9 +24,16 @@ type tmuxPicker struct {
 
 // openTmuxPicker discovers tmux sessions and opens the picker.
 // Already-managed tmux sessions are pre-selected.
+// If tmux is available but no sessions exist, falls back to creating a new one.
 func (m *tuiModel) openTmuxPicker() {
+	if !daemon.IsTmuxAvailable() {
+		return
+	}
 	sessions, _ := daemon.DiscoverTmuxSessions()
 	if len(sessions) == 0 {
+		m.creating = true
+		m.createText = ""
+		m.createTmux = true
 		return
 	}
 

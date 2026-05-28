@@ -185,10 +185,27 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *tuiModel) View() string {
 	if len(m.sessions) == 0 {
-		base := lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-			tuiTitleStyle.Render("⬡ codetty")+"\n\n"+
-				"No sessions. Creating one...")
-		// Still show tmux picker overlay if active
+		hint := "No sessions. Creating one..."
+		if m.autoCreate == nil {
+			hint = "No sessions. Press Ctrl+A c to create one."
+		}
+		// Only show the status bar when in an interactive overlay state.
+		hasOverlay := m.renaming || m.creating || m.createChooser || m.prefix
+		centerH := m.height
+		var status string
+		if hasOverlay {
+			status = m.statusBar()
+			centerH = m.height - lipgloss.Height(status)
+		}
+		if centerH < 1 {
+			centerH = 1
+		}
+		body := lipgloss.Place(m.width, centerH, lipgloss.Center, lipgloss.Center,
+			tuiTitleStyle.Render("⬡ codetty")+"\n\n"+hint)
+		base := body
+		if hasOverlay {
+			base += "\n" + status
+		}
 		if m.tmuxPicker.active {
 			base = m.renderTmuxPicker(base)
 		}
