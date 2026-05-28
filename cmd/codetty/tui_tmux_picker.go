@@ -142,7 +142,7 @@ func (m *tuiModel) applyTmuxPickerSelection() {
 			m.conn.AttachTmuxSession(item.Name, uint16(cols), uint16(rows))
 		} else if !item.Selected && isManaged {
 			// Detach: kill the daemon session wrapping this tmux session
-			m.conn.KillSession(displayName)
+			m.conn.KillSession(displayName, false)
 		}
 	}
 }

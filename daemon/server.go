@@ -217,7 +217,7 @@ func (s *Server) handleKill(conn net.Conn, req Request) {
 		return
 	}
 
-	sess.Kill()
+	sess.KillWithTmux()
 	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
 }
 
@@ -415,7 +415,11 @@ func (s *Server) killSessionForSubscriber(req KillSessionRequest) {
 	sess, exists := s.sessions[req.Name]
 	s.mu.Unlock()
 	if exists {
-		sess.Kill()
+		if req.KillTmux {
+			sess.KillWithTmux()
+		} else {
+			sess.Kill()
+		}
 	}
 }
 

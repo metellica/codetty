@@ -16,6 +16,11 @@ func CreateTmuxSession(name string) error {
 	return exec.Command("tmux", "new-session", "-d", "-s", name).Run()
 }
 
+// KillTmuxSession kills a tmux session by name.
+func KillTmuxSession(name string) error {
+	return exec.Command("tmux", "kill-session", "-t", name).Run()
+}
+
 // RenameTmuxSession renames a tmux session from oldName to newName.
 func RenameTmuxSession(oldName, newName string) error {
 	return exec.Command("tmux", "rename-session", "-t", oldName, newName).Run()

@@ -127,9 +127,11 @@ func (dc *daemonConn) AttachTmuxSession(tmuxTarget string, cols, rows uint16) {
 }
 
 // KillSession requests the daemon to kill a session.
-func (dc *daemonConn) KillSession(name string) {
+// If killTmux is true, also kills the underlying tmux session (if any).
+func (dc *daemonConn) KillSession(name string, killTmux bool) {
 	daemon.WriteFrame(dc.conn, daemon.FrameKillSession, daemon.MarshalJSON(daemon.KillSessionRequest{
-		Name: name,
+		Name:     name,
+		KillTmux: killTmux,
 	}))
 }
 

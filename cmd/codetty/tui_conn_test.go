@@ -297,7 +297,7 @@ func TestDaemonConn_SendMethodsWriteExpectedFrames(t *testing.T) {
 	dc.SendInput("sess", []byte("abc"))
 	dc.SendResize(120, 40)
 	dc.CreateSession("new", []string{"bash", "-lc", "echo hi"}, 90, 30)
-	dc.KillSession("old")
+	dc.KillSession("old", true)
 	dc.Detach()
 
 	select {

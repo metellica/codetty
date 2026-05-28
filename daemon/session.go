@@ -138,6 +138,15 @@ func (s *DaemonSession) Kill() {
 	s.Terminal.Close()
 }
 
+// KillWithTmux kills the session and, if it wraps a tmux session, kills that too.
+func (s *DaemonSession) KillWithTmux() {
+	if s.Type == SessionTypeTmux && s.TmuxTarget != "" {
+		KillTmuxSession(s.TmuxTarget)
+	}
+	s.Terminal.Kill()
+	s.Terminal.Close()
+}
+
 // Info returns a SessionInfo snapshot for listing.
 func (s *DaemonSession) Info() SessionInfo {
 	cmd := ""

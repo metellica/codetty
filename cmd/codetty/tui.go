@@ -494,7 +494,7 @@ func (m *tuiModel) closeFloating() {
 	if m.floatingIdx >= 0 && m.floatingIdx < len(m.orderedSessions()) {
 		sess := m.orderedSessions()[m.floatingIdx]
 		if sess.Temporary && m.conn != nil {
-			m.conn.KillSession(sess.Name)
+			m.conn.KillSession(sess.Name, true)
 		}
 	}
 	if !m.popMode() {

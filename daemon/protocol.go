@@ -109,7 +109,8 @@ type CreateSessionRequest struct {
 
 // KillSessionRequest is the payload for FrameKillSession.
 type KillSessionRequest struct {
-	Name string `json:"name"`
+	Name     string `json:"name"`
+	KillTmux bool   `json:"kill_tmux,omitempty"` // also kill underlying tmux session
 }
 
 // RenameSessionRequest is the payload for FrameRenameSession.

@@ -20,7 +20,7 @@ func (m *tuiModel) handleConfirmKillKey(msg tea.KeyMsg) tea.Cmd {
 			switch msg.Runes[0] {
 			case 'y', 'Y':
 				if m.conn != nil && m.confirmKillName != "" {
-					m.conn.KillSession(m.confirmKillName)
+					m.conn.KillSession(m.confirmKillName, true)
 				}
 				m.confirmKill = false
 				m.confirmKillName = ""
@@ -33,7 +33,7 @@ func (m *tuiModel) handleConfirmKillKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case tea.KeyEnter:
 		if m.conn != nil && m.confirmKillName != "" {
-			m.conn.KillSession(m.confirmKillName)
+			m.conn.KillSession(m.confirmKillName, true)
 		}
 		m.confirmKill = false
 		m.confirmKillName = ""
@@ -217,7 +217,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			return tea.Quit
 		case 'x':
 			if sess := m.selectedSession(); sess != nil && m.conn != nil {
-				m.conn.KillSession(sess.Name)
+				m.conn.KillSession(sess.Name, true)
 			}
 			return nil
 		case 'c':
