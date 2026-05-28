@@ -865,7 +865,8 @@ func (m *tuiModel) extractSelectedText() string {
 			g := sess.term.Cell(x, row)
 			ch := g.Char
 			if ch == 0 {
-				ch = ' '
+				// Skip NUL continuation cells placed after wide characters
+				continue
 			}
 			sb.WriteRune(ch)
 		}
