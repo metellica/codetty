@@ -34,6 +34,7 @@ CodeTTY 是一个本地终端多路复用器，提供类似 tmux/screen 的持�
 - 支持同时管理多个终端会话
 - 可加载已有 tmux 会话统一管理
 - 鼠标拖拽重排面板、按钮操作
+- 文本选择与 OSC 52 剪贴板复制
 
 ---
 
@@ -70,15 +71,17 @@ CodeTTY 使用 **Ctrl+A** 作为命令前缀键（类似 tmux 的 Ctrl+B）。
 
 如果需要向程序发送字面 Ctrl+A（如 bash 的行首跳转），按两次 `Ctrl+A Ctrl+A`。
 
+按下前缀键后状态栏会显示完整的快捷键提示。
+
 ### Session（会话）
 
 一个 session 对应一个 PTY 进程（如 shell、vim、htop）。session 由 daemon 管理，
-TUI 只是显示和操作的前端。
+TUI 只是显示和操作的前端。Session 可以显示、隐藏、重命名或关闭。
 
 ### 面板（Panel）
 
 TUI 将每个可见 session 显示为一个面板。面板有不同布局方式：大面板、侧面板、
-全屏、浮动窗口等。
+网格、全屏、浮动窗口等。
 
 ---
 
@@ -103,6 +106,8 @@ codetty new -s myproject        # 指定 session 名称
 codetty new -- htop             # 运行指定命令
 codetty new -s dev -- vim .     # 指定名称 + 命令
 ```
+
+未知命令参数会自动视为 `new` 子命令，例如 `codetty vim .` 等价于 `codetty new -- vim .`。
 
 ### codetty attach (a)
 
@@ -143,34 +148,50 @@ codetty kill-server
 
 启动后进入 TUI 界面，底部状态栏显示当前 session 列表和快捷键提示。
 
+### 无 Session 状态
+
+当没有任何 session 时，屏幕中央显示 `⬡ codetty` 标识和提示信息：
+
+- 正常提示："No sessions. Press Ctrl+A c to create one."
+- 自动创建中："No sessions. Creating one..."
+
+此状态下仍然支持所有覆盖层操作（tmux 发现器、创建 session 等），状态栏仅在覆盖层
+激活时显示。
+
 ### 状态栏
 
 底部状态栏显示：
 
-- 当前 session 列表（高亮的是焦点 session）
-- 基本快捷键提示
+- 当前焦点 session 名称和位置（如 `[bash] 1/3`）
+- 当前布局模式（focus / grid / fullscreen）
+- 操作提示
+- 按下 `Ctrl+A` 前缀键后显示完整快捷键列表
 
 ### 标题栏
 
-每个面板顶部的标题栏显示 session 名称。侧面板的标题栏右侧有操作按钮：
+每个面板顶部的标题栏显示 session 名称和编号。侧面板的标题栏右侧有操作按钮：
 
 - `[-]` — 隐藏面板（session 继续运行，仅不显示）
 - `[x]` — 关闭 session（会显示确认对话框）
+
+侧面板标题栏有浅绿色背景，大面板标题栏为普通样式。在窄终端（宽度 < 120）下，
+焦点放大模式采用垂直布局，底部显示一个小面板列表。
 
 ---
 
 ## 快捷键参考
 
-所有前缀命令格式为 `Ctrl+A` 松开后按功能键。
+所有前缀命令格式为 `Ctrl+A` 松开后按功能键。按下前缀键后状态栏会显示可用命令
+的完整列表。
 
 ### 会话管理
 
 | 按键 | 功能 |
 |------|------|
 | `Ctrl+A d` | Detach — 退出 TUI，所有 session 继续运行 |
-| `Ctrl+A c` | 创建新 session（有 tmux 时弹出类型选择） |
+| `Ctrl+A c` | 创建新 session（有 tmux 时弹出类型选择器） |
 | `Ctrl+A x` | 关闭当前聚焦的 session |
-| `Ctrl+A r` | 重命名当前 session |
+| `Ctrl+A r` | 重命名当前 session（预填当前名称，可编辑后确认） |
 | `Ctrl+A t` | 打开 Tmux Session 发现器 |
 | `Ctrl+A w` | 打开 Session 管理器 |
 | `Ctrl+A m` | 创建临时浮动 shell |
@@ -182,15 +203,16 @@ codetty kill-server
 | `Ctrl+A n` | 切换到下一个 session |
 | `Ctrl+A p` | 切换到上一个 session |
 | `Ctrl+A 1`-`9` | 跳转到指定编号的 session |
-| `Shift+Tab` | 切换到下一个 session（无需前缀） |
+| `Shift+Tab` | 焦点放大模式下循环切换面板高亮；其他模式切换到下一 session |
+| `Enter` | 在高亮面板上打开浮动窗口（网格模式或焦点放大的侧面板） |
 
 ### 布局控制
 
 | 按键 | 功能 |
 |------|------|
-| `Ctrl+A f` | 全屏切换（根据当前模式智能切换） |
+| `Ctrl+A f` | 切换布局：浮动→全屏→上级模式；焦点放大→全屏；全屏→返回 |
 | `Ctrl+A q` | 关闭浮动窗口 |
-| `Ctrl+A g` | 网格模式 ↔ 焦点放大模式 |
+| `Ctrl+A g` | 网格模式 ↔ 焦点放大模式切换 |
 | `Ctrl+A b` | 切换到焦点放大模式 |
 | `Ctrl+A a` | 切换到网格模式 |
 
@@ -201,11 +223,17 @@ codetty kill-server
 | `Ctrl+A h` | 当前 session 向左移动（调整顺序） |
 | `Ctrl+A l` | 当前 session 向右移动（调整顺序） |
 
+### 网格模式方向键
+
+| 按键 | 功能 |
+|------|------|
+| `←` / `→` / `↑` / `↓` | 在网格面板间移动焦点选择 |
+
 ### 直接按键（无需前缀）
 
 | 按键 | 功能 |
 |------|------|
-| `Shift+Tab` | 切换到下一个 session |
+| `Shift+Tab` | 切换到下一个 session / 循环面板高亮 |
 | `Ctrl+A Ctrl+A` | 向 session 发送字面 Ctrl+A |
 
 ---
@@ -216,13 +244,15 @@ codetty kill-server
 
 | 操作 | 效果 |
 |------|------|
-| 单击侧面板内容区 | 将键盘输入焦点切换到该面板 |
+| 单击侧面板内容区 | 以该 session 打开浮动窗口 |
+| 单击大面板内容区 | 开始文本选择；若 session 启用了鼠标报告则转发点击到 PTY |
 | Ctrl+单击侧面板 | 将该 session 提升为大面板（交换位置） |
-| 单击大面板内容区 | 重置输入焦点到大面板 |
+| 单击网格面板内容区 | 以该 session 打开浮动窗口 |
 
 ### 标题栏按钮
 
-侧面板标题栏右侧有 `[-]` 和 `[x]` 按钮：
+侧面板标题栏右侧有 `[-]` 和 `[x]` 按钮。支持在焦点放大模式和网格模式下的
+所有非大面板上使用。
 
 | 按钮 | 效果 |
 |------|------|
@@ -231,7 +261,7 @@ codetty kill-server
 
 ### 标题栏拖拽重排
 
-在侧面板标题栏上按住鼠标并拖动到另一个面板，松开后两个面板交换位置。
+在侧面板或网格面板的标题栏上按住鼠标并拖动到另一个面板，松开后两个面板交换位置。
 
 拖拽过程中目标面板标题栏会显示 `⬇` 指示器。
 
@@ -250,7 +280,7 @@ codetty kill-server
 
 ### 滚轮
 
-鼠标滚轮事件转发到当前焦点 session 的 PTY。
+鼠标滚轮事件转发到有鼠标报告能力的 session PTY（如 tmux、vim 等）。
 
 ---
 
@@ -260,15 +290,21 @@ codetty kill-server
 
 一个 session 占据大部分屏幕（大面板），其余 session 显示在右侧的小面板列表中。
 
-- 大面板接收键盘输入（除非点击了侧面板）
-- 侧面板有标题栏操作按钮和拖拽支持
+- 大面板接收键盘输入和鼠标事件
+- 侧面板有标题栏操作按钮（`[-]`/`[x]`）、拖拽支持和 Shift+Tab 循环高亮
 - `Ctrl+A n/p` 或 `Ctrl+A 1-9` 切换大面板显示的 session
+- 宽度 ≥ 120 时采用水平布局（大面板在左，侧面板在右）
+- 宽度 < 120 时采用垂直布局（大面板在上，侧面板在下）
+- 在高亮侧面板上按 `Enter` 打开浮动窗口
 
 ### 网格模式 (Grid)
 
-所有 session 以网格形式平铺显示，每个面板大小均等。
+所有 session 以网格形式平铺显示，每个面板大小均等。每行最多显示 2 个面板。
 
-- 点击面板设置焦点
+- `←` `→` `↑` `↓` 方向键在面板间导航
+- 点击面板以该 session 打开浮动窗口
+- `Enter` 在选中面板上打开浮动窗口
+- 标题栏支持 `[-]`/`[x]` 按钮和拖拽重排
 - `Ctrl+A f` 打开焦点 session 的浮动窗口
 
 ### 全屏模式 (Fullscreen)
@@ -276,33 +312,74 @@ codetty kill-server
 当前 session 占满整个终端窗口。
 
 - 所有鼠标事件转发到 PTY（支持 vim、tmux 等鼠标操作）
-- `Ctrl+A f` 退回上一个模式
+- 支持文本选择与复制
+- `Ctrl+A f` 退回上一个模式（通过模式栈导航）
 
-### 浮动窗口 (Floating)
+### 模式栈导航
 
-在当前布局上层叠加显示一个 session 的浮动窗口（带边框）。
+`Ctrl+A f` 使用模式栈实现智能导航：
 
-- 网格模式下 `Ctrl+A f` 打开
-- `Ctrl+A f` 再按可切换到全屏
-- `Ctrl+A m` 创建临时浮动 shell（关闭浮动窗口时自动 kill）
+- 网格模式 → 打开浮动窗口
+- 焦点放大模式 → 切换到全屏
+- 浮动窗口 → 切换到全屏（浮动窗口中的 session）
+- 全屏模式（普通 session）→ 弹出模式栈，跳过中间的浮动窗口状态
+- 全屏模式（临时 shell）→ 返回上一级浮动窗口
+- 临时 shell 在全屏时关闭 → 返回浮动窗口
 
 ---
 
 ## Session 管理
 
-### Session 管理器 (Ctrl+A w)
+### 创建 Session (Ctrl+A c)
 
-打开覆盖层显示所有 session（包括已隐藏的）：
+按下 `Ctrl+A c` 后：
+
+- **系统中有 tmux** — 弹出类型选择器：
+  - 按 `c` 创建普通 shell session
+  - 按 `t` 创建 tmux session
+  - 按 `Esc` 取消
+- **系统中没有 tmux** — 直接进入名称输入模式
+
+名称输入模式支持：
+- 输入 session 名称后按 `Enter` 确认
+- `Esc` 取消创建
+- `Backspace` 删除字符
+
+### 重命名 Session (Ctrl+A r)
+
+- 进入重命名模式，**预填当前 session 名称**，可直接编辑
+- `Enter` 确认，`Esc` 取消，`Backspace` 删除字符
+
+### 关闭 Session（确认对话框）
+
+关闭 session 前显示确认对话框：
 
 ```
-┌─── Session Manager ─────────────────────┐
-│                                          │
-│  ● bash           [visible]              │
-│  ● vim            [visible]              │
-│  ○ htop           [hidden]               │
-│                                          │
-│  j/k: 移动  space: 切换  x: 关闭  esc: 退出  │
-└──────────────────────────────────────────┘
+┌─ Kill session "bash"? ───────┐
+│                               │
+│  [y/Enter] confirm  [n/Esc] cancel  │
+└───────────────────────────────┘
+```
+
+支持 `y`/`Enter` 确认或 `n`/`Esc` 取消。
+
+### Session 管理器 (Ctrl+A w)
+
+打开覆盖层显示所有 session（包括已隐藏的），按类型和状态标识：
+
+```
+┌─── ⬡ Session Manager ─────────────────────┐
+│                                            │
+│  2 visible / 3 total                       │
+│  ─────────────────────────────             │
+│  ▸ visible  bash                           │
+│    visible  vim           [tmux]           │
+│    hidden   htop                           │
+│  ─────────────────────────────             │
+│                                            │
+│  ↑↓ nav  space/enter toggle  x kill        │
+│  h hide  s show  esc close                 │
+└────────────────────────────────────────────┘
 ```
 
 操作：
@@ -326,20 +403,6 @@ codetty kill-server
 - 可通过 Session 管理器 (`Ctrl+A w`) 恢复显示
 - 也可通过侧面板 `[-]` 按钮隐藏
 
-### 关闭 Session
-
-关闭（kill）一个 session 会终止其 PTY 进程。操作前会弹出确认对话框：
-
-```
-  Kill session "bash"? [y/n]
-```
-
-可通过以下方式触发：
-
-- `Ctrl+A x` — 关闭当前聚焦的 session
-- 侧面板 `[x]` 按钮点击
-- Session 管理器中按 `x`
-
 ---
 
 ## Tmux 集成
@@ -349,48 +412,58 @@ codetty kill-server
 如果系统中有 tmux 运行，`Ctrl+A t` 打开发现器：
 
 ```
-┌─── Tmux Sessions ───────────────────────┐
-│                                          │
-│  dev         3 windows   (attached)      │
-│  server      1 window    (detached)      │
-│  monitor     2 windows   (detached)      │
-│                                          │
-│  enter: 加载  d: detach  esc: 取消       │
-└──────────────────────────────────────────┘
+┌─── ⬡ Tmux Sessions ───────────────────────┐
+│                                            │
+│  2/3 selected                              │
+│  ─────────────────────────────             │
+│  ▸ ◉  dev                                  │
+│    ◉  server                               │
+│    ○  monitor                              │
+│  ─────────────────────────────             │
+│                                            │
+│  ↑↓ nav  space toggle  a/n all/none        │
+│  enter confirm  esc cancel                 │
+└────────────────────────────────────────────┘
 ```
 
-- **Enter** — 将选中的 tmux session 作为 PTY session 加载到 CodeTTY 中管理
-- **d** — 在 tmux 中 detach 该 session
+- **Space** — 切换单个 session 的选中状态
+- **Enter** — 确认选择：选中且未管理的 tmux session 被加载，取消选中的已管理 session 被卸除
+- **a** — 全选所有 tmux session
+- **n** — 取消全选
+- **j/k / ↑/↓** — 导航
 - **Esc** — 取消并关闭发现器
 
-加载后 tmux session 像普通 session 一样显示在面板中，你可以在 CodeTTY 中正常
-操作 tmux（键盘和鼠标都正常转发）。
+加载后 tmux session 在面板中显示类型标签 `[tmux]`，键盘和鼠标事件正常转发。
 
 ### 创建新会话 (Ctrl+A c)
 
 如果系统有 tmux，按 `Ctrl+A c` 会弹出类型选择：
 
-- **Shell** — 创建普通 shell session
-- **Tmux** — 创建新的 tmux session 并加载
+- **Shell** (`c`) — 创建普通 shell session
+- **Tmux** (`t`) — 创建新的 tmux session 并加载
 
-如果系统没有 tmux，直接创建 shell session。
+如果系统没有 tmux，直接进入 shell session 名称输入。
 
 ---
 
 ## 浮动窗口
 
-浮动窗口是覆盖在当前布局上的单个 session 显示窗口。
+浮动窗口是覆盖在当前布局上的单个 session 显示窗口，尺寸为终端的 80%。
 
 ### 打开浮动窗口
 
 - 网格模式下 `Ctrl+A f` — 以焦点 session 打开浮动窗口
+- 焦点放大模式下点击侧面板内容区 — 以该 session 打开浮动窗口
+- 网格模式下点击面板 — 以该 session 打开浮动窗口
+- 高亮侧面板上按 `Enter` — 以该 session 打开浮动窗口
 - `Ctrl+A m` — 创建新的临时浮动 shell
 
 ### 操作浮动窗口
 
 - `Ctrl+A q` — 关闭浮动窗口（临时 shell 会自动 kill）
 - `Ctrl+A f` — 从浮动切换到全屏
-- 正常操作：键盘输入转发到浮动窗口的 session
+- 键盘输入正常转发到浮动窗口的 session
+- 鼠标操作：支持文本选择和点击转发
 
 ### 临时浮动 Shell
 
@@ -404,12 +477,15 @@ codetty kill-server
 
 ## 文本选择与复制
 
-在大面板或浮动窗口中，可以使用鼠标选择和复制文本：
+在大面板、全屏模式或浮动窗口中，可以使用鼠标选择和复制文本：
 
 1. **开始选择** — 在面板内容区按住鼠标左键
 2. **拖动选择** — 移动鼠标，选中的文本以反色高亮显示
 3. **复制** — 松开鼠标，选中文本通过 OSC 52 发送到系统剪贴板
 4. **取消** — 点击其他位置取消选区
+
+如果 session 启用了鼠标报告（如 tmux、vim），单击（不拖动）会将点击事件转发到
+PTY 程序而非触发文本选择。
 
 ### OSC 52 剪贴板
 
@@ -501,6 +577,7 @@ codetty
 - 确认已按下 `Ctrl+A` 前缀键后松开，再按功能键
 - 检查是否在覆盖层模式（如 Session 管理器或 Tmux 发现器）中——先按 Esc 退出
 - 部分操作需要特定模式（如 `Ctrl+A m` 仅在非全屏模式下工作）
+- 在浮动窗口中，`Ctrl+A` 前缀键仍然有效
 
 ### 显示异常
 
@@ -528,19 +605,21 @@ codetty
 
 初始发布：
 
-- Daemon 架构与持久会话
-- 多布局模式（焦点放大、网格、全屏）
-- Ctrl+A 命令前缀
-- 鼠标点击切换面板
-- Tmux session 发现与加载
+- Daemon 架构与持久会话管理（detach/attach）
+- 三布局模式：焦点放大（Focus-Big）、网格（Grid）、全屏（Fullscreen）
+- 窄终端垂直布局自适应
+- Ctrl+A 命令前缀系统
+- Shift+Tab 面板循环切换
+- Enter 打开浮动窗口
+- 覆盖层式 Session 管理器（`Ctrl+A w`）
+- Tmux Session 发现器（`Ctrl+A t`）——支持选择加载/卸除
+- 创建 session 类型选择器（普通 shell / tmux）
+- Session 重命名（预填当前名称）
+- 临时浮动 shell（`Ctrl+A m`，关闭时自动清理）
+- 面板拖拽重排
+- 侧面板 `[-]`（隐藏）和 `[x]`（关闭）标题栏按钮
+- 鼠标点击切换面板、Ctrl+click 提升大面板
+- 文本选择与 OSC 52 剪贴板复制（大面板、全屏、浮动窗口）
+- 模式栈导航（`Ctrl+A f` 智能回溯）
 - 宽字符支持
-- 跨平台 PTY
-
-### v1.0.0 后新增
-
-- **面板拖拽重排** — 拖拽侧面板标题栏调整面板顺序
-- **面板按钮** — 侧面板 `[-]`（隐藏）和 `[x]`（关闭）按钮
-- **Session 管理器** (`Ctrl+A w`) — 隐藏/显示/关闭 session 的覆盖层界面
-- **文本选择与复制** — 在大面板中鼠标选择文本，OSC 52 复制到剪贴板
-- **临时浮动 shell** (`Ctrl+A m`) — 快速打开临时 shell，关闭时自动清理
-- **Tmux 发现器恢复** (`Ctrl+A t`) — 启动时可直接发现加载 tmux session
+- 跨平台 PTY（Linux/macOS/Windows）
