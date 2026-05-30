@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 
 	"codetty/daemon"
 	"codetty/terminal"
@@ -99,10 +100,14 @@ func latestSession(sockPath string) string {
 	}
 
 	var latestName string
-	var latestTime string
+	var latest time.Time
 	for _, s := range resp.Sessions {
-		if s.CreatedAt > latestTime {
-			latestTime = s.CreatedAt
+		t, err := time.Parse(time.RFC3339, s.CreatedAt)
+		if err != nil {
+			continue
+		}
+		if t.After(latest) {
+			latest = t
 			latestName = s.Name
 		}
 	}
