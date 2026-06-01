@@ -127,7 +127,11 @@ func startTUI(sockPath string, focusTarget string, autoCreate []string) {
 		log.Fatalf("subscribe: %v", err)
 	}
 
-	if _, err := p.Run(); err != nil {
+	err = runWithAutowrapDisabled(os.Stdout, func() error {
+		_, runErr := p.Run()
+		return runErr
+	})
+	if err != nil {
 		log.Fatalf("TUI: %v", err)
 	}
 
