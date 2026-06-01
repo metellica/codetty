@@ -936,16 +936,7 @@ func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(c
 	cursor := term.Cursor()
 	curVisible := term.CursorVisible()
 
-	lastVisibleRow := 0
-	for y := 0; y < rows; y++ {
-		for x := 0; x < cols; x++ {
-			g := term.Cell(x, y)
-			if g.Char != 0 && g.Char != ' ' {
-				lastVisibleRow = y
-				break
-			}
-		}
-	}
+	lastVisibleRow := findLastVisibleRow(term, cols, rows)
 
 	startRow := 0
 	contentRows := lastVisibleRow + 1
@@ -954,6 +945,9 @@ func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(c
 	}
 
 	lines := make([]string, h)
+	var sb strings.Builder
+	sb.Grow(w * 4)
+
 	for displayRow := 0; displayRow < h; displayRow++ {
 		srcRow := startRow + displayRow
 		if srcRow >= rows {
@@ -961,7 +955,7 @@ func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(c
 			continue
 		}
 
-		var sb strings.Builder
+		sb.Reset()
 		visualCol := 0
 		skipNext := false
 		for x := 0; x < cols && visualCol < w; x++ {

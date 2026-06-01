@@ -133,21 +133,95 @@ func (s *tuiSession) MouseEnabled() bool {
 	return s.term.Mode()&vt10x.ModeMouseMask != 0
 }
 
+// RenderDimmed renders terminal content in uniform dim gray, skipping per-cell color processing.
+func (s *tuiSession) RenderDimmed(w, h int) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.term.Lock()
+	defer s.term.Unlock()
+	return renderTerminalDimmed(s.term, w, h)
+}
+
+func renderTerminalDimmed(term vt10x.Terminal, w, h int) []string {
+	cols, rows := term.Size()
+
+	lastVisibleRow := findLastVisibleRow(term, cols, rows)
+	startRow := 0
+	contentRows := lastVisibleRow + 1
+	if contentRows > h {
+		startRow = contentRows - h
+	}
+
+	lines := make([]string, h)
+	dimStart := "\x1b[38;5;242m"
+	dimEnd := "\x1b[0m"
+
+	var sb strings.Builder
+	sb.Grow(w + 20)
+
+	for displayRow := 0; displayRow < h; displayRow++ {
+		srcRow := startRow + displayRow
+		if srcRow >= rows {
+			lines[displayRow] = strings.Repeat(" ", w)
+			continue
+		}
+
+		sb.Reset()
+		sb.WriteString(dimStart)
+		visualCol := 0
+		skipNext := false
+		for x := 0; x < cols && visualCol < w; x++ {
+			if skipNext {
+				skipNext = false
+				continue
+			}
+			g := term.Cell(x, srcRow)
+			ch := g.Char
+			if ch == 0 {
+				ch = ' '
+			}
+			cw := runewidth.RuneWidth(ch)
+			if cw == 0 {
+				ch = ' '
+				cw = 1
+			}
+			if visualCol+cw > w {
+				break
+			}
+			sb.WriteRune(ch)
+			visualCol += cw
+			if cw > 1 {
+				skipNext = true
+			}
+		}
+		for visualCol < w {
+			sb.WriteByte(' ')
+			visualCol++
+		}
+		sb.WriteString(dimEnd)
+		lines[displayRow] = sb.String()
+	}
+	return lines
+}
+
+func findLastVisibleRow(term vt10x.Terminal, cols, rows int) int {
+	for y := rows - 1; y > 0; y-- {
+		for x := 0; x < cols; x++ {
+			g := term.Cell(x, y)
+			if g.Char != 0 && g.Char != ' ' {
+				return y
+			}
+		}
+	}
+	return 0
+}
+
 func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 	cols, rows := term.Size()
 	cursor := term.Cursor()
 	curVisible := term.CursorVisible()
 
-	lastVisibleRow := 0
-	for y := 0; y < rows; y++ {
-		for x := 0; x < cols; x++ {
-			g := term.Cell(x, y)
-			if g.Char != 0 && g.Char != ' ' {
-				lastVisibleRow = y
-				break
-			}
-		}
-	}
+	lastVisibleRow := findLastVisibleRow(term, cols, rows)
 
 	startRow := 0
 	contentRows := lastVisibleRow + 1
@@ -158,6 +232,9 @@ func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 	lines := make([]string, h)
 	curX, curY := -1, -1
 
+	var sb strings.Builder
+	sb.Grow(w * 4)
+
 	for displayRow := 0; displayRow < h; displayRow++ {
 		srcRow := startRow + displayRow
 		if srcRow >= rows {
@@ -165,7 +242,7 @@ func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 			continue
 		}
 
-		var sb strings.Builder
+		sb.Reset()
 		visualCol := 0
 		skipNext := false
 		for x := 0; x < cols && visualCol < w; x++ {
@@ -269,37 +346,42 @@ func glyphANSI(g vt10x.Glyph, isCursor bool) (string, string) {
 	return "", ""
 }
 
-// colorToANSIFG converts a vt10x Color to an ANSI foreground escape sequence.
+var (
+	ansiFG [256]string
+	ansiBG [256]string
+)
+
+func init() {
+	for i := 0; i < 16; i++ {
+		if i < 8 {
+			ansiFG[i] = fmt.Sprintf("\x1b[%dm", 30+i)
+			ansiBG[i] = fmt.Sprintf("\x1b[%dm", 40+i)
+		} else {
+			ansiFG[i] = fmt.Sprintf("\x1b[%dm", 90+i-8)
+			ansiBG[i] = fmt.Sprintf("\x1b[%dm", 100+i-8)
+		}
+	}
+	for i := 16; i < 256; i++ {
+		ansiFG[i] = fmt.Sprintf("\x1b[38;5;%dm", i)
+		ansiBG[i] = fmt.Sprintf("\x1b[48;5;%dm", i)
+	}
+}
+
 func colorToANSIFG(c vt10x.Color) string {
 	v := uint32(c)
-	if v < 16 {
-		// Standard ANSI colors: use compact SGR codes
-		if v < 8 {
-			return fmt.Sprintf("\x1b[%dm", 30+v)
-		}
-		return fmt.Sprintf("\x1b[%dm", 90+v-8)
-	}
 	if v < 256 {
-		return fmt.Sprintf("\x1b[38;5;%dm", v)
+		return ansiFG[v]
 	}
-	// Truecolor: r<<16 | g<<8 | b
 	r := (v >> 16) & 0xFF
 	g := (v >> 8) & 0xFF
 	b := v & 0xFF
 	return fmt.Sprintf("\x1b[38;2;%d;%d;%dm", r, g, b)
 }
 
-// colorToANSIBG converts a vt10x Color to an ANSI background escape sequence.
 func colorToANSIBG(c vt10x.Color) string {
 	v := uint32(c)
-	if v < 16 {
-		if v < 8 {
-			return fmt.Sprintf("\x1b[%dm", 40+v)
-		}
-		return fmt.Sprintf("\x1b[%dm", 100+v-8)
-	}
 	if v < 256 {
-		return fmt.Sprintf("\x1b[48;5;%dm", v)
+		return ansiBG[v]
 	}
 	r := (v >> 16) & 0xFF
 	g := (v >> 8) & 0xFF

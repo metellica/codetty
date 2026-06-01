@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -102,5 +103,46 @@ func TestDirtyTracking_LinesCachedAndReused(t *testing.T) {
 	lines3, _, _ := sess.RenderANSI(40, 10)
 	if lines3[1] == lines1[1] {
 		t.Fatal("render should reflect new output after write")
+	}
+}
+
+func TestRenderDimmed_ProducesGrayOutput(t *testing.T) {
+	sess := newTUISession("test", "bash", 20, 5)
+	sess.WriteOutput([]byte("hello world"))
+
+	lines := sess.RenderDimmed(20, 5)
+	if len(lines) != 5 {
+		t.Fatalf("expected 5 lines, got %d", len(lines))
+	}
+	// First line should contain "hello world" wrapped in gray
+	if !strings.Contains(lines[0], "hello world") {
+		t.Fatalf("dimmed line missing content: %q", lines[0])
+	}
+	// Should contain dim gray ANSI code
+	if !strings.Contains(lines[0], "\x1b[38;5;242m") {
+		t.Fatalf("dimmed line missing gray ANSI code: %q", lines[0])
+	}
+}
+
+func BenchmarkColorToANSIFG(b *testing.B) {
+	colors := []vt10x.Color{0, 1, 7, 8, 15, 128, 255}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, c := range colors {
+			colorToANSIFG(c)
+		}
+	}
+}
+
+func BenchmarkRenderTerminalANSI(b *testing.B) {
+	sess := newTUISession("bench", "bash", 120, 40)
+	var buf []byte
+	for i := 0; i < 40; i++ {
+		buf = append(buf, []byte(fmt.Sprintf("\x1b[38;5;%dm%s\r\n", i%256, strings.Repeat("X", 120)))...)
+	}
+	sess.WriteOutput(buf)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sess.RenderANSI(120, 40)
 	}
 }
