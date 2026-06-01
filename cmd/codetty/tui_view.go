@@ -259,7 +259,9 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 	}
 
 	var lines []string
-	if m.sel.session == sess.Name && (m.sel.active || m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY) {
+	if isSidePanel && !focused {
+		lines = sess.RenderDimmed(innerW, innerH)
+	} else if m.sel.session == sess.Name && (m.sel.active || m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY) {
 		selFn := func(col, row int) bool {
 			return m.selectionCovers(sess.Name, col, row)
 		}
@@ -268,25 +270,8 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 		lines, _, _ = sess.RenderANSI(innerW, innerH)
 	}
 
-	// Dim content for non-focused side panels
-	if isSidePanel && !focused {
-		for i, line := range lines {
-			lines[i] = dimLine(line)
-		}
-	}
-
 	content := strings.Join(lines, "\n")
 	return style.Render(header + "\n" + content)
-}
-
-// dimLine strips existing colors and renders the text in a dim gray.
-func dimLine(line string) string {
-	// Strip all ANSI sequences and re-render as dim gray
-	plain := ansi.Strip(line)
-	if plain == "" {
-		return line
-	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(plain)
 }
 
 // overlayFloating renders a floating window on top of the base view.
