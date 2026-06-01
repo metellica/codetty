@@ -2,6 +2,7 @@ package main
 
 import (
 	"codetty/daemon"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -91,6 +92,17 @@ type tuiModel struct {
 	floatingTarget string
 	// Auto-create session on start
 	autoCreate []string // command to auto-create
+
+	// Render coalescing: defer View() for burst output
+	renderPending bool
+}
+
+type renderTickMsg struct{}
+
+func scheduleRenderTick() tea.Cmd {
+	return tea.Tick(16*time.Millisecond, func(time.Time) tea.Msg {
+		return renderTickMsg{}
+	})
 }
 
 // modeState captures a view state for back-navigation.
@@ -151,6 +163,15 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if sess := m.sessionByName(msg.Session); sess != nil {
 			sess.WriteOutput(msg.Data)
 		}
+		if !m.renderPending {
+			m.renderPending = true
+			return m, scheduleRenderTick()
+		}
+		return m, nil
+
+	case renderTickMsg:
+		m.renderPending = false
+		return m, nil
 
 	case daemonSessionEventMsg:
 		m.handleSessionEvent(msg.Event)

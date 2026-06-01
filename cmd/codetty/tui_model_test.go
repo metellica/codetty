@@ -649,3 +649,33 @@ func TestUpdate_PrefixKeyNotInterceptedBySessionManager(t *testing.T) {
 		t.Fatalf("mode should be grid after prefix+g, got %d", m.mode)
 	}
 }
+
+func TestUpdate_OutputCoalescing(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 80
+	m.height = 24
+	sess := newTUISession("test", "bash", 78, 21)
+	m.sessions = []*tuiSession{sess}
+	m.order = []string{"test"}
+
+	// First output message should schedule a render tick
+	_, cmd := m.Update(daemonOutputMsg{Session: "test", Data: []byte("hello")})
+	if cmd == nil {
+		t.Fatal("first daemonOutputMsg should return a tick command")
+	}
+	if !m.renderPending {
+		t.Fatal("renderPending should be true after first output")
+	}
+
+	// Second output message should NOT schedule another tick
+	_, cmd = m.Update(daemonOutputMsg{Session: "test", Data: []byte(" world")})
+	if cmd != nil {
+		t.Fatal("second daemonOutputMsg should return nil (tick already pending)")
+	}
+
+	// Tick fires — should clear renderPending
+	_, cmd = m.Update(renderTickMsg{})
+	if m.renderPending {
+		t.Fatal("renderPending should be false after tick")
+	}
+}
