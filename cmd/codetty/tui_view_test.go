@@ -80,3 +80,27 @@ func TestHitTest_GridModeMapsCoordinatesToPanel(t *testing.T) {
 		t.Fatalf("hitTest(61, 1) = %d, want 1", got)
 	}
 }
+
+func TestDirtyTracking_LinesCachedAndReused(t *testing.T) {
+	sess := newTUISession("test", "bash", 40, 10)
+	sess.WriteOutput([]byte("line one\r\n"))
+
+	// First render populates the cache
+	lines1, _, _ := sess.RenderANSI(40, 10)
+	if lines1[0] == "" {
+		t.Fatal("first render should produce non-empty first line")
+	}
+
+	// Second render without new output should return cached content
+	lines2, _, _ := sess.RenderANSI(40, 10)
+	if lines2[0] != lines1[0] {
+		t.Fatalf("cached render mismatch:\n  got:  %q\n  want: %q", lines2[0], lines1[0])
+	}
+
+	// Write new output, cache should update — line 1 now has content
+	sess.WriteOutput([]byte("line two\r\n"))
+	lines3, _, _ := sess.RenderANSI(40, 10)
+	if lines3[1] == lines1[1] {
+		t.Fatal("render should reflect new output after write")
+	}
+}

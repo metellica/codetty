@@ -188,6 +188,14 @@ func (t *State) Changed(change ChangeFlag) bool {
 	return t.changed&change != 0
 }
 
+// Dirty returns true if line y has been modified since the last Unlock().
+func (t *State) Dirty(y int) bool {
+	if y < 0 || y >= len(t.dirty) {
+		return false
+	}
+	return t.dirty[y]
+}
+
 // resetChanges resets the change mask and dirtiness.
 func (t *State) resetChanges() {
 	for i := range t.dirty {

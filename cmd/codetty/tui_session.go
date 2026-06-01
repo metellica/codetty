@@ -33,6 +33,13 @@ type tuiSession struct {
 
 	term vt10x.Terminal
 	mu   sync.Mutex
+
+	// Line cache for incremental rendering
+	cachedLines    []string
+	cachedCursorX  int
+	cachedCursorY  int
+	cacheW, cacheH int
+	outputReceived bool
 }
 
 func newTUISession(name, command string, cols, rows uint16) *tuiSession {
@@ -51,6 +58,7 @@ func (s *tuiSession) WriteOutput(data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.term.Write(data)
+	s.outputReceived = true
 }
 
 // RenderANSI renders the terminal screen at the given dimensions.
@@ -59,7 +67,29 @@ func (s *tuiSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 	defer s.mu.Unlock()
 	s.term.Lock()
 	defer s.term.Unlock()
-	return renderTerminalANSI(s.term, w, h)
+
+	// If dimensions changed, invalidate cache
+	if s.cacheW != w || s.cacheH != h || len(s.cachedLines) != h {
+		s.cachedLines = nil
+		s.cacheW = w
+		s.cacheH = h
+	}
+
+	// If we have a cache and no output was received, return cached version
+	if s.cachedLines != nil && !s.outputReceived {
+		lines = make([]string, len(s.cachedLines))
+		copy(lines, s.cachedLines)
+		return lines, s.cachedCursorX, s.cachedCursorY
+	}
+
+	// Full render and cache
+	s.outputReceived = false
+	lines, curX, curY = renderTerminalANSI(s.term, w, h)
+	s.cachedLines = make([]string, len(lines))
+	copy(s.cachedLines, lines)
+	s.cachedCursorX = curX
+	s.cachedCursorY = curY
+	return lines, curX, curY
 }
 
 // SnapshotANSI returns a snapshot for panel rendering.
@@ -91,6 +121,7 @@ func (s *tuiSession) Resize(cols, rows uint16) {
 	s.Cols = cols
 	s.Rows = rows
 	s.term.Resize(int(cols), int(rows))
+	s.cachedLines = nil
 }
 
 // MouseEnabled returns true if the session's terminal has mouse reporting on.

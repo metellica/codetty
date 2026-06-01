@@ -47,6 +47,9 @@ type View interface {
 	// CursorVisible returns the visible state of the cursor.
 	CursorVisible() bool
 
+	// Dirty returns whether the given line has been modified since the last Unlock.
+	Dirty(y int) bool
+
 	// Lock locks the state object's mutex.
 	Lock()
 
