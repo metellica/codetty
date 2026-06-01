@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sync"
+	"time"
 
 	"codetty/daemon"
 
@@ -15,6 +17,12 @@ type daemonConn struct {
 	conn       net.Conn
 	program    *tea.Program
 	subscribed bool
+
+	// Output coalescing: buffer per-session output during burst,
+	// flush at most every 16ms to reduce View() calls.
+	outMu      sync.Mutex
+	outBuf     map[string][]byte
+	outPending bool // true while a flush timer is running
 }
 
 // Tea messages from daemon connection
@@ -69,7 +77,7 @@ func (dc *daemonConn) readLoop() {
 			if err != nil {
 				continue
 			}
-			dc.program.Send(daemonOutputMsg{Session: session, Data: data})
+			dc.bufferOutput(session, data)
 
 		case daemon.FrameSessionEvent:
 			var evt daemon.SessionEvent
@@ -83,6 +91,46 @@ func (dc *daemonConn) readLoop() {
 				dc.program.Send(daemonSubscribedMsg{})
 			}
 		}
+	}
+}
+
+// bufferOutput accumulates output for coalesced delivery.
+// First call in a window sends immediately (zero latency for interactive use),
+// then starts a 16ms timer. Subsequent calls within the window buffer data
+// until the timer fires and flushes.
+func (dc *daemonConn) bufferOutput(session string, data []byte) {
+	dc.outMu.Lock()
+	if dc.outBuf == nil {
+		dc.outBuf = make(map[string][]byte)
+	}
+	dc.outBuf[session] = append(dc.outBuf[session], data...)
+
+	if !dc.outPending {
+		// Leading edge: flush immediately, then start coalescing window
+		dc.outPending = true
+		buf := dc.outBuf
+		dc.outBuf = make(map[string][]byte)
+		dc.outMu.Unlock()
+
+		for s, d := range buf {
+			dc.program.Send(daemonOutputMsg{Session: s, Data: d})
+		}
+		time.AfterFunc(16*time.Millisecond, dc.flushOutput)
+		return
+	}
+	dc.outMu.Unlock()
+}
+
+// flushOutput sends all buffered output and resets the coalescing window.
+func (dc *daemonConn) flushOutput() {
+	dc.outMu.Lock()
+	buf := dc.outBuf
+	dc.outBuf = make(map[string][]byte)
+	dc.outPending = false
+	dc.outMu.Unlock()
+
+	for s, d := range buf {
+		dc.program.Send(daemonOutputMsg{Session: s, Data: d})
 	}
 }
 

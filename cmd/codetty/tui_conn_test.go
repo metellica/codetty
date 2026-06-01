@@ -199,6 +199,67 @@ func TestDaemonConn_SubscribeTranslatesFramesToTeaMessages(t *testing.T) {
 	}
 }
 
+func TestDaemonConn_OutputCoalescing(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+
+	p, msgs := startTestProgram(t)
+	dc := &daemonConn{conn: client}
+	t.Cleanup(func() { client.Close() })
+
+	// Send subscribe request and respond
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// Read and discard the subscribe request
+		daemon.ReadFrame(server)
+		// Send subscribe response
+		daemon.WriteFrame(server, daemon.FrameResponse, daemon.MarshalJSON(daemon.Response{OK: true}))
+
+		// Send burst of 5 output frames rapidly
+		for i := 0; i < 5; i++ {
+			daemon.WriteFrame(server, daemon.FrameTaggedOutput,
+				daemon.EncodeTaggedOutput("sess", []byte("x")))
+		}
+	}()
+
+	if err := dc.Subscribe(p); err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	_ = waitForMsg[daemonSubscribedMsg](t, msgs)
+
+	// First output should arrive immediately (leading edge)
+	first := waitForMsg[daemonOutputMsg](t, msgs)
+	if first.Session != "sess" {
+		t.Fatalf("first output session = %q, want sess", first.Session)
+	}
+
+	// Wait for coalescing window to flush remaining data
+	time.Sleep(50 * time.Millisecond)
+
+	// Drain any remaining coalesced messages
+	totalBytes := len(first.Data)
+	drainLoop:
+	for {
+		select {
+		case msg := <-msgs:
+			if out, ok := msg.(daemonOutputMsg); ok {
+				totalBytes += len(out.Data)
+			}
+		case <-time.After(50 * time.Millisecond):
+			break drainLoop
+		}
+	}
+
+	// All 5 bytes should have been delivered (possibly coalesced into fewer messages)
+	if totalBytes != 5 {
+		t.Fatalf("total output bytes = %d, want 5", totalBytes)
+	}
+
+	<-done
+}
+
 func TestDaemonConn_SendMethodsWriteExpectedFrames(t *testing.T) {
 	client, server := net.Pipe()
 	dc := &daemonConn{conn: client}

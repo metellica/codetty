@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 
 	"codetty/daemon"
@@ -650,7 +651,7 @@ func TestUpdate_PrefixKeyNotInterceptedBySessionManager(t *testing.T) {
 	}
 }
 
-func TestUpdate_OutputCoalescing(t *testing.T) {
+func TestUpdate_OutputWritesToSession(t *testing.T) {
 	m := newTUIModel(nil, "", nil)
 	m.width = 80
 	m.height = 24
@@ -658,24 +659,19 @@ func TestUpdate_OutputCoalescing(t *testing.T) {
 	m.sessions = []*tuiSession{sess}
 	m.order = []string{"test"}
 
-	// First output message should schedule a render tick
-	_, cmd := m.Update(daemonOutputMsg{Session: "test", Data: []byte("hello")})
-	if cmd == nil {
-		t.Fatal("first daemonOutputMsg should return a tick command")
-	}
-	if !m.renderPending {
-		t.Fatal("renderPending should be true after first output")
-	}
+	// Output messages are written to the session's vt10x terminal
+	m.Update(daemonOutputMsg{Session: "test", Data: []byte("hello")})
+	m.Update(daemonOutputMsg{Session: "test", Data: []byte(" world")})
 
-	// Second output message should NOT schedule another tick
-	_, cmd = m.Update(daemonOutputMsg{Session: "test", Data: []byte(" world")})
-	if cmd != nil {
-		t.Fatal("second daemonOutputMsg should return nil (tick already pending)")
+	lines, _, _ := sess.RenderANSI(78, 21)
+	found := false
+	for _, line := range lines {
+		if strings.Contains(line, "hello world") {
+			found = true
+			break
+		}
 	}
-
-	// Tick fires — should clear renderPending
-	_, cmd = m.Update(renderTickMsg{})
-	if m.renderPending {
-		t.Fatal("renderPending should be false after tick")
+	if !found {
+		t.Fatal("session should contain 'hello world' after two output messages")
 	}
 }

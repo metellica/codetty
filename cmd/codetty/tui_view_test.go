@@ -143,6 +143,8 @@ func BenchmarkRenderTerminalANSI(b *testing.B) {
 	sess.WriteOutput(buf)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		// Invalidate cache so we measure actual rendering, not cache hits
+		sess.WriteOutput([]byte{' '})
 		sess.RenderANSI(120, 40)
 	}
 }
