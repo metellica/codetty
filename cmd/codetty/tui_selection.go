@@ -977,7 +977,13 @@ func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(c
 				break
 			}
 
-			isCursor := curVisible && x == cursor.X && srcRow == cursor.Y
+			// A wide glyph owns the following NUL continuation cell. Detect that
+			// up front so we can both skip the continuation cell and treat the
+			// cursor as resting on the wide glyph when it sits on that cell.
+			nextIsCont := cw > 1 && x+1 < cols && term.Cell(x+1, srcRow).Char == 0
+
+			isCursor := curVisible && srcRow == cursor.Y &&
+				(x == cursor.X || (nextIsCont && cursor.X == x+1))
 			isSelected := selFn != nil && selFn(visualCol, displayRow)
 
 			if isSelected {
@@ -991,7 +997,7 @@ func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(c
 				sb.WriteString(ansiEnd)
 			}
 			visualCol += cw
-			if cw > 1 {
+			if nextIsCont {
 				skipNext = true
 			}
 		}

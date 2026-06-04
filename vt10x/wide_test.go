@@ -87,3 +87,45 @@ func TestMixedASCIIAndWideChars(t *testing.T) {
 		t.Errorf("cursor.X = %d, want 4", cur.X)
 	}
 }
+
+// Overwriting one half of a wide character must erase the other half so no
+// orphaned lead or continuation cell is left behind (xterm/st semantics).
+func TestWideCharOverwriteCleansOrphanedHalf(t *testing.T) {
+	t.Run("overwrite continuation with wide char", func(t *testing.T) {
+		term := New(WithSize(80, 24))
+		term.Write([]byte("中")) // 中 at cols 0-1
+		term.Write([]byte("\b")) // cursor 2 -> 1 (continuation cell)
+		term.Write([]byte("你")) // write 你 over the continuation cell
+		term.Lock()
+		defer term.Unlock()
+		// 中's orphaned lead must be blanked.
+		if g := term.Cell(0, 0); g.Char != ' ' {
+			t.Errorf("Cell(0,0) = %q, want ' ' (erased orphan lead)", g.Char)
+		}
+		if g := term.Cell(1, 0); g.Char != '你' {
+			t.Errorf("Cell(1,0) = %q, want '你'", g.Char)
+		}
+		if g := term.Cell(2, 0); g.Char != 0 {
+			t.Errorf("Cell(2,0) = %q, want 0 (continuation)", g.Char)
+		}
+	})
+
+	t.Run("overwrite wide lead with narrow char", func(t *testing.T) {
+		term := New(WithSize(80, 24))
+		term.Write([]byte("中好")) // 中(0-1) 好(2-3)
+		term.Write([]byte("\r"))   // cursor -> col 0
+		term.Write([]byte("a"))    // overwrite 中's lead with 'a'
+		term.Lock()
+		defer term.Unlock()
+		if g := term.Cell(0, 0); g.Char != 'a' {
+			t.Errorf("Cell(0,0) = %q, want 'a'", g.Char)
+		}
+		// 中's orphaned continuation must be blanked, not left as NUL.
+		if g := term.Cell(1, 0); g.Char != ' ' {
+			t.Errorf("Cell(1,0) = %q, want ' ' (erased orphan continuation)", g.Char)
+		}
+		if g := term.Cell(2, 0); g.Char != '好' {
+			t.Errorf("Cell(2,0) = %q, want '好'", g.Char)
+		}
+	})
+}

@@ -43,6 +43,16 @@ func (t *State) parse(c rune) {
 		}
 	}
 
+	// Before writing, erase any wide character we would only partially
+	// overwrite. Without this, an orphaned lead or continuation cell is left
+	// behind and the renderer (which pairs a wide lead with its NUL
+	// continuation) mis-aligns subsequent glyphs. This matches xterm/st
+	// behaviour.
+	t.cleanWide(t.cur.X, t.cur.Y)
+	if w == 2 {
+		t.cleanWide(t.cur.X+1, t.cur.Y)
+	}
+
 	t.setChar(c, &t.cur.Attr, t.cur.X, t.cur.Y)
 
 	// Fill continuation cells for wide characters with NUL marker.
@@ -54,6 +64,28 @@ func (t *State) parse(c rune) {
 		t.moveTo(t.cur.X+w, t.cur.Y)
 	} else {
 		t.cur.State |= cursorWrapNext
+	}
+}
+
+// cleanWide erases a wide character that would be left half-overwritten if a
+// new glyph is written at (x, y). If the cell is a wide lead, its orphaned NUL
+// continuation cell is turned into a blank; if the cell is a NUL continuation,
+// its orphaned wide lead is turned into a blank.
+func (t *State) cleanWide(x, y int) {
+	if x < 0 || x >= t.cols {
+		return
+	}
+	ch := t.lines[y][x].Char
+	if runewidth.RuneWidth(ch) == 2 {
+		if x+1 < t.cols && t.lines[y][x+1].Char == 0 {
+			t.lines[y][x+1].Char = ' '
+			t.dirty[y] = true
+			t.changed |= ChangedScreen
+		}
+	} else if ch == 0 && x > 0 && runewidth.RuneWidth(t.lines[y][x-1].Char) == 2 {
+		t.lines[y][x-1].Char = ' '
+		t.dirty[y] = true
+		t.changed |= ChangedScreen
 	}
 }
 
