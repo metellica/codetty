@@ -121,7 +121,9 @@ func startTUI(sockPath string, focusTarget string, autoCreate []string) {
 	}
 
 	model := newTUIModel(conn, focusTarget, autoCreate)
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	iw := newImeWriter(os.Stdout)
+	model.imeWriter = iw
+	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(iw))
 
 	if err := conn.Subscribe(p); err != nil {
 		log.Fatalf("subscribe: %v", err)

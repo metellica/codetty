@@ -455,3 +455,88 @@ func gridCols(n, width int) int {
 	}
 	return 2
 }
+
+// imeCursorSeq returns an ANSI CUP sequence that moves the real terminal
+// cursor to the focused session's cursor position.  Appending this to the
+// View() output lets Windows Terminal (and other terminals) anchor the IME
+// composition window at the correct cell instead of defaulting to the
+// bottom-left corner of the screen.  Returns "" when the position cannot
+// be determined (no session, cursor invisible, or an overlay is active).
+func (m *tuiModel) imeCursorSeq() string {
+	// Overlays and text-input prompts capture keyboard for non-PTY input —
+	// no meaningful session cursor position to anchor the IME window to.
+	if m.floatingIdx >= 0 || m.tmuxPicker.active || m.sessMgr.active ||
+		m.confirmKill || m.renaming || m.creating || m.createChooser {
+		return ""
+	}
+
+	sessions := m.visibleSessions()
+	n := len(sessions)
+	if n == 0 || m.selected >= n {
+		return ""
+	}
+	sess := sessions[m.selected]
+
+	status := m.statusBar()
+	statusH := lipgloss.Height(status)
+	availH := m.height - statusH
+	if availH < 1 {
+		return ""
+	}
+
+	// absPos computes absolute (row, col) given content-space cursor and panel top-left.
+	// Panels rendered by renderPanelWithColor have: 1 col left border, 1 row top border +
+	// 1 row title header = 2 rows before the first content line.
+	mkSeq := func(panelTopRow, panelLeftCol, innerW, innerH int) string {
+		if innerW < 1 || innerH < 1 {
+			return ""
+		}
+		_, curX, curY := sess.RenderANSI(innerW, innerH)
+		if curX < 0 || curY < 0 {
+			return ""
+		}
+		absRow := panelTopRow + 2 + curY
+		absCol := panelLeftCol + 1 + curX
+		// ANSI CUP is 1-indexed.
+		return fmt.Sprintf("\x1b[%d;%dH", absRow+1, absCol+1)
+	}
+
+	switch m.mode {
+	case modeFullscreen:
+		_, curX, curY := sess.RenderANSI(m.width, m.height)
+		if curX < 0 || curY < 0 {
+			return ""
+		}
+		return fmt.Sprintf("\x1b[%d;%dH", curY+1, curX+1)
+
+	case modeGrid:
+		cols := gridCols(n, m.width)
+		rows := (n + cols - 1) / cols
+		panelW := m.width / cols
+		panelH := availH / rows
+		if panelH < tuiMinPanelH {
+			panelH = tuiMinPanelH
+		}
+		pRow := m.selected / cols
+		pCol := m.selected % cols
+		return mkSeq(pRow*panelH, pCol*panelW, panelW-2, panelH-3)
+
+	default: // modeFocusBig
+		// The selected session is always the big/main panel at the top-left.
+		if n == 1 {
+			return mkSeq(0, 0, m.width-2, availH-3)
+		}
+		if m.width >= 120 {
+			mainW := m.width * 7 / 10
+			sideW := m.width - mainW
+			if sideW < tuiMinPanelW {
+				sideW = tuiMinPanelW
+				mainW = m.width - sideW
+			}
+			return mkSeq(0, 0, mainW-2, availH-3)
+		}
+		// Narrow layout: main panel takes top 70% of height.
+		mainH := availH * 7 / 10
+		return mkSeq(0, 0, m.width-2, mainH-3)
+	}
+}

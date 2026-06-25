@@ -35,8 +35,9 @@ const (
 
 // tuiModel is the Bubble Tea model for the unified codetty TUI.
 type tuiModel struct {
-	conn     *daemonConn
-	sessions []*tuiSession
+	conn      *daemonConn
+	imeWriter *imeWriter // nil in tests; wraps stdout to fix IME cursor position
+	sessions  []*tuiSession
 	order    []string // session names in display order
 	selected int      // primary/big panel in focus-big mode
 	mode     layoutMode
@@ -240,6 +241,13 @@ func (m *tuiModel) View() string {
 	// Overlay kill confirmation if active
 	if m.confirmKill {
 		base = m.overlayConfirmKill(base)
+	}
+
+	// Push the focused session's cursor position to the IME writer so that
+	// the real terminal cursor lands there after Bubble Tea's flush, enabling
+	// correct IME composition-window placement in Windows Terminal.
+	if m.imeWriter != nil {
+		m.imeWriter.setCursorSeq(m.imeCursorSeq())
 	}
 
 	return base
