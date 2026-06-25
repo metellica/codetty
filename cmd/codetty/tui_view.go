@@ -465,9 +465,40 @@ func gridCols(n, width int) int {
 func (m *tuiModel) imeCursorSeq() string {
 	// Overlays and text-input prompts capture keyboard for non-PTY input —
 	// no meaningful session cursor position to anchor the IME window to.
-	if m.floatingIdx >= 0 || m.tmuxPicker.active || m.sessMgr.active ||
+	if m.tmuxPicker.active || m.sessMgr.active ||
 		m.confirmKill || m.renaming || m.creating || m.createChooser {
 		return ""
+	}
+
+	// Floating window: compute centered panel position and use that session.
+	if m.floatingIdx >= 0 {
+		ordered := m.orderedSessions()
+		if m.floatingIdx >= len(ordered) {
+			return ""
+		}
+		sess := ordered[m.floatingIdx]
+
+		fw := m.width * 8 / 10
+		fh := m.height * 8 / 10
+		if fw < 40 {
+			fw = min(40, m.width)
+		}
+		if fh < 10 {
+			fh = min(10, m.height)
+		}
+		// lipgloss.Place centers the panel; compute top-left offset.
+		panelTopRow := (m.height - fh) / 2
+		panelLeftCol := (m.width - fw) / 2
+		innerW := fw - 2
+		innerH := fh - 3
+		if innerW < 1 || innerH < 1 {
+			return ""
+		}
+		_, curX, curY := sess.RenderANSI(innerW, innerH)
+		if curX < 0 || curY < 0 {
+			return ""
+		}
+		return fmt.Sprintf("\x1b[%d;%dH", panelTopRow+2+curY+1, panelLeftCol+1+curX+1)
 	}
 
 	sessions := m.visibleSessions()
