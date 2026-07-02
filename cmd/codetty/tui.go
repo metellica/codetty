@@ -42,9 +42,14 @@ type tuiModel struct {
 	selected int      // primary/big panel in focus-big mode
 	mode     layoutMode
 
-	prefix   bool // Ctrl+A prefix active
+	prefix   bool // prefix key active (see prefixKey)
 	width    int
 	height   int
+
+	// prefixKey/prefixLabel: the configured prefix key (default Ctrl+A) and
+	// its display label (e.g. "Ctrl+A"), set from config after construction.
+	prefixKey   tea.KeyType
+	prefixLabel string
 
 	// inputFocus overrides which session receives keyboard input.
 	// -1 means use m.selected. Set by clicking a side panel.
@@ -134,6 +139,8 @@ func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tui
 		hidden:      make(map[string]bool),
 		focusTarget: focusTarget,
 		autoCreate:  autoCreate,
+		prefixKey:   tea.KeyCtrlA,
+		prefixLabel: "Ctrl+A",
 	}
 }
 
@@ -188,7 +195,7 @@ func (m *tuiModel) View() string {
 	if len(m.sessions) == 0 {
 		hint := "No sessions. Creating one..."
 		if m.autoCreate == nil {
-			hint = "No sessions. Press Ctrl+A c to create one."
+			hint = "No sessions. Press " + m.prefixLabel + " c to create one."
 		}
 		// Only show the status bar when in an interactive overlay state.
 		hasOverlay := m.renaming || m.creating || m.createChooser || m.prefix

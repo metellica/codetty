@@ -64,7 +64,10 @@ Windows:
 
 ### 前缀键
 
-CodeTTY 使用 **Ctrl+A** 作为命令前缀键（类似 tmux 的 Ctrl+B）。
+CodeTTY 默认使用 **Ctrl+A** 作为命令前缀键（类似 tmux 的 Ctrl+B），可在
+`~/.config/codetty/config.toml` 中通过 `keybindings.prefix` 自定义（详见
+[README「配置」章节](../README.md#配置)）。本手册后续内容均以默认的
+`Ctrl+A` 为例，如果你配置了其他前缀键，请自行替换。
 
 操作方式：先按 Ctrl+A 松开，然后按下功能键。例如 `Ctrl+A d` = 按下 Ctrl+A，
 松开，按下 d。

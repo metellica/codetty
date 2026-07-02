@@ -1,0 +1,16 @@
+# CodeTTY 用户配置文件示例
+#
+# 使用方法：将本文件复制到 ~/.config/codetty/config.toml，然后按需修改。
+# 该文件是完全可选的——缺省该文件，或省略其中的字段，CodeTTY 都会回退到
+# 合理的默认值。
+
+[keybindings]
+# 命令前缀键（类似 tmux 的 Ctrl+B），格式为 "ctrl+<字母>"，例如 "ctrl+a"、
+# "ctrl+b"、"ctrl+g" 等。
+#
+# 留空或省略此字段时，CodeTTY 会自动决定默认前缀键：
+#   - 默认使用 ctrl+a；
+#   - 但如果检测到系统已安装 tmux，且其全局前缀键
+#     （`tmux show-options -g prefix`）也是 ctrl+a，为避免在 tmux 内部/
+#     嵌套使用 CodeTTY 时前缀键冲突，会自动改用 ctrl+b。
+prefix = "ctrl+a"

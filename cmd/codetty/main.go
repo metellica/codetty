@@ -6,10 +6,11 @@ import (
 	"os"
 	"path/filepath"
 
+	"codetty/config"
 	"codetty/terminal"
 )
 
-const usage = `codetty — terminal multiplexer
+const usageTemplate = `codetty — terminal multiplexer
 
 Usage:
   codetty                                      Open TUI (auto-create shell if no sessions)
@@ -19,7 +20,7 @@ Usage:
   codetty kill [-s name]                       Kill a session
   codetty kill-server                          Stop the daemon and all sessions
 
-TUI Keys (Ctrl+A prefix):
+TUI Keys (%s prefix):
   d       Detach (exit TUI, sessions keep running)
   x       Kill focused session
   c       Create new session
@@ -42,6 +43,16 @@ Options:
   -s, --session NAME   Target session name
   --help, -h           Show this help
 `
+
+// usageText renders the CLI help text with the configured prefix key
+// (see ~/.config/codetty/config.toml), falling back to Ctrl+A on error.
+func usageText() string {
+	label := "Ctrl+A"
+	if cfg, err := config.Load(); err == nil {
+		_, label = parsePrefixKey(cfg.Keybindings.Prefix)
+	}
+	return fmt.Sprintf(usageTemplate, label)
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -66,7 +77,7 @@ func main() {
 	case "__server":
 		cmdServer(args)
 	case "--help", "-h", "help":
-		fmt.Print(usage)
+		fmt.Print(usageText())
 	case "--version", "-v":
 		fmt.Println("codetty dev")
 	default:

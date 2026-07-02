@@ -24,7 +24,7 @@
 
 - **Daemon 架构** — 会话在后台持续运行，detach/attach 不影响进程，SSH 断开后可恢复
 - **多布局模式** — 焦点放大 (focus-big)、网格 (grid)、全屏 (fullscreen)、浮动窗口
-- **Ctrl+A 命令前缀** — 类似 tmux/screen 的操作模式
+- **可配置命令前缀** — 默认 Ctrl+A（类似 tmux/screen），可通过配置文件自定义，且能自动避免与 tmux 冲突
 - **Tmux 集成** — 发现并加载已有 tmux session，统一管理
 - **Session 管理器** — 隐藏/显示/关闭 session，面板按钮操作
 - **鼠标支持** — 点击聚焦、Ctrl+点击切换、标题栏拖拽重排、文本选择复制
@@ -81,6 +81,8 @@ codetty kill-server
 
 ### TUI 快捷键（速览）
 
+默认前缀键为 `Ctrl+A`（可在配置文件中自定义，见下方[配置](#配置)章节）：
+
 | 按键 | 功能 |
 |------|------|
 | `Ctrl+A d` | Detach（退出 TUI，会话继续运行） |
@@ -96,6 +98,30 @@ codetty kill-server
 
 完整快捷键列表和详细用法见 [docs/manual.md](docs/manual.md)。
 
+## 配置
+
+CodeTTY 支持在 `~/.config/codetty/config.toml` 中放置一个可选的用户配置文件
+（TOML 格式）。缺省该文件，或省略其中的字段，CodeTTY 都会回退到合理的默认值。
+
+仓库根目录下的 [config.example.toml](config.example.toml) 提供了一份带注释的
+示例，复制到 `~/.config/codetty/config.toml` 后按需修改即可：
+
+```bash
+mkdir -p ~/.config/codetty
+cp config.example.toml ~/.config/codetty/config.toml
+```
+
+目前支持的配置项：
+
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `keybindings.prefix` | 命令前缀键，格式为 `"ctrl+<字母>"`（如 `"ctrl+a"`、`"ctrl+b"`） | 自动检测（见下） |
+
+未显式设置 `keybindings.prefix` 时，CodeTTY 会自动选择默认前缀键：默认使用
+`ctrl+a`；但如果检测到系统安装了 tmux，且其全局前缀键
+（`tmux show-options -g prefix`）也是 `ctrl+a`，为避免嵌套使用 tmux 时按键
+冲突，会自动改用 `ctrl+b`。
+
 ## 项目结构
 
 ```
@@ -104,7 +130,9 @@ codetty/
 ├── daemon/          # 后台进程：会话管理、Unix Socket 协议、客户端连接
 ├── terminal/        # PTY 抽象（Unix/Windows）、ScreenMirror
 ├── vt10x/           # 本地 fork 的 vt10x 终端仿真（支持宽字符）
+├── config/          # 用户配置文件（config.toml）加载
 ├── docs/            # 文档
+├── config.example.toml  # 配置文件示例
 ├── build.sh         # Linux/macOS 构建脚本
 ├── build.bat        # Windows 构建脚本
 ├── go.mod
@@ -122,6 +150,7 @@ codetty/
 | [UserExistsError/conpty](https://github.com/UserExistsError/conpty) | Windows ConPTY |
 | [mattn/go-runewidth](https://github.com/mattn/go-runewidth) | Unicode 字符宽度计算 |
 | [golang.org/x/term](https://pkg.go.dev/golang.org/x/term) | 终端 raw 模式管理 |
+| [BurntSushi/toml](https://github.com/BurntSushi/toml) | 解析用户配置文件 (config.toml) |
 
 ## 系统要求
 

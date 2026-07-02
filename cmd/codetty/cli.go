@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"codetty/config"
 	"codetty/daemon"
 	"codetty/terminal"
 
@@ -121,6 +122,11 @@ func startTUI(sockPath string, focusTarget string, autoCreate []string) {
 	}
 
 	model := newTUIModel(conn, focusTarget, autoCreate)
+	if cfg, err := config.Load(); err != nil {
+		log.Printf("config: %v (using default keybindings)", err)
+	} else {
+		model.prefixKey, model.prefixLabel = parsePrefixKey(cfg.Keybindings.Prefix)
+	}
 	iw := newImeWriter(os.Stdout)
 	model.imeWriter = iw
 	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(iw))
