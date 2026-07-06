@@ -32,8 +32,8 @@ type DaemonSession struct {
 	doneCh   chan struct{}
 }
 
-func newDaemonSession(name string, command []string, cols, rows uint16, onOutput func(session string, data []byte)) (*DaemonSession, error) {
-	term, err := terminal.Start(command, cols, rows)
+func newDaemonSession(name string, command []string, cols, rows uint16, dir string, env []string, onOutput func(session string, data []byte)) (*DaemonSession, error) {
+	term, err := terminal.Start(command, cols, rows, dir, env)
 	if err != nil {
 		return nil, err
 	}

@@ -43,12 +43,16 @@ const (
 
 // Request is the JSON payload for FrameRequest.
 type Request struct {
-	Action  Action   `json:"action"`
-	Session string   `json:"session,omitempty"`
-	Command []string `json:"command,omitempty"`
-	Env     []string `json:"env,omitempty"`
-	Cols    uint16   `json:"cols,omitempty"`
-	Rows    uint16   `json:"rows,omitempty"`
+	Action     Action   `json:"action"`
+	Session    string   `json:"session,omitempty"`
+	Command    []string `json:"command,omitempty"`
+	Env        []string `json:"env,omitempty"`
+	Cols       uint16   `json:"cols,omitempty"`
+	Rows       uint16   `json:"rows,omitempty"`
+	Dir        string   `json:"dir,omitempty"`          // working directory for new session
+	Type       string   `json:"type,omitempty"`         // "native" or "tmux"
+	TmuxTarget string   `json:"tmux_target,omitempty"`  // tmux session name (when Type=="tmux")
+	NoAttach   bool     `json:"no_attach,omitempty"`    // create session but don't start attached client
 }
 
 // Response is the JSON payload for FrameResponse.

@@ -140,10 +140,16 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 	}
 	s.mu.Unlock()
 
-	sess, err := newDaemonSession(name, req.Command, req.Cols, req.Rows, s.broadcastToSubscribers)
+	sess, err := newDaemonSession(name, req.Command, req.Cols, req.Rows, req.Dir, req.Env, s.broadcastToSubscribers)
 	if err != nil {
 		s.sendError(conn, fmt.Sprintf("start session: %v", err))
 		return
+	}
+
+	// Apply session type metadata (e.g. from codetty up).
+	if req.Type == SessionTypeTmux {
+		sess.Type = SessionTypeTmux
+		sess.TmuxTarget = req.TmuxTarget
 	}
 
 	s.mu.Lock()
@@ -162,7 +168,9 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 	resp := Response{OK: true, Session: name}
 	WriteFrame(conn, FrameResponse, MarshalJSON(resp))
 
-	s.runAttachedClient(conn, sess)
+	if !req.NoAttach {
+		s.runAttachedClient(conn, sess)
+	}
 }
 
 func (s *Server) handleAttach(conn net.Conn, req Request) {
@@ -313,7 +321,7 @@ func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRe
 	}
 	s.mu.Unlock()
 
-	sess, err := newDaemonSession(name, cmd, req.Cols, req.Rows, s.broadcastToSubscribers)
+	sess, err := newDaemonSession(name, cmd, req.Cols, req.Rows, "", nil, s.broadcastToSubscribers)
 	if err != nil {
 		sub.SendSessionEvent(SessionEvent{Type: "error", Session: name})
 		return
@@ -353,7 +361,7 @@ func (s *Server) createTmuxSessionForSubscriber(sub *Subscriber, req CreateSessi
 	}
 	s.mu.Unlock()
 
-	sess, err := newDaemonSession(displayName, cmd, req.Cols, req.Rows, s.broadcastToSubscribers)
+	sess, err := newDaemonSession(displayName, cmd, req.Cols, req.Rows, "", nil, s.broadcastToSubscribers)
 	if err != nil {
 		sub.SendSessionEvent(SessionEvent{Type: "error", Session: displayName})
 		return
@@ -390,7 +398,7 @@ func (s *Server) attachTmuxSessionForSubscriber(sub *Subscriber, req CreateSessi
 	}
 	s.mu.Unlock()
 
-	sess, err := newDaemonSession(displayName, cmd, req.Cols, req.Rows, s.broadcastToSubscribers)
+	sess, err := newDaemonSession(displayName, cmd, req.Cols, req.Rows, "", nil, s.broadcastToSubscribers)
 	if err != nil {
 		sub.SendSessionEvent(SessionEvent{Type: "error", Session: displayName})
 		return
@@ -570,7 +578,7 @@ func (s *Server) DiscoverAndAttachTmux() int {
 		name := "[tmux] " + tmuxName
 		cmd := []string{"tmux", "attach-session", "-t", tmuxName}
 
-		sess, err := newDaemonSession(name, cmd, 80, 24, s.broadcastToSubscribers)
+		sess, err := newDaemonSession(name, cmd, 80, 24, "", nil, s.broadcastToSubscribers)
 		if err != nil {
 			log.Printf("tmux attach %q failed: %v", tmuxName, err)
 			continue

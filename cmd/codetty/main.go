@@ -16,6 +16,7 @@ Usage:
   codetty                                      Open TUI (auto-create shell if no sessions)
   codetty [new] [-s name] [--] [command ...]   Create session and open TUI
   codetty attach [-s name]                     Open TUI focused on session (alias: a)
+  codetty up [-f config.toml]                  Load session config, create sessions, open TUI
   codetty ls                                   List active sessions
   codetty kill [-s name]                       Kill a session
   codetty kill-server                          Stop the daemon and all sessions
@@ -68,6 +69,8 @@ func main() {
 		cmdNew(args)
 	case "attach", "a":
 		cmdAttach(args)
+	case "up":
+		cmdUp(args)
 	case "ls":
 		cmdList(args)
 	case "kill":
@@ -91,7 +94,7 @@ func cmdDefault() {
 	if err := ensureDaemon(sockPath); err != nil {
 		log.Fatalf("cannot start daemon: %v", err)
 	}
-	startTUI(sockPath, "", []string{terminal.DefaultShell()})
+	startTUI(sockPath, startupConfig{autoCreate: []string{terminal.DefaultShell()}})
 }
 
 // defaultSocketPath returns the Unix socket path for the daemon.

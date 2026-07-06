@@ -21,11 +21,13 @@ type Session interface {
 }
 
 // Start creates a new PTY session running the given command.
-func Start(args []string, cols, rows uint16) (Session, error) {
+// If dir is non-empty, the process starts in that directory.
+// env entries ("KEY=value") are appended to the inherited environment.
+func Start(args []string, cols, rows uint16, dir string, env []string) (Session, error) {
 	if len(args) == 0 {
 		return nil, ErrNoCommand
 	}
-	return startPlatform(args, cols, rows)
+	return startPlatform(args, cols, rows, dir, env)
 }
 
 // DefaultShell returns the user's default shell command.

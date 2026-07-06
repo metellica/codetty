@@ -33,6 +33,7 @@
 - **Shift/Ctrl/Alt 方向键** — 正确转发修饰键组合（支持 tmux 面板切换等）
 - **跨平台 PTY** — Linux/macOS 使用 Unix PTY，Windows 使用 ConPTY
 - **自动 daemon** — 首次运行自动启动后台进程，所有会话退出后自动停止
+- **Session 配置文件** — 通过 `.codetty.toml` 定义 session 布局，支持 tmux pane 模板和继承
 
 ## 快速开始
 
@@ -71,6 +72,10 @@ codetty ls
 # 重新连接到已有会话
 codetty attach
 codetty a -s myserver
+
+# 从配置文件加载 session 布局
+codetty up                          # 查找 .codetty.toml
+codetty up -f dev.toml              # 指定配置文件
 
 # 关闭指定会话
 codetty kill -s myserver

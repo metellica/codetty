@@ -7,6 +7,8 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,6 +19,15 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	xterm "golang.org/x/term"
 )
+
+// startupConfig holds TUI startup parameters.
+type startupConfig struct {
+	focusTarget string
+	layout      string            // "focus-big", "grid", "fullscreen"
+	order       []string          // desired session display order
+	hidden      map[string]bool   // sessions hidden on startup
+	autoCreate  []string          // command to auto-create if no sessions exist
+}
 
 func cmdNew(args []string) {
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
@@ -62,7 +73,7 @@ func cmdNew(args []string) {
 	}
 	conn.Close()
 
-	startTUI(sockPath, resp.Session, nil)
+	startTUI(sockPath, startupConfig{focusTarget: resp.Session})
 }
 
 func cmdAttach(args []string) {
@@ -79,7 +90,7 @@ func cmdAttach(args []string) {
 		*session = latestSession(sockPath)
 	}
 
-	startTUI(sockPath, *session, nil)
+	startTUI(sockPath, startupConfig{focusTarget: *session})
 }
 
 // latestSession queries the daemon for the most recently created active session.
@@ -115,13 +126,30 @@ func latestSession(sockPath string) string {
 	return latestName
 }
 
-func startTUI(sockPath string, focusTarget string, autoCreate []string) {
+func startTUI(sockPath string, sc startupConfig) {
 	conn, err := newDaemonConn(sockPath)
 	if err != nil {
 		log.Fatalf("connect to daemon: %v", err)
 	}
 
-	model := newTUIModel(conn, focusTarget, autoCreate)
+	model := newTUIModel(conn, sc.focusTarget, sc.autoCreate)
+
+	// Apply startup layout mode.
+	switch sc.layout {
+	case "grid":
+		model.mode = modeGrid
+	case "fullscreen":
+		model.mode = modeFullscreen
+	}
+
+	// Apply hidden sessions and desired order from config.
+	for name := range sc.hidden {
+		model.hidden[name] = true
+	}
+	if len(sc.order) > 0 {
+		model.desiredOrder = sc.order
+	}
+
 	if cfg, err := config.Load(); err != nil {
 		log.Printf("config: %v (using default keybindings)", err)
 	} else {
@@ -144,6 +172,187 @@ func startTUI(sockPath string, focusTarget string, autoCreate []string) {
 	}
 
 	fmt.Fprintf(os.Stderr, "[detached]\n")
+}
+
+func cmdUp(args []string) {
+	fs := flag.NewFlagSet("up", flag.ExitOnError)
+	configFile := fs.String("f", "", "config file path")
+	fs.Parse(args)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("getwd: %v", err)
+	}
+
+	cfg, cfgPath, err := config.LoadSessions(*configFile, cwd)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("invalid config: %v", err)
+	}
+
+	configDir := filepath.Dir(cfgPath)
+	sessions, err := cfg.Resolve(configDir)
+	if err != nil {
+		log.Fatalf("resolve config: %v", err)
+	}
+
+	sockPath := defaultSocketPath()
+	if err := ensureDaemon(sockPath); err != nil {
+		log.Fatalf("cannot start daemon: %v", err)
+	}
+
+	existing := listExistingSessions(sockPath)
+	cols, rows := terminalSize()
+
+	for _, s := range sessions {
+		if existing[s.Name] {
+			fmt.Fprintf(os.Stderr, "session %q already exists, skipping\n", s.Name)
+			continue
+		}
+
+		switch s.Type {
+		case "tmux":
+			if err := setupTmuxSession(s); err != nil {
+				log.Printf("setup tmux %q: %v", s.Name, err)
+				continue
+			}
+			// "=" forces exact session-name matching in tmux.
+			cmd := []string{"tmux", "attach-session", "-t", "=" + s.TmuxSession}
+			if err := createDaemonSession(sockPath, s.Name, cmd, cols, rows, "", nil, daemon.SessionTypeTmux, s.TmuxSession); err != nil {
+				log.Printf("create session %q: %v", s.Name, err)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "created tmux session %q\n", s.Name)
+
+		default: // native
+			cmd := s.Command
+			if len(cmd) == 0 {
+				cmd = []string{terminal.DefaultShell()}
+			}
+			if err := createDaemonSession(sockPath, s.Name, cmd, cols, rows, s.Dir, envToSlice(s.Env), "", ""); err != nil {
+				log.Printf("create session %q: %v", s.Name, err)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "created session %q\n", s.Name)
+		}
+	}
+
+	// Build startup config for TUI.
+	sc := startupConfig{
+		focusTarget: cfg.Focus,
+		layout:      cfg.Layout,
+	}
+	for _, s := range sessions {
+		sc.order = append(sc.order, s.Name)
+		if s.Hidden {
+			if sc.hidden == nil {
+				sc.hidden = make(map[string]bool)
+			}
+			sc.hidden[s.Name] = true
+		}
+	}
+	if sc.focusTarget == "" && len(sessions) > 0 {
+		sc.focusTarget = sessions[0].Name
+	}
+
+	startTUI(sockPath, sc)
+}
+
+func setupTmuxSession(s config.ResolvedSession) error {
+	if s.TmuxAttachOnly {
+		if !daemon.TmuxSessionExists(s.TmuxSession) {
+			return fmt.Errorf("tmux session %q not found", s.TmuxSession)
+		}
+		return nil
+	}
+	windows := make([]daemon.TmuxWindowSetup, len(s.Windows))
+	for i, w := range s.Windows {
+		windows[i] = daemon.TmuxWindowSetup{
+			Name: w.Name, Command: w.Command, Dir: w.Dir,
+		}
+	}
+	_, err := daemon.SetupTmuxSessionWithWindows(s.TmuxSession, windows, envToSlice(s.Env))
+	return err
+}
+
+// envToSlice converts an env map to sorted "KEY=value" entries.
+func envToSlice(env map[string]string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	result := make([]string, 0, len(env))
+	for _, k := range keys {
+		result = append(result, k+"="+env[k])
+	}
+	return result
+}
+
+func listExistingSessions(sockPath string) map[string]bool {
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		return nil
+	}
+	defer conn.Close()
+
+	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionList}))
+	ft, payload, err := daemon.ReadFrame(conn)
+	if err != nil || ft != daemon.FrameResponse {
+		return nil
+	}
+	var resp daemon.Response
+	json.Unmarshal(payload, &resp)
+	if !resp.OK {
+		return nil
+	}
+
+	result := make(map[string]bool)
+	for _, s := range resp.Sessions {
+		result[s.Name] = true
+	}
+	return result
+}
+
+func createDaemonSession(sockPath, name string, cmd []string, cols, rows uint16, dir string, env []string, sessType, tmuxTarget string) error {
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close()
+
+	req := daemon.Request{
+		Action:     daemon.ActionNewSession,
+		Session:    name,
+		Command:    cmd,
+		Cols:       cols,
+		Rows:       rows,
+		Dir:        dir,
+		Env:        env,
+		Type:       sessType,
+		TmuxTarget: tmuxTarget,
+		NoAttach:   true,
+	}
+	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(req))
+
+	ft, payload, err := daemon.ReadFrame(conn)
+	if err != nil {
+		return fmt.Errorf("read response: %w", err)
+	}
+	if ft != daemon.FrameResponse {
+		return fmt.Errorf("unexpected frame type: %d", ft)
+	}
+	var resp daemon.Response
+	json.Unmarshal(payload, &resp)
+	if !resp.OK {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	return nil
 }
 
 func cmdList(args []string) {

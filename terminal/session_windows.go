@@ -16,7 +16,8 @@ type windowsSession struct {
 	pty *conpty.ConPty
 }
 
-func startPlatform(args []string, cols, rows uint16) (Session, error) {
+func startPlatform(args []string, cols, rows uint16, dir string, env []string) (Session, error) {
+	// TODO: support working directory for ConPTY
 	commandLine, err := windowsCommandLine(args)
 	if err != nil {
 		return nil, err
@@ -25,7 +26,7 @@ func startPlatform(args []string, cols, rows uint16) (Session, error) {
 	cpty, err := conpty.Start(
 		commandLine,
 		conpty.ConPtyDimensions(int(cols), int(rows)),
-		conpty.ConPtyEnv(os.Environ()),
+		conpty.ConPtyEnv(append(os.Environ(), env...)),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("start conpty: %w", err)

@@ -97,6 +97,9 @@ type tuiModel struct {
 	floatingTarget string
 	// Auto-create session on start
 	autoCreate []string // command to auto-create
+
+	// Desired session order from config (applied after initial snapshots).
+	desiredOrder []string
 }
 
 // modeState captures a view state for back-navigation.
@@ -169,6 +172,7 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case daemonSubscribedMsg:
 		m.maybeAutoCreate()
+		m.applyDesiredOrder()
 
 	case daemonDisconnectedMsg:
 		return m, tea.Quit
@@ -480,6 +484,43 @@ func (m *tuiModel) maybeAutoCreate() {
 	if m.conn != nil {
 		cols, rows := m.focusedContentSize()
 		m.conn.CreateSession("", cmd, uint16(cols), uint16(rows))
+	}
+}
+
+// applyDesiredOrder reorders m.order to match the config-specified order.
+// Called once after all initial session snapshots have arrived.
+func (m *tuiModel) applyDesiredOrder() {
+	if len(m.desiredOrder) == 0 {
+		return
+	}
+
+	// Remember the currently selected session name.
+	var selectedName string
+	if sel := m.selectedSession(); sel != nil {
+		selectedName = sel.Name
+	}
+
+	// Build new order: desired first, then any extras from daemon.
+	newOrder := make([]string, 0, len(m.order))
+	added := make(map[string]bool)
+	for _, name := range m.desiredOrder {
+		if m.sessionByName(name) != nil {
+			newOrder = append(newOrder, name)
+			added[name] = true
+		}
+	}
+	for _, name := range m.order {
+		if !added[name] {
+			newOrder = append(newOrder, name)
+		}
+	}
+
+	m.order = newOrder
+	m.desiredOrder = nil
+
+	// Restore selected index after reorder.
+	if selectedName != "" {
+		m.selected = m.visibleIndexByName(selectedName)
 	}
 }
 

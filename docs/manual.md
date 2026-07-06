@@ -6,6 +6,7 @@
 - [安装](#安装)
 - [基本概念](#基本概念)
 - [命令行用法](#命令行用法)
+- [Session 配置文件](#session-配置文件)
 - [TUI 界面](#tui-界面)
 - [快捷键参考](#快捷键参考)
 - [鼠标操作](#鼠标操作)
@@ -121,6 +122,16 @@ codetty attach                  # attach 默认 session
 codetty a -s myproject          # attach 指定 session
 ```
 
+### codetty up
+
+从配置文件加载 session 布局，增量创建缺失的 session，然后打开 TUI。
+详见 [Session 配置文件](#session-配置文件) 章节。
+
+```bash
+codetty up                      # 自动查找 .codetty.toml
+codetty up -f dev.toml          # 指定配置文件
+```
+
 ### codetty ls
 
 列出所有活跃 session。
@@ -144,6 +155,184 @@ codetty kill -s myproject
 ```bash
 codetty kill-server
 ```
+
+---
+
+## Session 配置文件
+
+CodeTTY 支持通过 TOML 配置文件定义 session 布局，包括 native（原生 PTY）session
+和 tmux session（含多 window 支持）。使用 `codetty up` 命令加载配置文件并一次性
+创建所有 session。
+
+### 使用方法
+
+```bash
+codetty up                      # 自动查找配置文件
+codetty up -f myconfig.toml     # 指定配置文件
+```
+
+配置文件查找顺序：
+1. `-f` 指定的路径
+2. 当前目录下的 `.codetty.toml`
+3. `~/.config/codetty/sessions.toml`
+
+### Delta 行为
+
+`codetty up` 采用增量创建：daemon 中已有同名 session 时跳过创建。这意味着可以
+反复运行 `codetty up`，只有缺失的 session 会被创建。
+
+### 基本示例
+
+```toml
+layout = "focus-big"          # 初始布局：focus-big / grid / fullscreen
+focus = "editor"              # 初始聚焦的 session 名称
+
+# 原生 session（直接运行命令）
+[[session]]
+name = "editor"
+command = ["nvim", "."]
+
+[[session]]
+name = "server"
+command = ["npm", "run", "dev"]
+dir = "./backend"             # 工作目录（相对于配置文件所在目录）
+
+[[session]]
+name = "shell"                # command 省略则使用默认 shell
+hidden = true                 # 启动时隐藏（可通过 Ctrl+A w 显示）
+```
+
+### tmux Session 与 Window
+
+配置文件支持定义 tmux session 并在其中创建多个 window（每个 window 运行一个命令）：
+
+```toml
+[[session]]
+name = "monitoring"
+type = "tmux"
+tmux_session = "mon"                # tmux session 名称
+
+  [[session.window]]
+  name = "logs"
+  command = "tail -f /var/log/app.log"
+
+  [[session.window]]
+  name = "htop"
+  command = "htop"
+
+# 仅 attach 已有 tmux session（不创建 window）
+[[session]]
+name = "remote"
+type = "tmux"
+tmux_session = "remote-server"
+tmux_attach_only = true
+```
+
+tmux window 创建流程：
+1. 如果 tmux session 不存在 → 创建 session + 所有 window
+2. 如果 tmux session 已存在 → 跳过 window 创建，直接 attach
+3. 创建 CodeTTY daemon session 包裹 `tmux attach-session`
+
+### 模板 (Template)
+
+可定义可复用的 window 模板，多个 session 共享同一套 window 配置：
+
+```toml
+[template.dev]
+
+  [[template.dev.window]]
+  name = "copilot"
+  command = "copilot --allow-all"
+
+  [[template.dev.window]]
+  name = "git"
+  command = "lazygit"
+
+  [[template.dev.window]]
+  name = "code"
+  command = "nvim ."
+
+  [[template.dev.window]]
+  name = "shell"
+
+# 使用模板
+[[session]]
+name = "frontend"
+type = "tmux"
+tmux_session = "fe"
+template = "dev"
+dir = "./frontend"            # dir 应用到所有 window
+```
+
+### Session 继承与扩展模板
+
+Session 可以继承模板并进行定制——增加、修改、删除 window：
+
+```toml
+[[session]]
+name = "fullstack"
+type = "tmux"
+tmux_session = "full"
+template = "dev"
+remove_windows = ["git"]         # 删除模板中的 window
+
+  # 同名 window → 覆盖模板中的字段
+  [[session.window]]
+  name = "code"
+  command = "nvim ~/projects"
+
+  # 新名称 → 追加 window
+  [[session.window]]
+  name = "db"
+  command = "docker compose up db"
+```
+
+合并规则：
+
+| 操作 | 方法 |
+|------|------|
+| 增加 window | `session.window` 使用新的 `name` → 追加到列表末尾 |
+| 修改 window | `session.window` 使用与模板相同的 `name` → 覆盖 `command`/`dir` 字段 |
+| 删除 window | `remove_windows = ["window-name"]` |
+
+### 字段参考
+
+**顶层字段：**
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `layout` | string | `"focus-big"` | 初始布局模式 |
+| `focus` | string | 第一个 session | 初始聚焦 session |
+
+**template.\<name\>：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `window[]` | array | Window 定义列表 |
+
+**session[]：**
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `name` | string | **必填** | Session 名称（唯一） |
+| `type` | string | `"native"` | `"native"` 或 `"tmux"` |
+| `command` | string[] | 默认 shell | 原生 session 命令 |
+| `dir` | string | 配置文件目录 | 工作目录 |
+| `env` | map | `{}` | 额外环境变量 |
+| `hidden` | bool | `false` | 启动时隐藏 |
+| `template` | string | — | 模板名称（tmux 专用） |
+| `tmux_session` | string | — | tmux session 名称（tmux 必填） |
+| `tmux_attach_only` | bool | `false` | 仅 attach 已有 tmux session |
+| `remove_windows` | string[] | — | 从模板中删除的 window 名称 |
+| `window[]` | array | — | 内联 window 或模板覆盖 |
+
+**window[]：**
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `name` | string | **必填** | Window 名称 |
+| `command` | string | 默认 shell | Shell 命令字符串 |
+| `dir` | string | session 的 `dir` | 工作目录 |
 
 ---
 
