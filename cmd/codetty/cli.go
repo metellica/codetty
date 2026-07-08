@@ -203,10 +203,17 @@ func cmdUp(args []string) {
 		log.Fatalf("cannot start daemon: %v", err)
 	}
 
-	existing := listExistingSessions(sockPath)
+	existing, tmuxManaged := listExistingSessions(sockPath)
 	cols, rows := terminalSize()
 
+	// nameFor maps a config session to the daemon session that actually
+	// backs it (which may pre-exist under a different name, e.g. a tmux
+	// session already attached as "[tmux] NAME").
+	nameFor := make(map[string]string, len(sessions))
+
 	for _, s := range sessions {
+		nameFor[s.Name] = s.Name
+
 		if existing[s.Name] {
 			fmt.Fprintf(os.Stderr, "session %q already exists, skipping\n", s.Name)
 			continue
@@ -214,6 +221,11 @@ func cmdUp(args []string) {
 
 		switch s.Type {
 		case "tmux":
+			if managedBy, ok := tmuxManaged[s.TmuxSession]; ok {
+				nameFor[s.Name] = managedBy
+				fmt.Fprintf(os.Stderr, "tmux session %q already managed by %q, skipping\n", s.TmuxSession, managedBy)
+				continue
+			}
 			if err := setupTmuxSession(s); err != nil {
 				log.Printf("setup tmux %q: %v", s.Name, err)
 				continue
@@ -244,17 +256,21 @@ func cmdUp(args []string) {
 		focusTarget: cfg.Focus,
 		layout:      cfg.Layout,
 	}
+	if mapped, ok := nameFor[sc.focusTarget]; ok {
+		sc.focusTarget = mapped
+	}
 	for _, s := range sessions {
-		sc.order = append(sc.order, s.Name)
+		name := nameFor[s.Name]
+		sc.order = append(sc.order, name)
 		if s.Hidden {
 			if sc.hidden == nil {
 				sc.hidden = make(map[string]bool)
 			}
-			sc.hidden[s.Name] = true
+			sc.hidden[name] = true
 		}
 	}
 	if sc.focusTarget == "" && len(sessions) > 0 {
-		sc.focusTarget = sessions[0].Name
+		sc.focusTarget = nameFor[sessions[0].Name]
 	}
 
 	startTUI(sockPath, sc)
@@ -294,29 +310,36 @@ func envToSlice(env map[string]string) []string {
 	return result
 }
 
-func listExistingSessions(sockPath string) map[string]bool {
+// listExistingSessions queries the daemon for current sessions. It returns
+// the set of daemon session names and a map from managed tmux session name
+// to the daemon session that manages it.
+func listExistingSessions(sockPath string) (map[string]bool, map[string]string) {
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	defer conn.Close()
 
 	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionList}))
 	ft, payload, err := daemon.ReadFrame(conn)
 	if err != nil || ft != daemon.FrameResponse {
-		return nil
+		return nil, nil
 	}
 	var resp daemon.Response
 	json.Unmarshal(payload, &resp)
 	if !resp.OK {
-		return nil
+		return nil, nil
 	}
 
-	result := make(map[string]bool)
+	names := make(map[string]bool)
+	tmuxManaged := make(map[string]string)
 	for _, s := range resp.Sessions {
-		result[s.Name] = true
+		names[s.Name] = true
+		if s.Type == daemon.SessionTypeTmux && s.TmuxTarget != "" {
+			tmuxManaged[s.TmuxTarget] = s.Name
+		}
 	}
-	return result
+	return names, tmuxManaged
 }
 
 func createDaemonSession(sockPath, name string, cmd []string, cols, rows uint16, dir string, env []string, sessType, tmuxTarget string) error {

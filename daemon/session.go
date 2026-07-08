@@ -154,11 +154,12 @@ func (s *DaemonSession) Info() SessionInfo {
 		cmd = s.Command[0]
 	}
 	return SessionInfo{
-		Name:      s.Name,
-		Command:   cmd,
-		Type:      s.Type,
-		Attached:  s.clientCount(),
-		CreatedAt: s.CreatedAt.Format(time.RFC3339),
+		Name:       s.Name,
+		Command:    cmd,
+		Type:       s.Type,
+		TmuxTarget: s.TmuxTarget,
+		Attached:   s.clientCount(),
+		CreatedAt:  s.CreatedAt.Format(time.RFC3339),
 	}
 }
 

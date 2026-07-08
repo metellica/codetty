@@ -138,6 +138,15 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 		s.sendError(conn, fmt.Sprintf("session %q already exists", name))
 		return
 	}
+	// A tmux session must be managed by at most one daemon session:
+	// double-attaching would mirror the same tmux session in two panels.
+	if req.Type == SessionTypeTmux {
+		if existing := s.sessionByTmuxTargetLocked(req.TmuxTarget); existing != nil {
+			s.mu.Unlock()
+			s.sendError(conn, fmt.Sprintf("tmux session %q already managed by session %q", req.TmuxTarget, existing.Name))
+			return
+		}
+	}
 	s.mu.Unlock()
 
 	sess, err := newDaemonSession(name, req.Command, req.Cols, req.Rows, req.Dir, req.Env, s.broadcastToSubscribers)
@@ -158,6 +167,14 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 		sess.Kill()
 		s.sendError(conn, fmt.Sprintf("session %q already exists", name))
 		return
+	}
+	if sess.Type == SessionTypeTmux {
+		if existing := s.sessionByTmuxTargetLocked(sess.TmuxTarget); existing != nil {
+			s.mu.Unlock()
+			sess.Kill()
+			s.sendError(conn, fmt.Sprintf("tmux session %q already managed by session %q", sess.TmuxTarget, existing.Name))
+			return
+		}
 	}
 	s.sessions[name] = sess
 	s.mu.Unlock()
@@ -396,6 +413,11 @@ func (s *Server) attachTmuxSessionForSubscriber(sub *Subscriber, req CreateSessi
 		// Already managed, nothing to do
 		return
 	}
+	if s.sessionByTmuxTargetLocked(tmuxName) != nil {
+		s.mu.Unlock()
+		// Already managed under another name (e.g. by codetty up)
+		return
+	}
 	s.mu.Unlock()
 
 	sess, err := newDaemonSession(displayName, cmd, req.Cols, req.Rows, "", nil, s.broadcastToSubscribers)
@@ -408,6 +430,11 @@ func (s *Server) attachTmuxSessionForSubscriber(sub *Subscriber, req CreateSessi
 
 	s.mu.Lock()
 	if _, exists := s.sessions[displayName]; exists {
+		s.mu.Unlock()
+		sess.Kill()
+		return
+	}
+	if s.sessionByTmuxTargetLocked(tmuxName) != nil {
 		s.mu.Unlock()
 		sess.Kill()
 		return
@@ -540,6 +567,20 @@ func (s *Server) SessionByName(name string) *DaemonSession {
 	return s.sessions[name]
 }
 
+// sessionByTmuxTargetLocked returns the live session managing the given tmux
+// session, or nil. Caller must hold s.mu.
+func (s *Server) sessionByTmuxTargetLocked(tmuxTarget string) *DaemonSession {
+	if tmuxTarget == "" {
+		return nil
+	}
+	for _, sess := range s.sessions {
+		if sess.Type == SessionTypeTmux && sess.TmuxTarget == tmuxTarget && !sess.isExited() {
+			return sess
+		}
+	}
+	return nil
+}
+
 // SessionNames returns session names in iteration order.
 func (s *Server) SessionNames() []string {
 	s.mu.Lock()
@@ -587,7 +628,7 @@ func (s *Server) DiscoverAndAttachTmux() int {
 		sess.TmuxTarget = tmuxName
 
 		s.mu.Lock()
-		if _, exists := s.sessions[name]; exists {
+		if _, exists := s.sessions[name]; exists || s.sessionByTmuxTargetLocked(tmuxName) != nil {
 			s.mu.Unlock()
 			sess.Kill()
 			continue

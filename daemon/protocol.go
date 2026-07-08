@@ -65,11 +65,12 @@ type Response struct {
 
 // SessionInfo describes a session in list responses.
 type SessionInfo struct {
-	Name      string `json:"name"`
-	Command   string `json:"command"`
-	Type      string `json:"type,omitempty"`
-	Attached  int    `json:"attached"`
-	CreatedAt string `json:"created_at"`
+	Name       string `json:"name"`
+	Command    string `json:"command"`
+	Type       string `json:"type,omitempty"`
+	TmuxTarget string `json:"tmux_target,omitempty"` // tmux session name (when Type=="tmux")
+	Attached   int    `json:"attached"`
+	CreatedAt  string `json:"created_at"`
 }
 
 // ResizePayload for FrameResize.
