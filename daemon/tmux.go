@@ -126,14 +126,6 @@ func SetupTmuxSessionWithWindows(tmuxSession string, windows []TmuxWindowSetup, 
 		return false, nil
 	}
 
-	// On any failure after session creation, kill the partial session so the
-	// next attempt does not silently attach to an incomplete one.
-	defer func() {
-		if err != nil {
-			KillTmuxSession(tmuxSession)
-		}
-	}()
-
 	args := []string{"new-session", "-d", "-s", tmuxSession, "-P", "-F", "#{window_id}"}
 	for _, e := range env {
 		args = append(args, "-e", e)
@@ -148,8 +140,22 @@ func SetupTmuxSessionWithWindows(tmuxSession string, windows []TmuxWindowSetup, 
 	}
 	id, err := tmuxOutput(args...)
 	if err != nil {
+		// If a concurrent caller already created this session, treat it
+		// the same as the exists-check above — return (false, nil) instead
+		// of cleaning up a session we don't own.
+		if TmuxSessionExists(tmuxSession) {
+			return false, nil
+		}
 		return false, fmt.Errorf("create tmux session %q: %w", tmuxSession, err)
 	}
+
+	// Session was created by this call. On any subsequent failure, kill the
+	// partial session so a later retry starts clean.
+	defer func() {
+		if err != nil {
+			KillTmuxSession(tmuxSession)
+		}
+	}()
 	if len(windows) == 0 {
 		return true, nil
 	}
