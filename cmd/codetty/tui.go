@@ -173,6 +173,12 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case daemonSubscribedMsg:
 		m.maybeAutoCreate()
 		m.applyDesiredOrder()
+		// Initial snapshots arrive with the daemon-side (stale) session sizes.
+		// Resize everything to the actual panel content size now that all
+		// initial snapshots have been received.
+		if len(m.sessions) > 0 && m.width > 0 && m.height > 0 {
+			m.resizeSessionPTYs()
+		}
 
 	case daemonDisconnectedMsg:
 		return m, tea.Quit
