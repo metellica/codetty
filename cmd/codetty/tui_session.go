@@ -34,12 +34,17 @@ type tuiSession struct {
 	term vt10x.Terminal
 	mu   sync.Mutex
 
-	// Line cache for incremental rendering
-	cachedLines    []string
-	cachedCursorX  int
-	cachedCursorY  int
+	// Per-source-row line cache for incremental rendering. lineCache is
+	// indexed by terminal row; lineValid marks entries that are up to date.
+	// The cache consumes the terminal's dirty-line flags (via ResetDirty),
+	// so it must be the only dirty-flag consumer for this terminal.
+	lineCache      []string
+	lineValid      []bool
 	cacheW, cacheH int
-	outputReceived bool
+	// Cursor state baked into the cached lines, used to invalidate the rows
+	// the cursor block was drawn on / moves to.
+	cachedCurRow int
+	cachedCurVis bool
 
 	// Dimmed line cache for side panel rendering
 	dimLines  []string
@@ -64,38 +69,80 @@ func (s *tuiSession) WriteOutput(data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.term.Write(data)
-	s.outputReceived = true
 	s.dimStale = true
 }
 
-// RenderANSI renders the terminal screen at the given dimensions.
+// RenderANSI renders the terminal screen at the given dimensions, reusing
+// cached per-row strings for rows the terminal has not modified.
 func (s *tuiSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.term.Lock()
 	defer s.term.Unlock()
 
-	// If dimensions changed, invalidate cache
-	if s.cacheW != w || s.cacheH != h || len(s.cachedLines) != h {
-		s.cachedLines = nil
+	cols, rows := s.term.Size()
+
+	// If dimensions changed, invalidate the whole cache.
+	if s.cacheW != w || s.cacheH != h || len(s.lineCache) != rows {
+		s.lineCache = make([]string, rows)
+		s.lineValid = make([]bool, rows)
 		s.cacheW = w
 		s.cacheH = h
+		s.cachedCurVis = false
 	}
 
-	// If we have a cache and no output was received, return cached version
-	if s.cachedLines != nil && !s.outputReceived {
-		lines = make([]string, len(s.cachedLines))
-		copy(lines, s.cachedLines)
-		return lines, s.cachedCursorX, s.cachedCursorY
+	// Invalidate rows the terminal reports as modified.
+	for y := 0; y < rows; y++ {
+		if s.term.Dirty(y) {
+			s.lineValid[y] = false
+		}
+	}
+	s.term.ResetDirty()
+
+	// Invalidate the rows the cursor block leaves and enters. The cursor
+	// row is also invalidated on every render to track column-only moves.
+	cursor := s.term.Cursor()
+	curVisible := s.term.CursorVisible()
+	if s.cachedCurVis && s.cachedCurRow >= 0 && s.cachedCurRow < rows {
+		s.lineValid[s.cachedCurRow] = false
+	}
+	if curVisible && cursor.Y >= 0 && cursor.Y < rows {
+		s.lineValid[cursor.Y] = false
+	}
+	s.cachedCurRow = cursor.Y
+	s.cachedCurVis = curVisible
+
+	startRow := 0
+	if contentRows := findLastVisibleRow(s.term, cols, rows) + 1; contentRows > h {
+		startRow = contentRows - h
 	}
 
-	// Full render and cache
-	s.outputReceived = false
-	lines, curX, curY = renderTerminalANSI(s.term, w, h)
-	s.cachedLines = make([]string, len(lines))
-	copy(s.cachedLines, lines)
-	s.cachedCursorX = curX
-	s.cachedCursorY = curY
+	lines = make([]string, h)
+	curX, curY = -1, -1
+	for displayRow := 0; displayRow < h; displayRow++ {
+		srcRow := startRow + displayRow
+		if srcRow >= rows {
+			lines[displayRow] = strings.Repeat(" ", w)
+			continue
+		}
+		// The cursor row is always invalidated above, so whenever the cursor
+		// is on a displayed row that row is rebuilt here and reports the
+		// cursor's visual column.
+		if !s.lineValid[srcRow] {
+			cx := -1
+			if curVisible && srcRow == cursor.Y {
+				cx = cursor.X
+			}
+			rendered, visualCurX := renderRowANSI(s.term.Row(srcRow), w, cx)
+			s.lineCache[srcRow] = rendered
+			s.lineValid[srcRow] = true
+			if visualCurX >= 0 {
+				curX = visualCurX
+				curY = displayRow
+			}
+		}
+		lines[displayRow] = s.lineCache[srcRow]
+	}
 	return lines, curX, curY
 }
 
@@ -128,7 +175,7 @@ func (s *tuiSession) Resize(cols, rows uint16) {
 	s.Cols = cols
 	s.Rows = rows
 	s.term.Resize(int(cols), int(rows))
-	s.cachedLines = nil
+	s.lineCache = nil
 	s.dimLines = nil
 }
 
@@ -189,17 +236,17 @@ func renderTerminalDimmed(term vt10x.Terminal, w, h int) []string {
 			continue
 		}
 
+		row := term.Row(srcRow)
 		sb.Reset()
 		sb.WriteString(dimStart)
 		visualCol := 0
 		skipNext := false
-		for x := 0; x < cols && visualCol < w; x++ {
+		for x := 0; x < len(row) && visualCol < w; x++ {
 			if skipNext {
 				skipNext = false
 				continue
 			}
-			g := term.Cell(x, srcRow)
-			ch := g.Char
+			ch := row[x].Char
 			if ch == 0 {
 				ch = ' '
 			}
@@ -217,7 +264,7 @@ func renderTerminalDimmed(term vt10x.Terminal, w, h int) []string {
 			// cell. An application may overwrite a continuation cell with a new
 			// (possibly wide) character, leaving two leads adjacent; in that
 			// case the next cell holds a real glyph that must still be rendered.
-			if cw > 1 && x+1 < cols && term.Cell(x+1, srcRow).Char == 0 {
+			if cw > 1 && x+1 < len(row) && row[x+1].Char == 0 {
 				skipNext = true
 			}
 		}
@@ -233,14 +280,139 @@ func renderTerminalDimmed(term vt10x.Terminal, w, h int) []string {
 
 func findLastVisibleRow(term vt10x.Terminal, cols, rows int) int {
 	for y := rows - 1; y > 0; y-- {
-		for x := 0; x < cols; x++ {
-			g := term.Cell(x, y)
-			if g.Char != 0 && g.Char != ' ' {
+		row := term.Row(y)
+		for x := 0; x < cols && x < len(row); x++ {
+			if c := row[x].Char; c != 0 && c != ' ' {
 				return y
 			}
 		}
 	}
 	return 0
+}
+
+// glyphAttr is the render-relevant attribute set of a cell, used to detect
+// runs of identically-styled cells so SGR sequences are emitted only at
+// style-change boundaries instead of per cell.
+type glyphAttr struct {
+	fg, bg vt10x.Color
+	mode   int16
+	cursor bool
+}
+
+const glyphModeMask = glyphReverse | glyphUnderline | glyphBold | glyphItalic
+
+func attrOf(g vt10x.Glyph, isCursor bool) glyphAttr {
+	return glyphAttr{fg: g.FG, bg: g.BG, mode: g.Mode & glyphModeMask, cursor: isCursor}
+}
+
+var defaultGlyphAttr = glyphAttr{fg: vt10x.DefaultFG, bg: vt10x.DefaultBG}
+
+// writeAttrSGR writes the SGR start sequence for a non-default attribute.
+// Mirrors the per-glyph logic previously in glyphANSI.
+func writeAttrSGR(sb *strings.Builder, a glyphAttr) {
+	if a.cursor {
+		// Force visible cursor: white background with black text.
+		sb.WriteString("\x1b[30;107m")
+	} else if a.mode&glyphReverse != 0 {
+		// Reverse video: swap fg↔bg and emit directly as normal colors.
+		// This avoids issues where \x1b[7m with explicit color 0 (black)
+		// would produce invisible results.
+		visualFG := a.bg // bg becomes visible foreground
+		visualBG := a.fg // fg becomes visible background
+		if visualFG != vt10x.DefaultBG && visualFG != vt10x.DefaultFG {
+			sb.WriteString(colorToANSIFG(vt10x.Color(uint32(visualFG))))
+		}
+		if visualBG != vt10x.DefaultFG && visualBG != vt10x.DefaultBG {
+			sb.WriteString(colorToANSIBG(vt10x.Color(uint32(visualBG))))
+		} else {
+			// fg was default → visual bg should be default fg color (white)
+			sb.WriteString("\x1b[7m")
+		}
+	} else {
+		if a.fg != vt10x.DefaultFG {
+			sb.WriteString(colorToANSIFG(a.fg))
+		}
+		if a.bg != vt10x.DefaultBG {
+			sb.WriteString(colorToANSIBG(a.bg))
+		}
+	}
+	if a.mode&glyphBold != 0 {
+		sb.WriteString("\x1b[1m")
+	}
+	if a.mode&glyphUnderline != 0 {
+		sb.WriteString("\x1b[4m")
+	}
+	if a.mode&glyphItalic != 0 {
+		sb.WriteString("\x1b[3m")
+	}
+}
+
+// renderRowANSI renders a single terminal row to an ANSI string of exactly w
+// visual columns. cursorX is the terminal-column of the cursor on this row,
+// or -1 if the cursor is not on this row. Returns the rendered line and the
+// visual column the cursor block was drawn at (-1 if not drawn).
+func renderRowANSI(row []vt10x.Glyph, w int, cursorX int) (string, int) {
+	var sb strings.Builder
+	sb.Grow(w + 32)
+
+	curVisualX := -1
+	attr := defaultGlyphAttr
+	visualCol := 0
+	skipNext := false
+	for x := 0; x < len(row) && visualCol < w; x++ {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		g := row[x]
+		ch := g.Char
+		if ch == 0 {
+			ch = ' '
+		}
+		cw := runewidth.RuneWidth(ch)
+		if cw == 0 {
+			ch = ' '
+			cw = 1
+		}
+		if visualCol+cw > w {
+			break
+		}
+
+		// A wide glyph owns the following NUL continuation cell. Detect that
+		// up front so we can both skip the continuation cell and treat the
+		// cursor as resting on the wide glyph when it sits on that cell.
+		nextIsCont := cw > 1 && x+1 < len(row) && row[x+1].Char == 0
+
+		isCursor := x == cursorX || (nextIsCont && cursorX == x+1)
+		if isCursor {
+			curVisualX = visualCol
+		}
+
+		// Emit SGR only when the cell's style differs from the running one.
+		a := attrOf(g, isCursor)
+		if a != attr {
+			if attr != defaultGlyphAttr {
+				sb.WriteString("\x1b[0m")
+			}
+			if a != defaultGlyphAttr {
+				writeAttrSGR(&sb, a)
+			}
+			attr = a
+		}
+		sb.WriteRune(ch)
+		visualCol += cw
+		if nextIsCont {
+			skipNext = true
+		}
+	}
+	if attr != defaultGlyphAttr {
+		sb.WriteString("\x1b[0m")
+	}
+	for visualCol < w {
+		sb.WriteByte(' ')
+		visualCol++
+	}
+	return sb.String(), curVisualX
 }
 
 func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
@@ -259,64 +431,22 @@ func renderTerminalANSI(term vt10x.Terminal, w, h int) ([]string, int, int) {
 	lines := make([]string, h)
 	curX, curY := -1, -1
 
-	var sb strings.Builder
-	sb.Grow(w * 4)
-
 	for displayRow := 0; displayRow < h; displayRow++ {
 		srcRow := startRow + displayRow
 		if srcRow >= rows {
 			lines[displayRow] = strings.Repeat(" ", w)
 			continue
 		}
-
-		sb.Reset()
-		visualCol := 0
-		skipNext := false
-		for x := 0; x < cols && visualCol < w; x++ {
-			if skipNext {
-				skipNext = false
-				continue
-			}
-			g := term.Cell(x, srcRow)
-			ch := g.Char
-			if ch == 0 {
-				ch = ' '
-			}
-			cw := runewidth.RuneWidth(ch)
-			if cw == 0 {
-				ch = ' '
-				cw = 1
-			}
-			if visualCol+cw > w {
-				break
-			}
-
-			// A wide glyph owns the following NUL continuation cell. Detect that
-			// up front so we can both skip the continuation cell and treat the
-			// cursor as resting on the wide glyph when it sits on that cell.
-			nextIsCont := cw > 1 && x+1 < cols && term.Cell(x+1, srcRow).Char == 0
-
-			isCursor := curVisible && srcRow == cursor.Y &&
-				(x == cursor.X || (nextIsCont && cursor.X == x+1))
-			if isCursor {
-				curX = visualCol
-				curY = displayRow
-			}
-
-			ansiStart, ansiEnd := glyphANSI(g, isCursor)
-			sb.WriteString(ansiStart)
-			sb.WriteRune(ch)
-			sb.WriteString(ansiEnd)
-			visualCol += cw
-			if nextIsCont {
-				skipNext = true
-			}
+		cx := -1
+		if curVisible && srcRow == cursor.Y {
+			cx = cursor.X
 		}
-		for visualCol < w {
-			sb.WriteByte(' ')
-			visualCol++
+		rendered, visualCurX := renderRowANSI(term.Row(srcRow), w, cx)
+		lines[displayRow] = rendered
+		if visualCurX >= 0 {
+			curX = visualCurX
+			curY = displayRow
 		}
-		lines[displayRow] = sb.String()
 	}
 	return lines, curX, curY
 }

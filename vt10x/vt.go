@@ -47,13 +47,22 @@ type View interface {
 	// CursorVisible returns the visible state of the cursor.
 	CursorVisible() bool
 
-	// Dirty returns whether the given line has been modified since the last Unlock.
+	// Dirty returns whether the given line has been modified since the last
+	// ResetDirty call.
 	Dirty(y int) bool
+
+	// ResetDirty clears all dirty-line flags. At most one consumer per
+	// terminal may rely on dirty flags, since this reset is global.
+	ResetDirty()
+
+	// Row returns the glyphs of line y. Only valid while the lock is held;
+	// must not be modified by the caller.
+	Row(y int) []Glyph
 
 	// Lock locks the state object's mutex.
 	Lock()
 
-	// Unlock resets change flags and unlocks the state object's mutex.
+	// Unlock unlocks the state object's mutex.
 	Unlock()
 }
 

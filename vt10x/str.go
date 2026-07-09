@@ -169,6 +169,9 @@ func (t *State) setColorName(j int, p *string) error {
 		}
 		t.colorOverride[Color(j)] = Color(r<<16 | g<<8 | b)
 	}
+	// Palette overrides retroactively change the rendered color of existing
+	// cells, so any cached rendering of the screen is now stale.
+	t.dirtyAll()
 
 	return nil
 }

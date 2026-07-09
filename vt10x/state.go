@@ -135,9 +135,9 @@ func (t *State) Lock() {
 	t.mu.Lock()
 }
 
-// Unlock resets change flags and unlocks the state object's mutex.
+// Unlock unlocks the state object's mutex. Dirty-line flags are NOT reset
+// here; they accumulate until a consumer calls ResetDirty explicitly.
 func (t *State) Unlock() {
-	t.resetChanges()
 	t.mu.Unlock()
 }
 
@@ -188,12 +188,43 @@ func (t *State) Changed(change ChangeFlag) bool {
 	return t.changed&change != 0
 }
 
-// Dirty returns true if line y has been modified since the last Unlock().
+// Dirty returns true if line y has been modified since the last ResetDirty().
 func (t *State) Dirty(y int) bool {
 	if y < 0 || y >= len(t.dirty) {
 		return false
 	}
 	return t.dirty[y]
+}
+
+// ResetDirty clears all dirty-line flags and the change mask. Callers that
+// cache rendered lines should invoke this (while holding the lock) after
+// consuming the flags. There must be at most one such consumer per terminal.
+func (t *State) ResetDirty() {
+	t.resetChanges()
+}
+
+// Row returns the glyphs of line y. The returned slice is only valid while
+// the state lock is held and must not be modified, except when color
+// overrides are active, in which case a copy is returned.
+func (t *State) Row(y int) []Glyph {
+	if y < 0 || y >= len(t.lines) {
+		return nil
+	}
+	row := t.lines[y]
+	if len(t.colorOverride) == 0 {
+		return row
+	}
+	out := make([]Glyph, len(row))
+	copy(out, row)
+	for i := range out {
+		if fg, ok := t.colorOverride[out[i].FG]; ok {
+			out[i].FG = fg
+		}
+		if bg, ok := t.colorOverride[out[i].BG]; ok {
+			out[i].BG = bg
+		}
+	}
+	return out
 }
 
 // resetChanges resets the change mask and dirtiness.
