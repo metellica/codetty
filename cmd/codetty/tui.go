@@ -608,6 +608,41 @@ func (m *tuiModel) closeFloating() {
 	m.resizeSessionPTYs()
 }
 
+// closeFloatingFocusNext closes the floating window and moves focus to the
+// small session after the one that was floating (Shift+Tab in floating mode).
+func (m *tuiModel) closeFloatingFocusNext() {
+	// Locate the floating session's visible position before closing.
+	prevVis := -1
+	if m.floatingIdx >= 0 && m.floatingIdx < len(m.orderedSessions()) {
+		name := m.orderedSessions()[m.floatingIdx].Name
+		for i, s := range m.visibleSessions() {
+			if s.Name == name {
+				prevVis = i
+				break
+			}
+		}
+	}
+	m.closeFloating()
+	n := len(m.visibleSessions())
+	if n == 0 {
+		return
+	}
+	if prevVis < 0 {
+		prevVis = m.selected
+	}
+	next := (prevVis + 1) % n
+	if m.mode == modeFocusBig {
+		if next == m.selected {
+			m.inputFocus = -1 // big panel highlighted
+		} else {
+			m.inputFocus = next
+		}
+	} else {
+		m.selected = next
+		m.inputFocus = -1
+	}
+}
+
 // focusedContentSize returns the inner content dimensions for the focused session.
 func (m *tuiModel) focusedContentSize() (int, int) {
 	if m.mode == modeFullscreen {

@@ -729,3 +729,91 @@ func TestSelectionDrag_ThrottlesViewRegeneration(t *testing.T) {
 		t.Fatal("flushed View should render the updated selection")
 	}
 }
+
+func TestHandleKey_ShiftTabClosesFloatingAndFocusesNext(t *testing.T) {
+	newModel := func() *tuiModel {
+		m := newTUIModel(nil, "", nil)
+		m.sessions = []*tuiSession{
+			newTUISession("a", "bash", 80, 24),
+			newTUISession("b", "bash", 80, 24),
+			newTUISession("c", "bash", 80, 24),
+		}
+		m.order = []string{"a", "b", "c"}
+		return m
+	}
+
+	t.Run("grid mode selects next session", func(t *testing.T) {
+		m := newModel()
+		m.mode = modeGrid
+		m.selected = 0
+		m.openFloating(0)
+		if m.floatingIdx != 0 {
+			t.Fatalf("floatingIdx = %d, want 0", m.floatingIdx)
+		}
+
+		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+
+		if m.floatingIdx != -1 {
+			t.Fatalf("floatingIdx = %d, want -1 (closed)", m.floatingIdx)
+		}
+		if m.mode != modeGrid {
+			t.Fatalf("mode = %v, want %v", m.mode, modeGrid)
+		}
+		if m.selected != 1 {
+			t.Fatalf("selected = %d, want 1", m.selected)
+		}
+	})
+
+	t.Run("grid mode wraps around", func(t *testing.T) {
+		m := newModel()
+		m.mode = modeGrid
+		m.selected = 2
+		m.openFloating(2)
+
+		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+
+		if m.floatingIdx != -1 {
+			t.Fatalf("floatingIdx = %d, want -1 (closed)", m.floatingIdx)
+		}
+		if m.selected != 0 {
+			t.Fatalf("selected = %d, want 0 (wrapped)", m.selected)
+		}
+	})
+
+	t.Run("focus-big mode highlights next side panel", func(t *testing.T) {
+		m := newModel()
+		m.mode = modeFocusBig
+		m.selected = 0
+		m.inputFocus = 1
+		m.openFloating(1)
+
+		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+
+		if m.floatingIdx != -1 {
+			t.Fatalf("floatingIdx = %d, want -1 (closed)", m.floatingIdx)
+		}
+		if m.mode != modeFocusBig {
+			t.Fatalf("mode = %v, want %v", m.mode, modeFocusBig)
+		}
+		if m.inputFocus != 2 {
+			t.Fatalf("inputFocus = %d, want 2", m.inputFocus)
+		}
+	})
+
+	t.Run("focus-big next lands on big panel", func(t *testing.T) {
+		m := newModel()
+		m.mode = modeFocusBig
+		m.selected = 0
+		m.inputFocus = 2
+		m.openFloating(2)
+
+		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+
+		if m.floatingIdx != -1 {
+			t.Fatalf("floatingIdx = %d, want -1 (closed)", m.floatingIdx)
+		}
+		if m.inputFocus != -1 {
+			t.Fatalf("inputFocus = %d, want -1 (big panel)", m.inputFocus)
+		}
+	})
+}

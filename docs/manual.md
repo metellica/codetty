@@ -395,7 +395,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 | `Ctrl+A n` | 切换到下一个 session |
 | `Ctrl+A p` | 切换到上一个 session |
 | `Ctrl+A 1`-`9` | 跳转到指定编号的 session |
-| `Shift+Tab` | 焦点放大模式下循环切换面板高亮；其他模式切换到下一 session |
+| `Shift+Tab` | 焦点放大模式下循环切换面板高亮；浮动窗口中关闭浮动并高亮下一面板；其他模式切换到下一 session |
 | `Enter` | 在高亮面板上打开浮动窗口（网格模式或焦点放大的侧面板） |
 
 ### 布局控制
@@ -653,6 +653,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 ### 操作浮动窗口
 
 - `Ctrl+A q` — 关闭浮动窗口（临时 shell 会自动 kill）
+- `Shift+Tab` — 关闭浮动窗口并将焦点移到下一个小面板
 - `Ctrl+A f` — 从浮动切换到全屏
 - 键盘输入正常转发到浮动窗口的 session
 - 鼠标操作：支持文本选择和点击转发

@@ -79,6 +79,10 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return m.handlePrefixKey(msg)
 		}
+		if msg.Type == tea.KeyShiftTab {
+			m.closeFloatingFocusNext()
+			return nil
+		}
 		m.forwardKeyTo(msg, m.floatingIdx)
 		return nil
 	}
