@@ -1,6 +1,8 @@
 package main
 
 import (
+	"time"
+
 	"codetty/daemon"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -28,7 +30,7 @@ var (
 type layoutMode int
 
 const (
-	modeFocusBig   layoutMode = iota
+	modeFocusBig layoutMode = iota
 	modeGrid
 	modeFullscreen // no borders, no status bar, just terminal
 )
@@ -38,13 +40,13 @@ type tuiModel struct {
 	conn      *daemonConn
 	imeWriter *imeWriter // nil in tests; wraps stdout to fix IME cursor position
 	sessions  []*tuiSession
-	order    []string // session names in display order
-	selected int      // primary/big panel in focus-big mode
-	mode     layoutMode
+	order     []string // session names in display order
+	selected  int      // primary/big panel in focus-big mode
+	mode      layoutMode
 
-	prefix   bool // prefix key active (see prefixKey)
-	width    int
-	height   int
+	prefix bool // prefix key active (see prefixKey)
+	width  int
+	height int
 
 	// prefixKey/prefixLabel: the configured prefix key (default Ctrl+A) and
 	// its display label (e.g. "Ctrl+A"), set from config after construction.
@@ -67,16 +69,24 @@ type tuiModel struct {
 	renameText string
 
 	// Create session mode (type selection + name input)
-	creating       bool
-	createText     string
-	createChooser  bool // true when showing [c]odetty / [t]mux type chooser
-	createTmux     bool // true when creating a tmux session (after chooser)
+	creating      bool
+	createText    string
+	createChooser bool // true when showing [c]odetty / [t]mux type chooser
+	createTmux    bool // true when creating a tmux session (after chooser)
 
 	// Tmux session picker
 	tmuxPicker tmuxPicker
 
 	// Text selection
 	sel textSelection
+
+	// Selection-drag frame throttling: during rapid mouse-motion drags we
+	// reuse the last rendered frame if it is fresher than selViewInterval,
+	// so the Bubble Tea message queue never backs up behind slow renders.
+	selViewAt       time.Time
+	selViewSkip     bool // next View() may return lastView
+	selFlushPending bool // a trailing selFlushMsg tick is scheduled
+	lastView        string
 
 	// Panel drag-to-reorder state
 	drag panelDrag
@@ -197,11 +207,26 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.handleMouse(msg)
+
+	case selFlushMsg:
+		// Trailing edge of a throttled selection drag: render a fresh frame.
+		m.selFlushPending = false
+		m.selViewAt = time.Now()
 	}
 	return m, nil
 }
 
 func (m *tuiModel) View() string {
+	// Reuse the previous frame during throttled selection drags. The flag is
+	// set only by mouse-motion updates that changed nothing but the selection
+	// endpoint, and a trailing selFlushMsg guarantees a fresh final frame.
+	if m.selViewSkip {
+		m.selViewSkip = false
+		if m.lastView != "" {
+			return m.lastView
+		}
+	}
+
 	if len(m.sessions) == 0 {
 		hint := "No sessions. Creating one..."
 		if m.autoCreate == nil {
@@ -267,6 +292,7 @@ func (m *tuiModel) View() string {
 		m.imeWriter.setCursorSeq(m.imeCursorSeq())
 	}
 
+	m.lastView = base
 	return base
 }
 

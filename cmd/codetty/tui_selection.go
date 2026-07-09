@@ -5,17 +5,18 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"codetty/vt10x"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
 )
 
 // textSelection tracks in-pane text selection state.
 type textSelection struct {
-	active   bool   // actively selecting (drag started)
-	pending  bool   // mouse pressed but not yet dragged
-	session  string // which session is being selected in
+	active  bool   // actively selecting (drag started)
+	pending bool   // mouse pressed but not yet dragged
+	session string // which session is being selected in
 	// Coordinates in session-local terminal space (0-based col/row)
 	startX, startY int
 	endX, endY     int
@@ -38,6 +39,32 @@ type panelRegion struct {
 	// Screen coordinates of the content area (inside borders/title)
 	contentX, contentY int
 	contentW, contentH int
+}
+
+// selViewInterval caps selection-drag frame regeneration at ~30fps.
+const selViewInterval = 33 * time.Millisecond
+
+// selFlushMsg forces a fresh frame after a throttled selection drag,
+// so the highlight always settles at the final mouse position.
+type selFlushMsg struct{}
+
+// selMotionCmd throttles frame regeneration while dragging a selection.
+// Mouse-motion events can arrive faster than a full frame can be rendered;
+// without throttling the message queue backs up and the highlight lags
+// further and further behind the mouse. When a frame is skipped, a trailing
+// tick is scheduled so the final position is always rendered.
+func (m *tuiModel) selMotionCmd() tea.Cmd {
+	now := time.Now()
+	if now.Sub(m.selViewAt) >= selViewInterval {
+		m.selViewAt = now
+		return nil
+	}
+	m.selViewSkip = true
+	if m.selFlushPending {
+		return nil
+	}
+	m.selFlushPending = true
+	return tea.Tick(selViewInterval, func(time.Time) tea.Msg { return selFlushMsg{} })
 }
 
 // handleMouse processes mouse events for selection and panel switching.
@@ -80,14 +107,14 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					// Clicking the big panel: start selection
 					sess := sessions[r.sessionIdx]
 					m.sel = textSelection{
-						pending:  true,
-						session:  sess.Name,
-						startX:   localX,
-						startY:   localY,
-						endX:     localX,
-						endY:     localY,
-						screenX:  msg.X,
-						screenY:  msg.Y,
+						pending: true,
+						session: sess.Name,
+						startX:  localX,
+						startY:  localY,
+						endX:    localX,
+						endY:    localY,
+						screenX: msg.X,
+						screenY: msg.Y,
 					}
 					return nil
 				}
@@ -219,7 +246,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				}
 				m.sel.endX = localX
 				m.sel.endY = localY
-				return nil
+				return m.selMotionCmd()
 			}
 		} else if m.mode == modeFocusBig {
 			// Forward motion to big panel only if mouse reporting is enabled.
@@ -287,14 +314,14 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
 			m.sel = textSelection{
-				pending:  true,
-				session:  sess.Name,
-				startX:   msg.X,
-				startY:   msg.Y,
-				endX:     msg.X,
-				endY:     msg.Y,
-				screenX:  msg.X,
-				screenY:  msg.Y,
+				pending: true,
+				session: sess.Name,
+				startX:  msg.X,
+				startY:  msg.Y,
+				endX:    msg.X,
+				endY:    msg.Y,
+				screenX: msg.X,
+				screenY: msg.Y,
 			}
 			return nil
 		}
@@ -326,6 +353,7 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			m.sel.endX = x
 			m.sel.endY = y
+			return m.selMotionCmd()
 		} else if mouseOn {
 			m.forwardMouseToPTY(msg)
 		}
@@ -484,6 +512,7 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 		} else if m.sel.active && m.sel.session == sess.Name {
 			m.sel.endX = clamp(localX, 0, cw-1)
 			m.sel.endY = clamp(localY, 0, ch-1)
+			return m.selMotionCmd()
 		} else if inside && mouseOn {
 			m.forwardMouseToSession(sess.Name, msg, localX, localY)
 		}

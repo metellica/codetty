@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"codetty/daemon"
 
@@ -397,7 +398,6 @@ func TestTmuxPicker_KeyHandling(t *testing.T) {
 	}
 }
 
-
 func TestHandleSessionEvent_TmuxTypePreserved(t *testing.T) {
 	m := newTUIModel(nil, "", nil)
 	m.width = 100
@@ -673,5 +673,59 @@ func TestUpdate_OutputWritesToSession(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("session should contain 'hello world' after two output messages")
+	}
+}
+
+func TestSelectionDrag_ThrottlesViewRegeneration(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 80
+	m.height = 24
+	m.mode = modeFullscreen
+	sess := newTUISession("test", "bash", 80, 24)
+	m.sessions = []*tuiSession{sess}
+	m.order = []string{"test"}
+
+	// Press and first motion start an active selection.
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 1, Y: 1})
+	m.Update(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 3, Y: 1})
+	if !m.sel.active {
+		t.Fatal("selection should be active after drag motion")
+	}
+
+	// First View renders a full frame and caches it.
+	first := m.View()
+	if m.lastView != first {
+		t.Fatal("View should cache the rendered frame")
+	}
+
+	// A rapid follow-up motion (within selViewInterval) must skip regeneration
+	// and schedule a trailing flush.
+	m.selViewAt = time.Now()
+	_, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: 10, Y: 5})
+	if !m.selViewSkip {
+		t.Fatal("rapid motion should set selViewSkip")
+	}
+	if cmd == nil {
+		t.Fatal("rapid motion should schedule a trailing flush tick")
+	}
+	if got := m.View(); got != first {
+		t.Fatal("throttled View should return the cached frame")
+	}
+	if m.selViewSkip {
+		t.Fatal("View should consume selViewSkip")
+	}
+	// Selection endpoint still tracked despite skipped frame.
+	if m.sel.endX != 10 || m.sel.endY != 5 {
+		t.Fatalf("sel end = (%d,%d), want (10,5)", m.sel.endX, m.sel.endY)
+	}
+
+	// The trailing flush forces a fresh frame with the latest endpoint.
+	m.Update(selFlushMsg{})
+	if m.selFlushPending {
+		t.Fatal("selFlushMsg should clear selFlushPending")
+	}
+	fresh := m.View()
+	if fresh == first {
+		t.Fatal("flushed View should render the updated selection")
 	}
 }

@@ -40,6 +40,12 @@ type tuiSession struct {
 	cachedCursorY  int
 	cacheW, cacheH int
 	outputReceived bool
+
+	// Dimmed line cache for side panel rendering
+	dimLines  []string
+	dimCacheW int
+	dimCacheH int
+	dimStale  bool
 }
 
 func newTUISession(name, command string, cols, rows uint16) *tuiSession {
@@ -59,6 +65,7 @@ func (s *tuiSession) WriteOutput(data []byte) {
 	defer s.mu.Unlock()
 	s.term.Write(data)
 	s.outputReceived = true
+	s.dimStale = true
 }
 
 // RenderANSI renders the terminal screen at the given dimensions.
@@ -122,6 +129,7 @@ func (s *tuiSession) Resize(cols, rows uint16) {
 	s.Rows = rows
 	s.term.Resize(int(cols), int(rows))
 	s.cachedLines = nil
+	s.dimLines = nil
 }
 
 // MouseEnabled returns true if the session's terminal has mouse reporting on.
@@ -134,12 +142,27 @@ func (s *tuiSession) MouseEnabled() bool {
 }
 
 // RenderDimmed renders terminal content in uniform dim gray, skipping per-cell color processing.
+// The result is cached until new output arrives or the size changes, since
+// side panels are re-rendered on every View() call.
 func (s *tuiSession) RenderDimmed(w, h int) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.dimCacheW != w || s.dimCacheH != h {
+		s.dimLines = nil
+		s.dimCacheW = w
+		s.dimCacheH = h
+	}
+	if s.dimLines != nil && !s.dimStale {
+		return s.dimLines
+	}
+
 	s.term.Lock()
-	defer s.term.Unlock()
-	return renderTerminalDimmed(s.term, w, h)
+	lines := renderTerminalDimmed(s.term, w, h)
+	s.term.Unlock()
+	s.dimLines = lines
+	s.dimStale = false
+	return lines
 }
 
 func renderTerminalDimmed(term vt10x.Terminal, w, h int) []string {
