@@ -395,7 +395,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 | `Ctrl+A n` | 切换到下一个 session |
 | `Ctrl+A p` | 切换到上一个 session |
 | `Ctrl+A 1`-`9` | 跳转到指定编号的 session |
-| `Shift+Tab` | 焦点放大模式下循环切换面板高亮；浮动窗口中关闭浮动并高亮下一面板；其他模式切换到下一 session |
+| `Shift+Tab` | 焦点放大模式下循环切换面板高亮；浮动窗口中关闭浮动并高亮下一面板；全屏模式打开 session 切换器（实时预览）；其他模式切换到下一 session |
 | `Enter` | 在高亮面板上打开浮动窗口（网格模式或焦点放大的侧面板） |
 
 ### 布局控制
@@ -425,7 +425,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 
 | 按键 | 功能 |
 |------|------|
-| `Shift+Tab` | 切换到下一个 session / 循环面板高亮 |
+| `Shift+Tab` | 切换到下一个 session / 循环面板高亮 / 全屏模式打开 session 切换器 |
 | `Ctrl+A Ctrl+A` | 向 session 发送字面 Ctrl+A |
 
 ---
@@ -506,6 +506,25 @@ remove_windows = ["git"]         # 删除模板中的 window
 - 所有鼠标事件转发到 PTY（支持 vim、tmux 等鼠标操作）
 - 支持文本选择与复制
 - `Ctrl+A f` 退回上一个模式（通过模式栈导航）
+- `Shift+Tab` 打开 session 切换器（见下）
+
+### 全屏 Session 切换器 (Shift+Tab)
+
+全屏模式下按 `Shift+Tab` 弹出浮动切换器，罗列除当前 session 外的所有
+可见 session，每个 session 以焦点放大模式侧面板的样式展示实时输出预览
+（约 10 行），便于根据当前状态选择要切换的 session。
+
+- `↓` / `j` — 向下移动（列不变，末行再向下回到首行）
+- `↑` / `k` — 向上移动（列不变，首行再向上回到该列末行）
+- `→` / `l` — 向右移动（行不变，行末再向右回到行首）
+- `←` / `h` — 向左移动（行不变，行首再向左回到行末）
+- `Tab` / `Shift+Tab` — 按顺序高亮下一个面板
+- `Enter` — 切换到高亮的 session（保持全屏）
+- `1`-`9` — 按编号直接切换
+- `Esc` / `q` — 关闭切换器，留在当前 session
+- 鼠标左键点击面板 — 直接切换到该 session
+- 鼠标点击框外 — 关闭切换器
+- 滚轮 — 循环切换高亮面板
 
 ### 模式栈导航
 

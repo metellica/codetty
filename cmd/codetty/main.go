@@ -38,6 +38,7 @@ TUI Keys (%s prefix):
 
 Other keys:
   Shift+Tab           Switch to next session
+                      (fullscreen: open session switcher with live previews)
   Mouse click         Select session panel
 
 Options:

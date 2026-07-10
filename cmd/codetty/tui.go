@@ -101,6 +101,9 @@ type tuiModel struct {
 	// Session manager overlay
 	sessMgr sessionManager
 
+	// Session switcher overlay (fullscreen Shift+Tab)
+	switcher sessionSwitcher
+
 	// Initial focus target (from new/attach command)
 	focusTarget string
 	// When set, open this session in a floating window once created
@@ -206,6 +209,9 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.renaming || m.creating || m.createChooser || m.tmuxPicker.active || m.confirmKill || m.sessMgr.active {
 			return m, nil
 		}
+		if m.switcher.active {
+			return m, m.handleSwitcherMouse(msg)
+		}
 		return m, m.handleMouse(msg)
 
 	case selFlushMsg:
@@ -278,6 +284,11 @@ func (m *tuiModel) View() string {
 	// Overlay session manager if active
 	if m.sessMgr.active {
 		base = m.renderSessionManager(base)
+	}
+
+	// Overlay session switcher if active
+	if m.switcher.active {
+		base = m.renderSwitcher(base)
 	}
 
 	// Overlay kill confirmation if active

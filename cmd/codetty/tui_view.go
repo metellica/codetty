@@ -465,7 +465,7 @@ func gridCols(n, width int) int {
 func (m *tuiModel) imeCursorSeq() string {
 	// Overlays and text-input prompts capture keyboard for non-PTY input —
 	// no meaningful session cursor position to anchor the IME window to.
-	if m.tmuxPicker.active || m.sessMgr.active ||
+	if m.tmuxPicker.active || m.sessMgr.active || m.switcher.active ||
 		m.confirmKill || m.renaming || m.creating || m.createChooser {
 		return ""
 	}

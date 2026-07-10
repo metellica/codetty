@@ -47,6 +47,10 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if m.tmuxPicker.active {
 		return m.handleTmuxPickerKey(msg)
 	}
+	// Session switcher overlay: capture all input
+	if m.switcher.active {
+		return m.handleSwitcherKey(msg)
+	}
 	// Rename mode: capture text input
 	if m.renaming {
 		return m.handleRenameKey(msg)
@@ -88,9 +92,14 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	if msg.Type == tea.KeyShiftTab {
-		if m.mode == modeFocusBig {
+		switch m.mode {
+		case modeFocusBig:
 			m.cycleSideHighlight()
-		} else {
+		case modeFullscreen:
+			// Open the session switcher with live previews instead of
+			// blindly cycling — fullscreen hides all other sessions.
+			m.openSwitcher()
+		default:
 			m.selectDelta(1)
 		}
 		return nil
