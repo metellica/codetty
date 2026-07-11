@@ -121,6 +121,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.handleRefreshTmux(conn)
 	case ActionCreateTab:
 		s.handleCreateTab(conn, req)
+	case ActionUpgrade:
+		s.handleUpgrade(conn, req)
 	default:
 		s.sendError(conn, fmt.Sprintf("unknown action: %s", req.Action))
 	}

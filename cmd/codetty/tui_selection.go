@@ -94,6 +94,30 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			// Plain click on panels
 			regions := m.panelRegions()
 			sessions := m.visibleSessions()
+
+			// Check for tab bar clicks first
+			for _, r := range regions {
+				if r.sessionIdx >= len(sessions) {
+					continue
+				}
+				sess := sessions[r.sessionIdx]
+				if len(sess.Tabs) <= 1 {
+					continue
+				}
+				// Tab bar is on the last line of the content area
+				tabBarY := r.contentY + r.contentH - 1
+				if msg.Y == tabBarY && msg.X >= r.contentX && msg.X < r.contentX+r.contentW {
+					localX := msg.X - r.contentX
+					if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, r.contentW, localX); tabIdx >= 0 {
+						if m.conn != nil {
+							m.conn.SwitchTab(sess.Name, tabIdx)
+						}
+						m.sel = textSelection{}
+						return nil
+					}
+				}
+			}
+
 			for _, r := range regions {
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
@@ -313,6 +337,17 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
+			// Check tab bar click in fullscreen (tab bar is on the last line)
+			if len(sess.Tabs) > 1 && msg.Y == m.height-1 {
+				if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, m.width, msg.X); tabIdx >= 0 {
+					if m.conn != nil {
+						m.conn.SwitchTab(sess.Name, tabIdx)
+					}
+					m.sel = textSelection{}
+					return nil
+				}
+			}
+
 			m.sel = textSelection{
 				pending: true,
 				session: sess.Name,

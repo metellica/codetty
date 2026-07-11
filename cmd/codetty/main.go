@@ -20,6 +20,7 @@ Usage:
   codetty ls                                   List active sessions
   codetty kill [-s name]                       Kill a session
   codetty kill-server                          Stop the daemon and all sessions
+  codetty upgrade                              Hot-upgrade daemon binary without killing sessions
 
 TUI Keys (%s prefix):
   d       Detach (exit TUI, sessions keep running)
@@ -78,6 +79,8 @@ func main() {
 		cmdKill(args)
 	case "kill-server":
 		cmdKillServer(args)
+	case "upgrade":
+		cmdUpgrade(args)
 	case "__server":
 		cmdServer(args)
 	case "--help", "-h", "help":

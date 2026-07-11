@@ -357,6 +357,37 @@ func renderTabBar(tabs []tuiTab, activeIdx, maxW int) string {
 	return strings.Join(parts, "")
 }
 
+// hitTestTabBar returns the tab index at the given X position within the tab bar,
+// or -1 if the click doesn't land on a tab.
+func hitTestTabBar(tabs []tuiTab, activeIdx, maxW, x int) int {
+	totalW := 0
+
+	for i, tab := range tabs {
+		label := tab.Name
+		if label == "" {
+			label = fmt.Sprintf("%d", i+1)
+		}
+		tabLabel := fmt.Sprintf(" %d:%s ", i+1, label)
+		tabW := len(tabLabel) // visual width of ASCII label
+
+		// Same overflow check as renderTabBar
+		if totalW+tabW+1 > maxW && i > 0 {
+			break
+		}
+
+		if x >= totalW && x < totalW+tabW {
+			return i
+		}
+		totalW += tabW
+
+		// Separator
+		if i < len(tabs)-1 {
+			totalW++ // "│" is 1 cell wide
+		}
+	}
+	return -1
+}
+
 // overlayFloating renders a floating window on top of the base view.
 func (m *tuiModel) overlayFloating(base string) string {
 	ordered := m.orderedSessions()

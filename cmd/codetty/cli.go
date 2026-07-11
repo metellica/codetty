@@ -528,6 +528,48 @@ func cmdKillServer(args []string) {
 	fmt.Println("daemon stopped")
 }
 
+func cmdUpgrade(args []string) {
+	// Determine the binary path to upgrade to
+	binaryPath := ""
+	if len(args) > 0 {
+		binaryPath = args[0]
+	} else {
+		// Default: use the current executable (already rebuilt in place)
+		exe, err := os.Executable()
+		if err != nil {
+			log.Fatalf("cannot determine executable: %v", err)
+		}
+		binaryPath = exe
+	}
+
+	sockPath := defaultSocketPath()
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		fmt.Println("no daemon running")
+		return
+	}
+	defer conn.Close()
+
+	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{
+		Action:  daemon.ActionUpgrade,
+		Session: binaryPath, // reuse Session field for binary path
+	}))
+
+	ft, payload, err := daemon.ReadFrame(conn)
+	if err != nil {
+		log.Fatalf("read response: %v", err)
+	}
+	if ft != daemon.FrameResponse {
+		log.Fatal("unexpected response")
+	}
+	var resp daemon.Response
+	json.Unmarshal(payload, &resp)
+	if !resp.OK {
+		log.Fatalf("upgrade failed: %s", resp.Error)
+	}
+	fmt.Println("daemon upgrading... TUI clients will reconnect automatically")
+}
+
 func terminalSize() (uint16, uint16) {
 	w, h, err := xterm.GetSize(int(os.Stdin.Fd()))
 	if err != nil || w <= 0 || h <= 0 {

@@ -43,6 +43,7 @@ const (
 	ActionSubscribeAll Action = "subscribe_all"
 	ActionRefreshTmux  Action = "refresh_tmux"
 	ActionCreateTab    Action = "create_tab"
+	ActionUpgrade      Action = "upgrade"
 )
 
 // Request is the JSON payload for FrameRequest.

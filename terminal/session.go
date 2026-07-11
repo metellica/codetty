@@ -18,6 +18,8 @@ type Session interface {
 	Wait() error
 	// Kill sends SIGKILL (or equivalent) to the process.
 	Kill() error
+	// Fd returns the PTY file descriptor number, or -1 if not available.
+	Fd() int
 }
 
 // Start creates a new PTY session running the given command.
