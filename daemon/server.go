@@ -50,9 +50,10 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// agentPollInterval is how often each native session's tabs are scanned
-// for agent state changes.
-const agentPollInterval = 500 * time.Millisecond
+// agentPollInterval is the detection tick. The Detector throttles normal
+// rescans internally (500ms); the fast tick exists so pending Working→Idle
+// holds are re-checked at herdr-equivalent cadence (100ms).
+const agentPollInterval = 100 * time.Millisecond
 
 // agentPollLoop periodically runs agent detection on all native sessions
 // and broadcasts an "agent_state" session event when anything changed.

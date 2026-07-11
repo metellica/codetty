@@ -93,18 +93,32 @@ func TestDetectorHoldsWorkingToIdle(t *testing.T) {
 		t.Fatalf("initial working: state=%q changed=%v", state, changed)
 	}
 
-	// First two idle readings are held.
+	// First two idle readings are held (herdr: 100ms recheck cadence).
 	for i := 1; i <= 2; i++ {
-		state, changed = d.Commit("copilot", StateIdle, uint64(1+i), now.Add(time.Duration(i)*500*time.Millisecond))
+		state, changed = d.Commit("copilot", StateIdle, uint64(1+i), now.Add(time.Duration(i)*100*time.Millisecond))
 		if state != StateWorking || changed {
 			t.Fatalf("idle reading %d: state=%q changed=%v, want held working", i, state, changed)
 		}
 	}
 
 	// Third consecutive idle commits.
-	state, changed = d.Commit("copilot", StateIdle, 4, now.Add(1500*time.Millisecond))
+	state, changed = d.Commit("copilot", StateIdle, 4, now.Add(300*time.Millisecond))
 	if state != StateIdle || !changed {
 		t.Fatalf("confirmed idle: state=%q changed=%v", state, changed)
+	}
+}
+
+func TestDetectorIdleHoldCapExpires(t *testing.T) {
+	var d Detector
+	now := time.Now()
+
+	d.Commit("copilot", StateWorking, 1, now)
+	d.Commit("copilot", StateIdle, 2, now.Add(100*time.Millisecond)) // hold starts
+
+	// Past the 700ms cap the idle reading commits regardless of count.
+	state, changed := d.Commit("copilot", StateIdle, 3, now.Add(100*time.Millisecond+idleHoldCap))
+	if state != StateIdle || !changed {
+		t.Fatalf("cap expiry: state=%q changed=%v, want committed idle", state, changed)
 	}
 }
 
@@ -155,8 +169,11 @@ func TestDetectorNeedsScan(t *testing.T) {
 	if d.NeedsScan(1, now.Add(time.Second)) {
 		t.Fatal("unchanged seq should skip scan")
 	}
+	if d.NeedsScan(2, now.Add(100*time.Millisecond)) {
+		t.Fatal("changed seq within the scan-interval throttle should wait")
+	}
 	if !d.NeedsScan(2, now.Add(time.Second)) {
-		t.Fatal("changed seq must scan")
+		t.Fatal("changed seq must scan after the throttle window")
 	}
 	if !d.NeedsScan(1, now.Add(maxStaleness)) {
 		t.Fatal("stale commit must rescan")

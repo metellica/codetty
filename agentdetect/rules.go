@@ -6,15 +6,18 @@ import (
 	"strings"
 )
 
-// Matcher tests lowercased screen-tail text.
-type Matcher func(text string) bool
+// Matcher tests screen-tail text. It receives both the original text and
+// a pre-lowercased copy: substring matchers use the lowercased text while
+// regex matchers run against the original (matching herdr's manifest
+// engine semantics).
+type Matcher func(text, lower string) bool
 
 // Contains matches when every substring is present (substrings must be
-// lowercase; input text is lowercased before evaluation).
+// lowercase; matching is done against the lowercased text).
 func Contains(subs ...string) Matcher {
-	return func(text string) bool {
+	return func(_, lower string) bool {
 		for _, s := range subs {
-			if !strings.Contains(text, s) {
+			if !strings.Contains(lower, s) {
 				return false
 			}
 		}
@@ -24,9 +27,9 @@ func Contains(subs ...string) Matcher {
 
 // Any matches when at least one sub-matcher matches.
 func Any(ms ...Matcher) Matcher {
-	return func(text string) bool {
+	return func(text, lower string) bool {
 		for _, m := range ms {
-			if m(text) {
+			if m(text, lower) {
 				return true
 			}
 		}
@@ -36,9 +39,9 @@ func Any(ms ...Matcher) Matcher {
 
 // All matches when every sub-matcher matches.
 func All(ms ...Matcher) Matcher {
-	return func(text string) bool {
+	return func(text, lower string) bool {
 		for _, m := range ms {
-			if !m(text) {
+			if !m(text, lower) {
 				return false
 			}
 		}
@@ -48,13 +51,14 @@ func All(ms ...Matcher) Matcher {
 
 // Not inverts a matcher.
 func Not(m Matcher) Matcher {
-	return func(text string) bool { return !m(text) }
+	return func(text, lower string) bool { return !m(text, lower) }
 }
 
-// Regex matches against a pattern compiled at spec-registration time.
+// Regex matches the original (non-lowercased) text against a pattern
+// compiled at spec-registration time.
 func Regex(pattern string) Matcher {
 	re := regexp.MustCompile(pattern)
-	return func(text string) bool { return re.MatchString(text) }
+	return func(text, _ string) bool { return re.MatchString(text) }
 }
 
 // Rule maps a screen-tail pattern to an agent state. Higher priority rules
@@ -87,9 +91,9 @@ func (spec *AgentSpec) sortRules() {
 
 // Evaluate returns the raw state for the given screen tail text.
 func (spec *AgentSpec) Evaluate(tail string) AgentState {
-	text := strings.ToLower(tail)
+	lower := strings.ToLower(tail)
 	for _, r := range spec.Rules {
-		if r.Match(text) {
+		if r.Match(tail, lower) {
 			return r.State
 		}
 	}

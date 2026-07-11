@@ -28,9 +28,14 @@ const (
 	// idleConfirmations is how many consecutive idle scans are required
 	// before a Working state is allowed to fall back to Idle. Agents pause
 	// briefly between tool calls; without this hold the state flickers.
+	// Matches herdr's AGENT_PENDING_IDLE_CONFIRMATIONS.
 	idleConfirmations = 3
 	// idleHoldCap bounds the Working→Idle hold regardless of poll cadence.
-	idleHoldCap = 1500 * time.Millisecond
+	// Matches herdr's AGENT_PENDING_IDLE_CAP (700ms).
+	idleHoldCap = 700 * time.Millisecond
+	// scanInterval throttles normal rescans; pending-idle rechecks run at
+	// the caller's tick rate instead (herdr: 100ms rechecks).
+	scanInterval = 500 * time.Millisecond
 	// maxStaleness forces a rescan even without new PTY output, so agent
 	// launches/exits that produce no output are still picked up.
 	maxStaleness = 4 * time.Second
@@ -56,14 +61,19 @@ func (d *Detector) Agent() string { return d.agent }
 func (d *Detector) State() AgentState { return d.state }
 
 // NeedsScan reports whether the caller should run identification and a
-// screen scan this poll. Scans are skipped while the PTY content sequence
-// is unchanged, unless an idle hold is pending or the last commit is stale.
+// screen scan this poll. While a Working→Idle hold is pending, every tick
+// rescans (fast confirmation); otherwise scans are throttled to
+// scanInterval and skipped entirely while the PTY content sequence is
+// unchanged, with a staleness bound as fallback.
 func (d *Detector) NeedsScan(seq uint64, now time.Time) bool {
-	if !d.hasSeq || seq != d.lastSeq {
+	if !d.hasSeq {
 		return true
 	}
 	if d.idleConfirms > 0 {
 		return true
+	}
+	if seq != d.lastSeq {
+		return now.Sub(d.lastCommit) >= scanInterval
 	}
 	return now.Sub(d.lastCommit) >= maxStaleness
 }
