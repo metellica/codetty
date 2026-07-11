@@ -110,6 +110,31 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		switch m.mode {
 		case modeFocusBig:
 			m.cycleSideHighlight()
+		case modeList:
+			// Cycle the sidebar: agents needing attention first (blocked,
+			// then done), then the session entries; after the last one,
+			// focus returns to the big panel.
+			if positions := m.listShiftTabPositions(); len(positions) > 0 {
+				if !m.listFocus {
+					m.listFocus = true
+					m.listCursor = positions[0].sessIdx
+					m.listCursorTab = positions[0].tabIdx
+				} else {
+					pi := -1
+					for idx, p := range positions {
+						if p.sessIdx == m.listCursor && p.tabIdx == m.listCursorTab {
+							pi = idx
+							break
+						}
+					}
+					if pi+1 < len(positions) {
+						m.listCursor = positions[pi+1].sessIdx
+						m.listCursorTab = positions[pi+1].tabIdx
+					} else {
+						m.listFocus = false
+					}
+				}
+			}
 		case modeFullscreen:
 			// Open the session switcher with live previews instead of
 			// blindly cycling — fullscreen hides all other sessions.
@@ -164,7 +189,12 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleGridKey(msg)
 	}
 
-	// Focus-big mode: always forward to big panel
+	// List mode with sidebar focus: navigate the session list.
+	if m.mode == modeList && m.listFocus {
+		return m.handleListKey(msg)
+	}
+
+	// Focus-big/list mode: always forward to big panel
 	m.forwardKey(msg)
 	return nil
 }
@@ -319,10 +349,11 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 					}
 				}
 				m.resizeSessionPTYs()
-			} else if m.mode == modeFocusBig {
+			} else if m.mode == modeFocusBig || m.mode == modeList {
 				// Big panel → fullscreen
 				m.pushMode()
 				m.mode = modeFullscreen
+				m.listFocus = false
 				m.resizeSessionPTYs()
 			} else if m.mode == modeGrid {
 				// Grid mode → open floating for selected (openFloating pushes)
@@ -335,14 +366,22 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			} else {
 				m.mode = modeGrid
 			}
+			m.listFocus = false
 			m.resizeSessionPTYs()
 			return nil
 		case 'b':
 			m.mode = modeFocusBig
+			m.listFocus = false
 			m.resizeSessionPTYs()
 			return nil
 		case 'a':
 			m.mode = modeGrid
+			m.listFocus = false
+			m.resizeSessionPTYs()
+			return nil
+		case 's':
+			m.mode = modeList
+			m.listFocus = false
 			m.resizeSessionPTYs()
 			return nil
 		case 'h':
@@ -386,7 +425,11 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			if idx < len(m.visibleSessions()) {
 				m.selected = idx
 				m.inputFocus = -1
-				m.mode = modeFocusBig
+				m.listCursor = idx
+				m.listCursorTab = -1
+				if m.mode != modeList {
+					m.mode = modeFocusBig
+				}
 			}
 			return nil
 		}

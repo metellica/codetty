@@ -32,6 +32,7 @@ TUI Keys (%s prefix):
   n/p     Next/previous session
   f       Toggle fullscreen (no borders/status)
   g       Toggle grid view
+  s       Session-list mode (big panel + sidebar, default)
   b       Focus-big mode
   a       Auto grid mode
   h/l     Move session order left/right
@@ -39,6 +40,7 @@ TUI Keys (%s prefix):
 
 Other keys:
   Shift+Tab           Switch to next session
+                      (list mode: cycle through list entries, ↑/↓ + Enter to switch)
                       (fullscreen: open session switcher with live previews)
   Mouse click         Select session panel
 

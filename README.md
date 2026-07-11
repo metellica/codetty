@@ -23,7 +23,7 @@
 ## 功能
 
 - **Daemon 架构** — 会话在后台持续运行，detach/attach 不影响进程，SSH 断开后可恢复
-- **多布局模式** — 焦点放大 (focus-big)、网格 (grid)、全屏 (fullscreen)、浮动窗口
+- **多布局模式** — 列表 (list，默认)、焦点放大 (focus-big)、网格 (grid)、全屏 (fullscreen)、浮动窗口
 - **可配置命令前缀** — 默认 Ctrl+A（类似 tmux/screen），可通过配置文件自定义，且能自动避免与 tmux 冲突
 - **Tmux 集成** — 发现并加载已有 tmux session，统一管理
 - **Session 管理器** — 隐藏/显示/关闭 session，面板按钮操作

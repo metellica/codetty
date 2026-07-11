@@ -23,7 +23,7 @@ import (
 // startupConfig holds TUI startup parameters.
 type startupConfig struct {
 	focusTarget string
-	layout      string            // "focus-big", "grid", "fullscreen"
+	layout      string            // "list", "focus-big", "grid", "fullscreen"
 	order       []string          // desired session display order
 	hidden      map[string]bool   // sessions hidden on startup
 	autoCreate  []string          // command to auto-create if no sessions exist
@@ -134,12 +134,16 @@ func startTUI(sockPath string, sc startupConfig) {
 
 	model := newTUIModel(conn, sc.focusTarget, sc.autoCreate)
 
-	// Apply startup layout mode.
+	// Apply startup layout mode (default is modeList).
 	switch sc.layout {
+	case "focus-big":
+		model.mode = modeFocusBig
 	case "grid":
 		model.mode = modeGrid
 	case "fullscreen":
 		model.mode = modeFullscreen
+	case "list":
+		model.mode = modeList
 	}
 
 	// Apply hidden sessions and desired order from config.

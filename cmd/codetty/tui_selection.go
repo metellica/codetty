@@ -81,6 +81,28 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
+			// List mode sidebar: clicking an entry switches the big
+			// panel; clicking an agent row also activates that tab.
+			if m.mode == modeList {
+				if mainW, _ := m.listLayoutWidths(); msg.X >= mainW {
+					if idx, tabIdx := m.listHitTest(msg.X, msg.Y); idx >= 0 {
+						m.selected = idx
+						m.listCursor = idx
+						m.listCursorTab = tabIdx
+						m.inputFocus = -1
+						sessions := m.visibleSessions()
+						if tabIdx >= 0 && idx < len(sessions) {
+							sess := sessions[idx]
+							if tabIdx < len(sess.Tabs) && tabIdx != sess.ActiveTab {
+								m.requestTabSwitch(sess.Name, tabIdx)
+							}
+						}
+					}
+					m.sel = textSelection{}
+					return nil
+				}
+			}
+
 			// Ctrl+Click: promote panel to big (switch m.selected)
 			if msg.Ctrl {
 				if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
@@ -103,7 +125,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				if r.sessionIdx >= len(sessions) {
 					continue
 				}
-				if m.mode != modeFocusBig || r.sessionIdx != m.selected {
+				if (m.mode != modeFocusBig && m.mode != modeList) || r.sessionIdx != m.selected {
 					continue
 				}
 				sess := sessions[r.sessionIdx]
@@ -193,13 +215,27 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		// Only the big panel receives wheel input; small panels (side
 		// panels, grid cells) are read-only monitors.
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+			// List mode sidebar: scroll the session list.
+			if m.mode == modeList {
+				if mainW, _ := m.listLayoutWidths(); msg.X >= mainW {
+					if msg.Button == tea.MouseButtonWheelUp {
+						m.listScroll--
+					} else {
+						m.listScroll++
+					}
+					if m.listScroll < 0 {
+						m.listScroll = 0
+					}
+					return nil
+				}
+			}
 			regions := m.panelRegions()
 			sessions := m.visibleSessions()
 			for _, r := range regions {
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
 				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
-					if m.mode == modeFocusBig && r.sessionIdx == m.selected {
+					if (m.mode == modeFocusBig || m.mode == modeList) && r.sessionIdx == m.selected {
 						sess := sessions[r.sessionIdx]
 						if sess.MouseEnabled() {
 							m.forwardMouseToSession(sess.Name, msg, localX, localY)
@@ -277,7 +313,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				m.sel.endY = localY
 				return m.selMotionCmd()
 			}
-		} else if m.mode == modeFocusBig {
+		} else if m.mode == modeFocusBig || m.mode == modeList {
 			// Forward motion to big panel only if mouse reporting is enabled.
 			if sess := m.selectedSession(); sess != nil && sess.MouseEnabled() {
 				regions := m.panelRegions()
@@ -320,7 +356,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			// Click without drag on big panel: forward to PTY only if the
 			// session has mouse reporting enabled (tmux, vim, etc.).
 			m.sel.pending = false
-			if m.mode == modeFocusBig {
+			if m.mode == modeFocusBig || m.mode == modeList {
 				if sess := m.selectedSession(); sess != nil && sess.MouseEnabled() {
 					m.forwardClickToPTY(m.sel.startX, m.sel.startY)
 				}
@@ -717,7 +753,31 @@ func (m *tuiModel) panelRegions() []panelRegion {
 	if m.mode == modeGrid {
 		return m.gridPanelRegions(n, availH)
 	}
+	if m.mode == modeList {
+		return m.listPanelRegions(availH)
+	}
 	return m.focusBigPanelRegions(sessions, n, availH)
+}
+
+// listPanelRegions returns the single big-panel region in list mode; the
+// sidebar is hit-tested separately and never forwards mouse events to a PTY.
+func (m *tuiModel) listPanelRegions(availH int) []panelRegion {
+	mainW, _ := m.listLayoutWidths()
+	contentW := mainW - 2
+	contentH := availH - 3
+	if contentW < 1 {
+		contentW = 1
+	}
+	if contentH < 1 {
+		contentH = 1
+	}
+	return []panelRegion{{
+		sessionIdx: m.selected,
+		contentX:   1,
+		contentY:   2,
+		contentW:   contentW,
+		contentH:   contentH,
+	}}
 }
 
 func (m *tuiModel) gridPanelRegions(n, availH int) []panelRegion {

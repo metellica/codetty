@@ -10,7 +10,7 @@ import (
 
 // SessionsConfig is the root of a session layout config file (.codetty.toml).
 type SessionsConfig struct {
-	Layout   string                     `toml:"layout"`   // "focus-big", "grid", "fullscreen"
+	Layout   string                     `toml:"layout"`   // "list", "focus-big", "grid", "fullscreen"
 	Focus    string                     `toml:"focus"`    // session name to focus initially
 	Template map[string]SessionTemplate `toml:"template"` // reusable pane templates
 	Session  []SessionDef               `toml:"session"`  // session definitions
@@ -116,8 +116,8 @@ func loadSessionsFile(path string) (*SessionsConfig, error) {
 
 // Validate checks the config for structural errors.
 func (cfg *SessionsConfig) Validate() error {
-	if cfg.Layout != "" && cfg.Layout != "focus-big" && cfg.Layout != "grid" && cfg.Layout != "fullscreen" {
-		return fmt.Errorf("invalid layout %q (valid: focus-big, grid, fullscreen)", cfg.Layout)
+	if cfg.Layout != "" && cfg.Layout != "list" && cfg.Layout != "focus-big" && cfg.Layout != "grid" && cfg.Layout != "fullscreen" {
+		return fmt.Errorf("invalid layout %q (valid: list, focus-big, grid, fullscreen)", cfg.Layout)
 	}
 
 	seen := make(map[string]bool)

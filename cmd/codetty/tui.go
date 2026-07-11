@@ -34,6 +34,7 @@ const (
 	modeFocusBig layoutMode = iota
 	modeGrid
 	modeFullscreen // no borders, no status bar, just terminal
+	modeList       // big panel on the left, session list sidebar on the right
 )
 
 // tuiModel is the Bubble Tea model for the unified codetty TUI.
@@ -58,6 +59,15 @@ type tuiModel struct {
 	// -1 means use m.selected. Set by clicking a side panel.
 	// Reset to -1 when m.selected changes (via hotkey/ctrl+click).
 	inputFocus int
+
+	// List mode (modeList) sidebar state. listFocus means the sidebar has
+	// keyboard focus (Shift+Tab); listCursor is the highlighted entry,
+	// listCursorTab the highlighted agent row's tab index (-1 = the session
+	// header row) and listScroll the first visible sidebar line.
+	listFocus     bool
+	listCursor    int
+	listCursorTab int
+	listScroll    int
 
 	// floatingIdx: index of session shown in floating overlay, -1 means none.
 	floatingIdx int
@@ -156,7 +166,8 @@ func (m *tuiModel) popMode() bool {
 func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tuiModel {
 	return &tuiModel{
 		conn:              conn,
-		mode:              modeFocusBig,
+		mode:              modeList,
+		listCursorTab:     -1,
 		width:             120,
 		height:            40,
 		inputFocus:        -1,
@@ -292,6 +303,8 @@ func (m *tuiModel) View() string {
 		base = m.fullscreenView()
 	case modeGrid:
 		base = m.gridView()
+	case modeList:
+		base = m.listView()
 	default:
 		base = m.focusBigView()
 	}
@@ -565,6 +578,10 @@ func (m *tuiModel) removeSession(name string) {
 	if m.selected >= visibleLen {
 		m.selected = max(0, visibleLen-1)
 	}
+	if m.listCursor >= visibleLen {
+		m.listCursor = max(0, visibleLen-1)
+		m.listCursorTab = -1
+	}
 
 	// Reset inputFocus
 	m.inputFocus = -1
@@ -794,6 +811,19 @@ func (m *tuiModel) focusedContentSize() (int, int) {
 	n := len(m.visibleSessions())
 	if n == 0 {
 		return m.width, m.height
+	}
+
+	if m.mode == modeList {
+		mainW, _ := m.listLayoutWidths()
+		contentW := mainW - 2
+		contentH := availH - 3
+		if contentW < 1 {
+			contentW = 1
+		}
+		if contentH < 1 {
+			contentH = 1
+		}
+		return contentW, contentH
 	}
 
 	if m.mode == modeGrid {

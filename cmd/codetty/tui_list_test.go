@@ -1,0 +1,456 @@
+package main
+
+import (
+	"net"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+	xansi "github.com/charmbracelet/x/ansi"
+)
+
+func newListTestModel() *tuiModel {
+	m := newTUIModel(nil, "", nil)
+	m.width = 120
+	m.height = 40
+	m.sessions = []*tuiSession{
+		newTUISession("alpha", "bash", 80, 24),
+		newTUISession("beta", "bash", 80, 24),
+		newTUISession("gamma", "bash", 80, 24),
+	}
+	m.order = []string{"alpha", "beta", "gamma"}
+	m.mode = modeList
+	m.selected = 0
+	return m
+}
+
+func TestListMode_ShiftTabCyclesListThenBigPanel(t *testing.T) {
+	m := newListTestModel()
+	m.selected = 1
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if !m.listFocus {
+		t.Fatal("listFocus should be true after Shift+Tab")
+	}
+	if m.listCursor != 0 {
+		t.Fatalf("listCursor = %d, want 0 (starts at first entry)", m.listCursor)
+	}
+
+	// Continues through the list…
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if !m.listFocus || m.listCursor != 1 {
+		t.Fatalf("listFocus/cursor = %v/%d, want true/1", m.listFocus, m.listCursor)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if !m.listFocus || m.listCursor != 2 {
+		t.Fatalf("listFocus/cursor = %v/%d, want true/2", m.listFocus, m.listCursor)
+	}
+
+	// …and returns to the big panel after the last entry.
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.listFocus {
+		t.Fatal("listFocus should return to big panel after last entry")
+	}
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1 (cycling must not switch)", m.selected)
+	}
+}
+
+func TestListKey_UpDownEnterSwitchesSelection(t *testing.T) {
+	m := newListTestModel()
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.listCursor != 2 {
+		t.Fatalf("listCursor = %d, want 2", m.listCursor)
+	}
+	// Wraps around.
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.listCursor != 0 {
+		t.Fatalf("listCursor = %d, want 0 (wrap)", m.listCursor)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.listCursor != 2 {
+		t.Fatalf("listCursor = %d, want 2 (wrap up)", m.listCursor)
+	}
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.selected != 2 {
+		t.Fatalf("selected = %d, want 2 after Enter", m.selected)
+	}
+	if m.listFocus {
+		t.Fatal("listFocus should return to big panel after Enter")
+	}
+	if m.mode != modeList {
+		t.Fatalf("mode = %v, want modeList", m.mode)
+	}
+}
+
+func TestListKey_EscapeAndOtherKeysReturnFocus(t *testing.T) {
+	m := newListTestModel()
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyEscape})
+	if m.listFocus {
+		t.Fatal("Escape should drop list focus")
+	}
+	if m.selected != 0 {
+		t.Fatalf("selected = %d, want 0 (Escape must not switch)", m.selected)
+	}
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if m.listFocus {
+		t.Fatal("printable key should drop list focus")
+	}
+}
+
+func TestListKey_UpDownTraversesAgentRows(t *testing.T) {
+	m := newListTestModel()
+	m.sessions[1].Tabs = []tuiTab{
+		{Name: "sh"},
+		{Name: "cp", Agent: "copilot", AgentState: "working"},
+		{Name: "cl", Agent: "claude", AgentState: "blocked"},
+	}
+	// Focus the list at the first header directly (Shift+Tab would now
+	// jump to the blocked agent first).
+	m.listFocus = true
+	m.listCursor = 0
+	m.listCursorTab = -1
+
+	// Down: alpha → beta → beta/copilot → beta/claude → gamma → wrap alpha.
+	steps := []struct{ sess, tab int }{
+		{1, -1}, {1, 1}, {1, 2}, {2, -1}, {0, -1},
+	}
+	for i, want := range steps {
+		m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+		if m.listCursor != want.sess || m.listCursorTab != want.tab {
+			t.Fatalf("step %d: cursor = (%d, %d), want (%d, %d)",
+				i, m.listCursor, m.listCursorTab, want.sess, want.tab)
+		}
+	}
+
+	// Up wraps back to gamma then walks agent rows in reverse.
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.listCursor != 2 || m.listCursorTab != -1 {
+		t.Fatalf("cursor = (%d, %d), want (2, -1)", m.listCursor, m.listCursorTab)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.listCursor != 1 || m.listCursorTab != 2 {
+		t.Fatalf("cursor = (%d, %d), want (1, 2)", m.listCursor, m.listCursorTab)
+	}
+}
+
+func TestListKey_EnterOnAgentRowActivatesTab(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			if _, err := server.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	m := newListTestModel()
+	m.conn = &daemonConn{conn: client}
+	m.sessions[1].Tabs = []tuiTab{
+		{Name: "sh"},
+		{Name: "cp", Agent: "copilot", AgentState: "working"},
+	}
+	m.sessions[1].ActiveTab = 0
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown}) // beta header
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown}) // beta/copilot agent row
+	if m.listCursor != 1 || m.listCursorTab != 1 {
+		t.Fatalf("cursor = (%d, %d), want (1, 1)", m.listCursor, m.listCursorTab)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+	if m.listFocus {
+		t.Fatal("Enter should drop list focus")
+	}
+	if !m.pendingTabAck["beta"] {
+		t.Fatal("Enter on an agent row should request a tab switch (pendingTabAck not set)")
+	}
+}
+
+func TestListKey_EnterOnHeaderDoesNotSwitchTab(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			if _, err := server.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	m := newListTestModel()
+	m.conn = &daemonConn{conn: client}
+	m.sessions[1].Tabs = []tuiTab{
+		{Name: "sh"},
+		{Name: "cp", Agent: "copilot", AgentState: "working"},
+	}
+	m.sessions[1].ActiveTab = 0
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown}) // beta header
+	m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+	if m.pendingTabAck["beta"] {
+		t.Fatal("Enter on a header row must not request a tab switch")
+	}
+}
+
+func TestListMode_ShiftTabPrioritizesAttentionAgents(t *testing.T) {
+	m := newListTestModel()
+	m.sessions[0].Tabs = []tuiTab{
+		{Name: "sh"},
+		{Name: "cp", Agent: "copilot", AgentState: "idle", Done: true}, // done
+	}
+	m.sessions[2].Tabs = []tuiTab{
+		{Name: "cl", Agent: "claude", AgentState: "blocked"},
+	}
+
+	// blocked first, then done, then session headers, then big panel.
+	steps := []struct{ sess, tab int }{
+		{2, 0}, {0, 1}, {0, -1}, {1, -1}, {2, -1},
+	}
+	for i, want := range steps {
+		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+		if !m.listFocus || m.listCursor != want.sess || m.listCursorTab != want.tab {
+			t.Fatalf("step %d: focus/cursor = %v/(%d, %d), want true/(%d, %d)",
+				i, m.listFocus, m.listCursor, m.listCursorTab, want.sess, want.tab)
+		}
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.listFocus {
+		t.Fatal("listFocus should return to big panel after last entry")
+	}
+}
+
+func TestListView_ShowsSessionsAndAgents(t *testing.T) {
+	m := newListTestModel()
+	m.sessions[1].Tabs = []tuiTab{
+		{Name: "sh", Command: "bash"},
+		{Name: "cp", Command: "copilot", Agent: "copilot", AgentState: "working"},
+		{Name: "cl", Command: "claude", Agent: "claude", AgentState: "blocked"},
+	}
+
+	view := xansi.Strip(m.listView())
+	for _, want := range []string{"Sessions", "1 alpha", "2 beta", "3 gamma", "copilot working", "claude blocked"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("listView() missing %q in:\n%s", want, view)
+		}
+	}
+}
+
+func TestListView_DoneMarkerShown(t *testing.T) {
+	m := newListTestModel()
+	m.sessions[0].Tabs = []tuiTab{
+		{Name: "cp", Agent: "copilot", AgentState: "idle", Done: true},
+	}
+
+	view := xansi.Strip(m.listView())
+	if !strings.Contains(view, "copilot done") {
+		t.Fatalf("listView() missing done marker in:\n%s", view)
+	}
+}
+
+func TestListMode_MouseClickSidebarSwitches(t *testing.T) {
+	m := newListTestModel()
+	mainW, _ := m.listLayoutWidths()
+
+	// Click the third session's header row: sidebar rows start at y=2
+	// (border + title), one line per session (no agent tabs here).
+	m.handleMouse(tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+		X:      mainW + 2,
+		Y:      2 + 2,
+	})
+	if m.selected != 2 {
+		t.Fatalf("selected = %d, want 2 after sidebar click", m.selected)
+	}
+	if m.floatingIdx != -1 {
+		t.Fatalf("floatingIdx = %d, want -1 (no floating from sidebar)", m.floatingIdx)
+	}
+}
+
+func TestListMode_PanelRegionsOnlyBigPanel(t *testing.T) {
+	m := newListTestModel()
+	regions := m.panelRegions()
+	if len(regions) != 1 {
+		t.Fatalf("len(regions) = %d, want 1", len(regions))
+	}
+	if regions[0].sessionIdx != m.selected {
+		t.Fatalf("region sessionIdx = %d, want %d", regions[0].sessionIdx, m.selected)
+	}
+	mainW, _ := m.listLayoutWidths()
+	if regions[0].contentW != mainW-2 {
+		t.Fatalf("contentW = %d, want %d", regions[0].contentW, mainW-2)
+	}
+}
+
+func TestListMode_PrefixDigitKeepsListMode(t *testing.T) {
+	m := newListTestModel()
+	m.prefix = true
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+	if m.mode != modeList {
+		t.Fatalf("mode = %v, want modeList (digit must not leave list mode)", m.mode)
+	}
+}
+
+func TestListMode_PrefixSSwitchesToListMode(t *testing.T) {
+	m := newListTestModel()
+	m.mode = modeGrid
+	m.prefix = true
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
+	if m.mode != modeList {
+		t.Fatalf("mode = %v, want modeList", m.mode)
+	}
+}
+
+func TestListMode_PrefixFEntersAndExitsFullscreen(t *testing.T) {
+	m := newListTestModel()
+	m.prefix = true
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if m.mode != modeFullscreen {
+		t.Fatalf("mode = %v, want fullscreen", m.mode)
+	}
+	m.prefix = true
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if m.mode != modeList {
+		t.Fatalf("mode = %v, want modeList (pop back)", m.mode)
+	}
+}
+
+func TestListHitTest_ScrolledList(t *testing.T) {
+	m := newListTestModel()
+	m.listScroll = 1
+	mainW, _ := m.listLayoutWidths()
+
+	// Row y=2 is the first visible line; with scroll offset 1 it maps to
+	// the second session.
+	if idx, tabIdx := m.listHitTest(mainW+2, 2); idx != 1 || tabIdx != -1 {
+		t.Fatalf("listHitTest = (%d, %d), want (1, -1)", idx, tabIdx)
+	}
+	// Outside the sidebar content area.
+	if idx, _ := m.listHitTest(mainW-1, 2); idx != -1 {
+		t.Fatalf("listHitTest = %d, want -1 for big panel area", idx)
+	}
+}
+
+func TestListHitTest_AgentRowReturnsTabIndex(t *testing.T) {
+	m := newListTestModel()
+	m.sessions[1].Tabs = []tuiTab{
+		{Name: "sh"},
+		{Name: "cp", Agent: "copilot", AgentState: "working"},
+		{Name: "cl", Agent: "claude", AgentState: "blocked"},
+	}
+	mainW, _ := m.listLayoutWidths()
+
+	// Sidebar rows: y=2 alpha, y=3 beta, y=4 copilot(tab 1), y=5 claude(tab 2), y=6 gamma.
+	if idx, tabIdx := m.listHitTest(mainW+2, 3); idx != 1 || tabIdx != -1 {
+		t.Fatalf("header row = (%d, %d), want (1, -1)", idx, tabIdx)
+	}
+	if idx, tabIdx := m.listHitTest(mainW+2, 4); idx != 1 || tabIdx != 1 {
+		t.Fatalf("agent row = (%d, %d), want (1, 1)", idx, tabIdx)
+	}
+	if idx, tabIdx := m.listHitTest(mainW+2, 5); idx != 1 || tabIdx != 2 {
+		t.Fatalf("agent row = (%d, %d), want (1, 2)", idx, tabIdx)
+	}
+}
+
+func TestListMode_MouseClickAgentRowActivatesTab(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	// Drain frames written by SwitchTab so the pipe write doesn't block.
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			if _, err := server.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	m := newListTestModel()
+	m.conn = &daemonConn{conn: client}
+	m.sessions[1].Tabs = []tuiTab{
+		{Name: "sh"},
+		{Name: "cp", Agent: "copilot", AgentState: "working"},
+	}
+	m.sessions[1].ActiveTab = 0
+	mainW, _ := m.listLayoutWidths()
+
+	// Click the copilot agent row (y=4, see layout in the hit-test test).
+	m.handleMouse(tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+		X:      mainW + 2,
+		Y:      4,
+	})
+
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+	if !m.pendingTabAck["beta"] {
+		t.Fatal("clicking an agent row should request a tab switch (pendingTabAck not set)")
+	}
+}
+
+func TestListMode_MouseClickHeaderDoesNotSwitchTab(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			if _, err := server.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	m := newListTestModel()
+	m.conn = &daemonConn{conn: client}
+	m.sessions[1].Tabs = []tuiTab{
+		{Name: "sh"},
+		{Name: "cp", Agent: "copilot", AgentState: "working"},
+	}
+	mainW, _ := m.listLayoutWidths()
+
+	// Click beta's header row (y=3).
+	m.handleMouse(tea.MouseMsg{
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+		X:      mainW + 2,
+		Y:      3,
+	})
+
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+	if m.pendingTabAck["beta"] {
+		t.Fatal("header click must not request a tab switch")
+	}
+}

@@ -622,7 +622,7 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	if m.prefix {
-		help := m.prefixLabel + ": d detach  c new  T tab  x kill  X close-tab  r rename  n/p nav  f full  g grid  Shift+←→ tabs"
+		help := m.prefixLabel + ": d detach  c new  T tab  x kill  X close-tab  r rename  n/p nav  s list  b big  g grid  f full  Shift+←→ tabs"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 
@@ -633,6 +633,11 @@ func (m *tuiModel) statusBar() string {
 		modeName = "grid"
 	case modeFullscreen:
 		modeName = "fullscreen"
+	case modeList:
+		modeName = "list"
+		if m.listFocus {
+			modeName = "list*"
+		}
 	}
 	right := fmt.Sprintf(" %s | %s prefix | Ctrl+click switch ", modeName, m.prefixLabel)
 
@@ -698,6 +703,15 @@ func (m *tuiModel) hitTest(x, y int) int {
 
 	statusH := 1
 	availH := m.height - statusH
+
+	if m.mode == modeList {
+		mainW, _ := m.listLayoutWidths()
+		if x < mainW && y < availH {
+			return m.selected
+		}
+		idx, _ := m.listHitTest(x, y)
+		return idx
+	}
 
 	if m.mode == modeGrid {
 		cols := gridCols(n, m.width)
@@ -874,6 +888,10 @@ func (m *tuiModel) imeCursorSeq() string {
 		pRow := m.selected / cols
 		pCol := m.selected % cols
 		return mkSeq(pRow*panelH, pCol*panelW, panelW-2, panelH-3)
+
+	case modeList:
+		mainW, _ := m.listLayoutWidths()
+		return mkSeq(0, 0, mainW-2, availH-3)
 
 	default: // modeFocusBig
 		// The selected session is always the big/main panel at the top-left.
