@@ -20,10 +20,11 @@ var sidePanelTitleColor = lipgloss.Color("78") // light green
 
 // Agent state accent colors: blocked demands attention, working is a hint,
 // done marks a finished run awaiting review.
+// Using muted pastel tones for low-contrast modern aesthetics.
 var (
-	agentBlockedColor = lipgloss.Color("160") // red
-	agentWorkingColor = lipgloss.Color("208") // orange
-	agentDoneColor    = lipgloss.Color("42")  // green
+	agentBlockedColor = lipgloss.Color("#e78284") // soft rose
+	agentWorkingColor = lipgloss.Color("#e5c890") // warm amber
+	agentDoneColor    = lipgloss.Color("#a6d189") // soft sage
 )
 
 // fullscreenView renders only the selected session filling the entire terminal.
@@ -476,8 +477,8 @@ func renderTabBar(tabs []tuiTab, activeIdx, maxW int, muted bool) string {
 	// softer hint.
 	blockedStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("231")).
-		Background(lipgloss.Color("124"))
+		Foreground(lipgloss.Color("232")).
+		Background(agentBlockedColor)
 
 	workingStyle := lipgloss.NewStyle().
 		Foreground(agentWorkingColor).
@@ -682,7 +683,7 @@ func (m *tuiModel) agentStatusSegment() string {
 	if blocked > 0 {
 		style := lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("231")).
+			Foreground(lipgloss.Color("232")).
 			Background(agentBlockedColor)
 		parts = append(parts, style.Render(fmt.Sprintf(" ■ %d blocked ", blocked)))
 	}
