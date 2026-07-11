@@ -311,7 +311,7 @@ func renderTabBar(tabs []tuiTab, activeIdx, maxW int) string {
 	activeStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("232")).
-		Background(lipgloss.Color("86"))
+		Background(lipgloss.Color("#efb58e"))
 
 	inactiveStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("250")).
