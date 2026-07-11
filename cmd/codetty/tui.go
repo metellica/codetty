@@ -268,6 +268,34 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case daemonDisconnectedMsg:
+		// The daemon dropped us — during a hot upgrade it closes all
+		// subscriber connections and rebinds the socket. Try to
+		// reconnect before giving up.
+		if m.conn == nil || m.conn.sockPath == "" {
+			return m, tea.Quit
+		}
+		return m, reconnectCmd(m.conn.sockPath)
+
+	case daemonReconnectedMsg:
+		prog := m.conn.program
+		m.conn = msg.conn
+		// Rebuild session state from the fresh subscribe snapshots.
+		m.sessions = nil
+		m.order = nil
+		m.selected = 0
+		m.inputFocus = -1
+		m.floatingIdx = -1
+		m.listFocus = false
+		m.listCursor = 0
+		m.listCursorTab = -1
+		m.listScroll = 0
+		m.sel = textSelection{}
+		if prog == nil || m.conn.Subscribe(prog) != nil {
+			return m, tea.Quit
+		}
+		return m, tea.ClearScreen
+
+	case daemonReconnectFailedMsg:
 		return m, tea.Quit
 
 	case tea.KeyMsg:

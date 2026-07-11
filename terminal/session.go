@@ -20,6 +20,8 @@ type Session interface {
 	Kill() error
 	// Fd returns the PTY file descriptor number, or -1 if not available.
 	Fd() int
+	// Pid returns the child process PID, or 0 if not available.
+	Pid() int
 }
 
 // Start creates a new PTY session running the given command.

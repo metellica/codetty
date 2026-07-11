@@ -15,6 +15,7 @@ import (
 // daemonConn manages the connection between TUI and daemon.
 type daemonConn struct {
 	conn       net.Conn
+	sockPath   string
 	program    *tea.Program
 	subscribed bool
 
@@ -39,6 +40,15 @@ type daemonDisconnectedMsg struct {
 	Err error
 }
 
+// daemonReconnectedMsg carries a fresh connection after the daemon dropped
+// us (e.g. during a hot upgrade) and we successfully dialed again.
+type daemonReconnectedMsg struct {
+	conn *daemonConn
+}
+
+// daemonReconnectFailedMsg signals that reconnection attempts were exhausted.
+type daemonReconnectFailedMsg struct{}
+
 type daemonSubscribedMsg struct{}
 
 func newDaemonConn(sockPath string) (*daemonConn, error) {
@@ -46,7 +56,23 @@ func newDaemonConn(sockPath string) (*daemonConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &daemonConn{conn: conn}, nil
+	return &daemonConn{conn: conn, sockPath: sockPath}, nil
+}
+
+// reconnectCmd retries dialing the daemon socket for a few seconds. The
+// daemon closes subscriber connections during a hot upgrade and rebinds
+// the socket moments later, so a short retry window bridges the gap.
+func reconnectCmd(sockPath string) tea.Cmd {
+	return func() tea.Msg {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if dc, err := newDaemonConn(sockPath); err == nil {
+				return daemonReconnectedMsg{conn: dc}
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		return daemonReconnectFailedMsg{}
+	}
 }
 
 // Subscribe sends subscribe_all and starts the read loop.

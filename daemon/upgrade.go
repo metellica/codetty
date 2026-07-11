@@ -40,6 +40,11 @@ type UpgradeTab struct {
 	Pid     int    `json:"pid"`
 	Cols    uint16 `json:"cols"`
 	Rows    uint16 `json:"rows"`
+	// Snapshot is the ANSI sequence reconstructing the tab's screen at
+	// upgrade time, replayed into the new daemon's ScreenMirror. Without
+	// it, recovered tabs look blank until the program outputs again
+	// (full-screen apps never repaint spontaneously).
+	Snapshot []byte `json:"snapshot,omitempty"`
 }
 
 // PrepareUpgrade serializes the current daemon state and prepares fds for exec.
@@ -68,13 +73,10 @@ func (s *Server) PrepareUpgrade() (string, error) {
 				return "", fmt.Errorf("session %q tab %q: cannot get fd", sess.Name, tab.Name)
 			}
 
-			// Get the child PID for recovery
-			pid := 0
-			if tab.Terminal.Fd() >= 0 {
-				// Try to get PID from /proc/self/fd -> pty -> child
-				// For exec.Cmd-based sessions, we can get it from the process
-				pid = getPidFromFd(fd)
-			}
+			// Record the child PID so the new daemon can Wait/Kill it.
+			// exec keeps the same process, so children survive the upgrade
+			// and remain waitable by the new binary.
+			pid := tab.Terminal.Pid()
 
 			cols, rows := tab.Screen.Size()
 
@@ -82,12 +84,13 @@ func (s *Server) PrepareUpgrade() (string, error) {
 			terminal.ClearCloseOnExec(fd)
 
 			us.Tabs = append(us.Tabs, UpgradeTab{
-				Name:    tab.Name,
-				Command: tab.Command,
-				Fd:      fd,
-				Pid:     pid,
-				Cols:    cols,
-				Rows:    rows,
+				Name:     tab.Name,
+				Command:  tab.Command,
+				Fd:       fd,
+				Pid:      pid,
+				Cols:     cols,
+				Rows:     rows,
+				Snapshot: tab.Screen.Snapshot(),
 			})
 		}
 
@@ -141,6 +144,17 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 		return nil, fmt.Errorf("parse state: %w", err)
 	}
 
+	// Reap zombies inherited from the previous daemon instance (children
+	// that exited but were never waited on, e.g. when their recorded PID
+	// was lost). Safe here: no goroutine has spawned new children yet,
+	// and WNOHANG only collects already-exited processes.
+	for {
+		pid, err := syscall.Wait4(-1, nil, syscall.WNOHANG, nil)
+		if pid <= 0 || err != nil {
+			break
+		}
+	}
+
 	srv := NewServer(state.SocketPath)
 
 	for _, us := range state.Sessions {
@@ -162,6 +176,9 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 		for _, ut := range us.Tabs {
 			term := terminal.RecoverSession(ut.Fd, ut.Pid)
 			screen := terminal.NewScreenMirror(ut.Cols, ut.Rows)
+			if len(ut.Snapshot) > 0 {
+				screen.Write(ut.Snapshot)
+			}
 
 			tab := &SessionTab{
 				Name:     ut.Name,
@@ -235,44 +252,4 @@ func (s *Server) handleUpgrade(conn net.Conn, req Request) {
 	if err := s.Exec(newBinary, stateFile); err != nil {
 		log.Fatalf("exec failed: %v", err)
 	}
-}
-
-// getPidFromFd attempts to find the child process PID for a given pty fd.
-// This is best-effort — uses /proc on Linux.
-func getPidFromFd(fd int) int {
-	// Read the pts number from the fd's symlink in /proc
-	link, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", fd))
-	if err != nil {
-		return 0
-	}
-
-	// Find processes whose controlling terminal matches
-	// This is a simplified approach — scan /proc/*/stat
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return 0
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		// Check if it's a PID
-		pid := 0
-		if _, err := fmt.Sscanf(entry.Name(), "%d", &pid); err != nil {
-			continue
-		}
-		if pid == os.Getpid() {
-			continue
-		}
-		// Check fd 0 of that process
-		childFd0, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/0", pid))
-		if err != nil {
-			continue
-		}
-		if childFd0 == link {
-			return pid
-		}
-	}
-	return 0
 }

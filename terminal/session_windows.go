@@ -51,6 +51,7 @@ func (t *windowsSession) Write(p []byte) (int, error) { return t.pty.Write(p) }
 func (t *windowsSession) Close() error                { return t.pty.Close() }
 func (t *windowsSession) Kill() error                 { return t.pty.Close() }
 func (t *windowsSession) Fd() int                     { return -1 }
+func (t *windowsSession) Pid() int                    { return t.pty.Pid() }
 
 func (t *windowsSession) Resize(cols, rows uint16) error {
 	return t.pty.Resize(int(cols), int(rows))
