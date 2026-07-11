@@ -82,6 +82,12 @@ CodeTTY 默认使用 **Ctrl+A** 作为命令前缀键（类似 tmux 的 Ctrl+B�
 一个 session 对应一个 PTY 进程（如 shell、vim、htop）。session 由 daemon 管理，
 TUI 只是显示和操作的前端。Session 可以显示、隐藏、重命名或关闭。
 
+Session 内可以有多个 tab。当一个 tab 的进程退出时：
+
+- 非 shell 命令（如 `htop`、`vim`）退出 → 原地重启默认 shell，面板保持可用
+- shell（如 `bash`、`zsh`）退出 → 该 tab 自动关闭，切换到剩余 tab
+- 最后一个 tab 的 shell 退出 → 整个 session 结束
+
 ### 面板（Panel）
 
 TUI 将每个可见 session 显示为一个面板。面板有不同布局方式：大面板、侧面板、
@@ -184,7 +190,7 @@ codetty up -f myconfig.toml     # 指定配置文件
 ### 基本示例
 
 ```toml
-layout = "focus-big"          # 初始布局：focus-big / grid / fullscreen
+layout = "focus-big"          # 初始布局：list / focus-big / grid / fullscreen
 focus = "editor"              # 初始聚焦的 session 名称
 
 # 原生 session（直接运行命令）
@@ -301,7 +307,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `layout` | string | `"focus-big"` | 初始布局模式 |
+| `layout` | string | `"list"` | 初始布局模式（list / focus-big / grid / fullscreen） |
 | `focus` | string | 第一个 session | 初始聚焦 session |
 
 **template.\<name\>：**
@@ -355,7 +361,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 底部状态栏显示：
 
 - 当前焦点 session 名称和位置（如 `[bash] 1/3`）
-- 当前布局模式（focus / grid / fullscreen）
+- 当前布局模式（list / focus / grid / fullscreen）
 - 操作提示
 - 按下 `Ctrl+A` 前缀键后显示完整快捷键列表
 
@@ -395,16 +401,17 @@ remove_windows = ["git"]         # 删除模板中的 window
 | `Ctrl+A n` | 切换到下一个 session |
 | `Ctrl+A p` | 切换到上一个 session |
 | `Ctrl+A 1`-`9` | 跳转到指定编号的 session |
-| `Shift+Tab` | 焦点放大模式下循环切换面板高亮；浮动窗口中关闭浮动并高亮下一面板；全屏模式打开 session 切换器（实时预览）；其他模式切换到下一 session |
+| `Shift+Tab` | 列表模式下在侧栏项间连续跳转（优先跳到需处理的 agent，越过最后一项回到大面板）；焦点放大模式下循环切换面板高亮；浮动窗口中关闭浮动并高亮下一面板；全屏模式打开 session 切换器（实时预览）；其他模式切换到下一 session |
 | `Enter` | 在高亮面板上打开浮动窗口（网格模式或焦点放大的侧面板） |
 
 ### 布局控制
 
 | 按键 | 功能 |
 |------|------|
-| `Ctrl+A f` | 切换布局：浮动→全屏→上级模式；焦点放大→全屏；全屏→返回 |
+| `Ctrl+A f` | 切换布局：浮动→全屏→上级模式；焦点放大/列表→全屏；全屏→返回 |
 | `Ctrl+A q` | 关闭浮动窗口 |
 | `Ctrl+A g` | 网格模式 ↔ 焦点放大模式切换 |
+| `Ctrl+A s` | 切换到列表模式（默认） |
 | `Ctrl+A b` | 切换到焦点放大模式 |
 | `Ctrl+A a` | 切换到网格模式 |
 
@@ -425,7 +432,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 
 | 按键 | 功能 |
 |------|------|
-| `Shift+Tab` | 切换到下一个 session / 循环面板高亮 / 全屏模式打开 session 切换器 |
+| `Shift+Tab` | 切换到下一个 session / 循环面板高亮 / 列表模式在列表项间跳转 / 全屏模式打开 session 切换器 |
 | `Ctrl+A Ctrl+A` | 向 session 发送字面 Ctrl+A |
 
 ---
@@ -477,6 +484,31 @@ remove_windows = ["git"]         # 删除模板中的 window
 ---
 
 ## 布局模式
+
+### 列表模式 (List，默认)
+
+大面板占据屏幕左侧，右侧是固定宽度（28 列）的 session 列表侧栏。
+列表显示每个 session 的名称，并在名称下方逐行列出该 session 中带 agent
+的 tab 及其状态（一个 session 可有 0 个或多个 agent）：
+
+- `■ copilot blocked`（红色）— agent 等待用户输入
+- `● copilot working`（橙色）— agent 正在工作
+- `✓ copilot done`（绿色）— agent 已完成、尚未查看
+- `· copilot idle`（灰色）— agent 空闲
+
+操作方式：
+
+- `Shift+Tab` 在侧栏项间连续跳转：优先跳到需要处理的 agent 行（blocked
+  最优先，其次 done），然后依次经过各 session 行，越过最后一项后焦点回到
+  大面板（列表聚焦时状态栏显示 `list*`）
+- 列表聚焦时：`↑`/`↓` 在 session 行和 agent 行之间逐行移动光标（循环）；
+  `Enter` 把光标项切换为大面板，若光标在 agent 行上会同时激活对应 agent
+  所在的 tab；`Esc` 或任意其他键返回大面板（不会向 PTY 泄漏输入）
+- 鼠标点击 session 行直接切换大面板；点击 agent 行则在切换 session 的
+  同时激活对应 agent 所在的 tab；滚轮在侧栏上滚动列表
+- 当前选中的 session 以低对比度背景色标识，列表光标为高亮背景
+- `Ctrl+A n/p` 或 `Ctrl+A 1-9` 仍可直接切换（保持列表模式）
+- 大面板的键盘/鼠标行为与焦点放大模式的大面板一致
 
 ### 焦点放大模式 (Focus-Big)
 
@@ -818,7 +850,7 @@ codetty
 初始发布：
 
 - Daemon 架构与持久会话管理（detach/attach）
-- 三布局模式：焦点放大（Focus-Big）、网格（Grid）、全屏（Fullscreen）
+- 四布局模式：列表（List，默认）、焦点放大（Focus-Big）、网格（Grid）、全屏（Fullscreen）
 - 窄终端垂直布局自适应
 - Ctrl+A 命令前缀系统
 - Shift+Tab 面板循环切换

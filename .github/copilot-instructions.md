@@ -28,6 +28,9 @@ lifetime (like tmux). Uses Unix PTY on Linux/macOS and Windows ConPTY on Windows
   broadcasts output to attached TUI clients and subscribers.
 - `daemon/session.go` wraps a `terminal.Session` (PTY) with a `ScreenMirror`
   for snapshot replay. Output flows: PTY → ScreenMirror + broadcast to clients.
+  When a native tab's process exits: non-shell commands respawn the default
+  shell in place; shell tabs auto-close (last one ends the session). Deliberate
+  kills (`killed`/`closing` flags) and tmux sessions skip this.
 - `daemon/client.go` handles a single attached TUI client: input forwarding,
   output streaming, resize, detach, session switching.
 - `daemon/subscriber.go` provides an event subscription channel for the TUI
@@ -42,6 +45,10 @@ lifetime (like tmux). Uses Unix PTY on Linux/macOS and Windows ConPTY on Windows
   Ctrl+click to promote to big panel, scroll wheel forwarding.
 - `cmd/codetty/tui_view.go` renders the TUI layout: split mode (grid),
   focus-big mode (one large + side panels), fullscreen mode.
+- `cmd/codetty/tui_list.go` renders list mode (the default): big panel on
+  the left, a session-list sidebar on the right showing per-tab agent
+  states. Shift+Tab cycles through list entries then back to the big
+  panel; ↑/↓ + Enter switch sessions, agent-row clicks activate the tab.
 - `cmd/codetty/tui_session.go` renders terminal content from vt10x state to
   ANSI strings. Handles cursor rendering, reverse video, wide characters.
 - `terminal/session.go` defines the `Session` interface for PTY processes.
