@@ -95,9 +95,15 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			regions := m.panelRegions()
 			sessions := m.visibleSessions()
 
-			// Check for tab bar clicks first
+			// Check for tab bar clicks first. Small panels (side panels
+			// and grid cells) are read-only monitors: only the big
+			// panel's tab bar is interactive here; small panels are
+			// operated through their floating window.
 			for _, r := range regions {
 				if r.sessionIdx >= len(sessions) {
+					continue
+				}
+				if m.mode != modeFocusBig || r.sessionIdx != m.selected {
 					continue
 				}
 				sess := sessions[r.sessionIdx]
@@ -183,8 +189,9 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			m.sel = textSelection{}
 		}
-		// Forward scroll wheel to PTY (with local coordinate translation)
-		// Only forward if the session has mouse reporting enabled.
+		// Forward scroll wheel to PTY (with local coordinate translation).
+		// Only the big panel receives wheel input; small panels (side
+		// panels, grid cells) are read-only monitors.
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 			regions := m.panelRegions()
 			sessions := m.visibleSessions()
@@ -192,7 +199,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
 				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
-					if r.sessionIdx == m.selected || m.mode == modeGrid {
+					if m.mode == modeFocusBig && r.sessionIdx == m.selected {
 						sess := sessions[r.sessionIdx]
 						if sess.MouseEnabled() {
 							m.forwardMouseToSession(sess.Name, msg, localX, localY)

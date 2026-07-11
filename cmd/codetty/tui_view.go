@@ -433,8 +433,8 @@ func tabBarLabel(i int, tab tuiTab) string {
 
 // tabStyleKind decides which style class a tab gets. Extracted for testing
 // since rendered color output depends on the terminal color profile.
-// In muted mode (small side panels) agent state outranks the active
-// highlight, and the active tab gets only a subtle emphasis.
+// In muted mode (small side panels) agent state colors are the only
+// accent: the active tab gets no highlight or emphasis at all.
 func tabStyleKind(tab tuiTab, isActive, muted bool) string {
 	state := effectiveAgentState(tab)
 	switch {
@@ -446,8 +446,6 @@ func tabStyleKind(tab tuiTab, isActive, muted bool) string {
 		return "done"
 	case state == "working":
 		return "working"
-	case isActive:
-		return "mutedActive"
 	default:
 		return "inactive"
 	}
@@ -464,12 +462,6 @@ func renderTabBar(tabs []tuiTab, activeIdx, maxW int, muted bool) string {
 
 	inactiveStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("250")).
-		Background(lipgloss.Color("238"))
-
-	// Muted active tab: same base as inactive, just bold + brighter text.
-	mutedActiveStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("255")).
 		Background(lipgloss.Color("238"))
 
 	// Agent-state variants: blocked demands attention, working is a
@@ -515,8 +507,6 @@ func renderTabBar(tabs []tuiTab, activeIdx, maxW int, muted bool) string {
 			parts = append(parts, doneStyle.Render(tabLabel))
 		case "working":
 			parts = append(parts, workingStyle.Render(tabLabel))
-		case "mutedActive":
-			parts = append(parts, mutedActiveStyle.Render(tabLabel))
 		default:
 			parts = append(parts, inactiveStyle.Render(tabLabel))
 		}

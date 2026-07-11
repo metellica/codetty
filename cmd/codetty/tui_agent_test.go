@@ -161,7 +161,7 @@ func TestRenderTabBarMutedDropsActiveHighlight(t *testing.T) {
 	}{
 		{"big panel active keeps highlight", plain, true, false, "active"},
 		{"big panel active wins over blocked", blocked, true, false, "active"},
-		{"side panel active is muted", plain, true, true, "mutedActive"},
+		{"side panel active gets no emphasis", plain, true, true, "inactive"},
 		{"side panel blocked outranks active", blocked, true, true, "blocked"},
 		{"side panel working outranks active", working, true, true, "working"},
 		{"inactive blocked always colored", blocked, false, false, "blocked"},
