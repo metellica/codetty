@@ -570,6 +570,166 @@ func cmdUpgrade(args []string) {
 	fmt.Println("daemon upgrading... TUI clients will reconnect automatically")
 }
 
+func cmdReload(args []string) {
+	fs := flag.NewFlagSet("reload", flag.ExitOnError)
+	configFile := fs.String("f", "", "config file path")
+	fs.Parse(args)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		log.Fatalf("getwd: %v", err)
+	}
+
+	cfg, cfgPath, err := config.LoadSessions(*configFile, cwd)
+	if err != nil {
+		log.Fatalf("load config: %v", err)
+	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("invalid config: %v", err)
+	}
+
+	configDir := filepath.Dir(cfgPath)
+	sessions, err := cfg.Resolve(configDir)
+	if err != nil {
+		log.Fatalf("resolve config: %v", err)
+	}
+
+	sockPath := defaultSocketPath()
+	if err := ensureDaemon(sockPath); err != nil {
+		log.Fatalf("no daemon running")
+	}
+
+	// Get current sessions from daemon
+	existing, _ := listExistingSessions(sockPath)
+	cols, rows := terminalSize()
+
+	for _, s := range sessions {
+		if s.Type != "native" {
+			continue
+		}
+
+		if !existing[s.Name] {
+			// Create new session with first tab
+			cmd := s.Command
+			if len(s.Tabs) > 0 && len(s.Tabs[0].Command) > 0 {
+				cmd = s.Tabs[0].Command
+			}
+			if len(cmd) == 0 {
+				cmd = []string{terminal.DefaultShell()}
+			}
+			firstTabName := ""
+			if len(s.Tabs) > 0 {
+				firstTabName = s.Tabs[0].Name
+			}
+			if err := createDaemonSession(sockPath, s.Name, cmd, cols, rows, s.Dir, envToSlice(s.Env), "", "", firstTabName); err != nil {
+				log.Printf("create session %q: %v", s.Name, err)
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "created session %q\n", s.Name)
+
+			// Create additional tabs
+			if len(s.Tabs) > 1 {
+				for _, tab := range s.Tabs[1:] {
+					tabCmd := tab.Command
+					if len(tabCmd) == 0 {
+						tabCmd = []string{terminal.DefaultShell()}
+					}
+					if err := createDaemonTab(sockPath, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
+						log.Printf("  create tab %q: %v", tab.Name, err)
+					}
+				}
+			}
+			continue
+		}
+
+		// Session exists — diff tabs via daemon
+		// Get current tab info
+		currentTabs := getSessionTabs(sockPath, s.Name)
+
+		// Build desired tab names
+		desiredNames := make(map[string]bool)
+		for _, tab := range s.Tabs {
+			desiredNames[tab.Name] = true
+		}
+
+		// Close tabs not in desired (reverse order)
+		for i := len(currentTabs) - 1; i >= 0; i-- {
+			if !desiredNames[currentTabs[i]] {
+				fmt.Fprintf(os.Stderr, "  closing tab %q in %q\n", currentTabs[i], s.Name)
+				closeTab(sockPath, s.Name, i)
+			}
+		}
+
+		// Add tabs not in current
+		currentSet := make(map[string]bool)
+		for _, name := range currentTabs {
+			currentSet[name] = true
+		}
+		for _, tab := range s.Tabs {
+			if !currentSet[tab.Name] {
+				tabCmd := tab.Command
+				if len(tabCmd) == 0 {
+					tabCmd = []string{terminal.DefaultShell()}
+				}
+				if err := createDaemonTab(sockPath, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
+					log.Printf("  create tab %q: %v", tab.Name, err)
+				} else {
+					fmt.Fprintf(os.Stderr, "  added tab %q to %q\n", tab.Name, s.Name)
+				}
+			}
+		}
+	}
+
+	fmt.Fprintln(os.Stderr, "config reloaded")
+}
+
+// getSessionTabs returns tab names for a session.
+func getSessionTabs(sockPath, sessionName string) []string {
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		return nil
+	}
+	defer conn.Close()
+
+	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionList}))
+	ft, payload, err := daemon.ReadFrame(conn)
+	if err != nil || ft != daemon.FrameResponse {
+		return nil
+	}
+	var resp daemon.Response
+	json.Unmarshal(payload, &resp)
+	if !resp.OK {
+		return nil
+	}
+
+	for _, s := range resp.Sessions {
+		if s.Name == sessionName {
+			names := make([]string, len(s.Tabs))
+			for i, t := range s.Tabs {
+				names[i] = t.Name
+			}
+			return names
+		}
+	}
+	return nil
+}
+
+// closeTab closes a tab in a session via the daemon.
+func closeTab(sockPath, session string, index int) {
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{
+		Action:   daemon.ActionCloseTab,
+		Session:  session,
+		TabIndex: index,
+	}))
+	daemon.ReadFrame(conn)
+}
+
 func terminalSize() (uint16, uint16) {
 	w, h, err := xterm.GetSize(int(os.Stdin.Fd()))
 	if err != nil || w <= 0 || h <= 0 {

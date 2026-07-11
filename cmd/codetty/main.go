@@ -81,6 +81,8 @@ func main() {
 		cmdKillServer(args)
 	case "upgrade":
 		cmdUpgrade(args)
+	case "reload":
+		cmdReload(args)
 	case "__server":
 		cmdServer(args)
 	case "--help", "-h", "help":

@@ -357,6 +357,9 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 				m.renameText = sess.Name
 			}
 			return nil
+		case 'R':
+			m.reloadConfig()
+			return nil
 		case 't':
 			m.openTmuxPicker()
 			return nil

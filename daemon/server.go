@@ -121,6 +121,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.handleRefreshTmux(conn)
 	case ActionCreateTab:
 		s.handleCreateTab(conn, req)
+	case ActionCloseTab:
+		s.handleCloseTab(conn, req)
 	case ActionUpgrade:
 		s.handleUpgrade(conn, req)
 	default:
@@ -746,6 +748,28 @@ func (s *Server) handleCreateTab(conn net.Conn, req Request) {
 	// Notify subscribers
 	s.notifySubscribers(SessionEvent{
 		Type:    "tab_created",
+		Session: sess.Name,
+		Info:    sess.Info(),
+	})
+
+	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
+}
+
+// handleCloseTab handles a close_tab request from a non-subscriber connection.
+func (s *Server) handleCloseTab(conn net.Conn, req Request) {
+	sess := s.SessionByName(req.Session)
+	if sess == nil {
+		s.sendError(conn, fmt.Sprintf("session %q not found", req.Session))
+		return
+	}
+
+	if err := sess.CloseTab(req.TabIndex); err != nil {
+		s.sendError(conn, fmt.Sprintf("close tab: %v", err))
+		return
+	}
+
+	s.notifySubscribers(SessionEvent{
+		Type:    "tab_closed",
 		Session: sess.Name,
 		Info:    sess.Info(),
 	})

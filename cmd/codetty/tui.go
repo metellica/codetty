@@ -3,6 +3,7 @@ package main
 import (
 	"time"
 
+	"codetty/config"
 	"codetty/daemon"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -113,6 +114,9 @@ type tuiModel struct {
 
 	// Desired session order from config (applied after initial snapshots).
 	desiredOrder []string
+
+	// Pending tabs from config reload (created when session appears).
+	pendingReloadTabs map[string][]config.ResolvedTab
 }
 
 // modeState captures a view state for back-navigation.
@@ -146,14 +150,15 @@ func (m *tuiModel) popMode() bool {
 
 func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tuiModel {
 	return &tuiModel{
-		conn:        conn,
-		mode:        modeFocusBig,
-		width:       120,
-		height:      40,
-		inputFocus:  -1,
-		floatingIdx: -1,
-		hidden:      make(map[string]bool),
-		focusTarget: focusTarget,
+		conn:              conn,
+		mode:              modeFocusBig,
+		width:             120,
+		height:            40,
+		inputFocus:        -1,
+		floatingIdx:       -1,
+		hidden:            make(map[string]bool),
+		pendingReloadTabs: make(map[string][]config.ResolvedTab),
+		focusTarget:       focusTarget,
 		autoCreate:  autoCreate,
 		prefixKey:   tea.KeyCtrlA,
 		prefixLabel: "Ctrl+A",
@@ -337,6 +342,21 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 			sess.Temporary = true
 			m.openFloating(idx)
 			m.floatingTarget = ""
+		}
+
+		// Handle pending reload tabs for newly created sessions
+		if pending, ok := m.pendingReloadTabs[evt.Session]; ok {
+			delete(m.pendingReloadTabs, evt.Session)
+			// Create additional tabs (first tab is already the session itself)
+			if m.conn != nil && len(pending) > 1 {
+				for _, tab := range pending[1:] {
+					cmd := tab.Command
+					if len(cmd) == 0 {
+						cmd = []string{"zsh"}
+					}
+					m.conn.CreateTab(evt.Session, tab.Name, cmd, tab.Dir, envMapToSlice(tab.Env))
+				}
+			}
 		}
 
 	case "renamed":

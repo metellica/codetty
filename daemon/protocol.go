@@ -29,6 +29,7 @@ const (
 	FrameCreateTab     FrameType = 0x17 // C→S: JSON create tab request
 	FrameCloseTab      FrameType = 0x18 // C→S: JSON close tab request
 	FrameSwitchTab     FrameType = 0x19 // C→S: JSON switch tab request
+	FrameReloadConfig  FrameType = 0x1A // C→S: JSON reload config request
 )
 
 // Action identifies the requested operation in a Request frame.
@@ -43,6 +44,7 @@ const (
 	ActionSubscribeAll Action = "subscribe_all"
 	ActionRefreshTmux  Action = "refresh_tmux"
 	ActionCreateTab    Action = "create_tab"
+	ActionCloseTab     Action = "close_tab"
 	ActionUpgrade      Action = "upgrade"
 )
 
@@ -59,6 +61,7 @@ type Request struct {
 	TmuxTarget string   `json:"tmux_target,omitempty"`  // tmux session name (when Type=="tmux")
 	NoAttach   bool     `json:"no_attach,omitempty"`    // create session but don't start attached client
 	TabName    string   `json:"tab_name,omitempty"`     // tab name for create_tab action
+	TabIndex   int      `json:"tab_index,omitempty"`    // tab index for close_tab action
 }
 
 // Response is the JSON payload for FrameResponse.
@@ -166,6 +169,11 @@ type TabEvent struct {
 	TabIndex  int     `json:"tab_index"`          // affected tab index
 	TabName   string  `json:"tab_name,omitempty"` // tab name
 	ActiveTab int     `json:"active_tab"`         // new active tab index
+}
+
+// ReloadConfigRequest is the payload for FrameReloadConfig.
+type ReloadConfigRequest struct {
+	ConfigPath string `json:"config_path"` // path to .codetty.toml
 }
 
 // EncodeTaggedOutput prepends session name length + name to output data.
