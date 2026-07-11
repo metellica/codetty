@@ -24,6 +24,50 @@ func TestAgentBadge(t *testing.T) {
 	}
 }
 
+func TestAgentBlink_TogglesWhileWorking(t *testing.T) {
+	defer func() { agentBlinkSolid = true }()
+
+	m := newTUIModel(nil, "", nil)
+	m.width, m.height = 120, 40
+	m.sessions = []*tuiSession{newTUISession("alpha", "bash", 80, 24)}
+	m.order = []string{"alpha"}
+	m.sessions[0].Tabs = []tuiTab{{Name: "cp", Agent: "copilot", AgentState: "working"}}
+
+	// Any update while an agent is working schedules a blink tick.
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlL})
+	if !m.blinkPending || cmd == nil {
+		t.Fatalf("blinkPending/cmd = %v/%v, want true/non-nil", m.blinkPending, cmd)
+	}
+
+	// The tick toggles the phase and re-arms while still working.
+	m.Update(agentBlinkMsg{})
+	if agentBlinkSolid {
+		t.Fatal("agentBlinkSolid should be false after first tick")
+	}
+	if !m.blinkPending {
+		t.Fatal("tick should re-arm while an agent is working")
+	}
+	if got := agentBadge("working"); got != "○" {
+		t.Fatalf("working badge = %q, want ○ in hollow phase", got)
+	}
+	m.Update(agentBlinkMsg{})
+	if !agentBlinkSolid {
+		t.Fatal("agentBlinkSolid should toggle back to true")
+	}
+
+	// When no agent works anymore, the phase resets solid and the tick stops.
+	m.sessions[0].Tabs[0].AgentState = "idle"
+	agentBlinkSolid = false
+	m.blinkPending = false
+	m.Update(agentBlinkMsg{})
+	if !agentBlinkSolid {
+		t.Fatal("phase should reset to solid when nothing is working")
+	}
+	if m.blinkPending {
+		t.Fatal("tick should stop when nothing is working")
+	}
+}
+
 func TestSessionAgentStateAggregation(t *testing.T) {
 	sess := &tuiSession{Tabs: []tuiTab{
 		{Name: "shell"},

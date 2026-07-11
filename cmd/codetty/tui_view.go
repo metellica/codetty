@@ -361,13 +361,21 @@ func effectiveAgentState(tab tuiTab) string {
 	return tab.AgentState
 }
 
+// agentBlinkSolid is the working-badge animation phase: the ● badge
+// alternates solid/hollow while any agent is working, giving a Copilot-like
+// activity pulse. Toggled by agentBlinkMsg ticks; true when idle.
+var agentBlinkSolid = true
+
 // agentBadge returns a one-cell state indicator for a tab, or "".
 func agentBadge(state string) string {
 	switch state {
 	case "blocked":
 		return "■"
 	case "working":
-		return "●"
+		if agentBlinkSolid {
+			return "●"
+		}
+		return "○"
 	case "done":
 		return "✓"
 	}
@@ -410,7 +418,7 @@ func agentStateLabel(state string) string {
 	case "blocked":
 		return "■ blocked"
 	case "working":
-		return "● working"
+		return agentBadge("working") + " working"
 	case "done":
 		return "✓ done"
 	}
@@ -689,7 +697,7 @@ func (m *tuiModel) agentStatusSegment() string {
 		style := lipgloss.NewStyle().
 			Foreground(agentWorkingColor).
 			Background(lipgloss.Color("235"))
-		parts = append(parts, style.Render(fmt.Sprintf(" ● %d working ", working)))
+		parts = append(parts, style.Render(fmt.Sprintf(" %s %d working ", agentBadge("working"), working)))
 	}
 	return strings.Join(parts, "")
 }

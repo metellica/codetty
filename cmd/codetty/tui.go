@@ -99,6 +99,10 @@ type tuiModel struct {
 	selFlushPending bool // a trailing selFlushMsg tick is scheduled
 	lastView        string
 
+	// blinkPending is true while an agentBlinkMsg tick is scheduled. The
+	// tick self-perpetuates only while some agent is working.
+	blinkPending bool
+
 	// Panel drag-to-reorder state
 	drag panelDrag
 
@@ -197,7 +201,36 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ackAgentDoneSession(name)
 		}
 	}
-	return model, cmd
+	return model, tea.Batch(cmd, m.scheduleBlink())
+}
+
+// agentBlinkInterval is the working-badge solid/hollow animation period.
+const agentBlinkInterval = 600 * time.Millisecond
+
+// agentBlinkMsg advances the working-badge animation phase.
+type agentBlinkMsg struct{}
+
+// scheduleBlink starts the working-badge animation tick when some agent
+// is working and no tick is already in flight.
+func (m *tuiModel) scheduleBlink() tea.Cmd {
+	if m.blinkPending || !m.anyAgentWorking() {
+		return nil
+	}
+	m.blinkPending = true
+	return tea.Tick(agentBlinkInterval, func(time.Time) tea.Msg { return agentBlinkMsg{} })
+}
+
+// anyAgentWorking reports whether any tab of any session (including
+// hidden ones — the status bar summary shows them) is in working state.
+func (m *tuiModel) anyAgentWorking() bool {
+	for _, sess := range m.sessions {
+		for _, tab := range sess.Tabs {
+			if effectiveAgentState(tab) == "working" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -254,6 +287,16 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Trailing edge of a throttled selection drag: render a fresh frame.
 		m.selFlushPending = false
 		m.selViewAt = time.Now()
+
+	case agentBlinkMsg:
+		m.blinkPending = false
+		if m.anyAgentWorking() {
+			agentBlinkSolid = !agentBlinkSolid
+		} else {
+			// Animation stops on the solid phase so static renders (and
+			// tests) always see ●.
+			agentBlinkSolid = true
+		}
 	}
 	return m, nil
 }

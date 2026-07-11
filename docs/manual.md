@@ -492,7 +492,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 的 tab 及其状态（一个 session 可有 0 个或多个 agent）：
 
 - `■ copilot blocked`（红色）— agent 等待用户输入
-- `● copilot working`（橙色）— agent 正在工作
+- `● copilot working`（橙色）— agent 正在工作（●/○ 交替闪烁）
 - `✓ copilot done`（绿色）— agent 已完成、尚未查看
 - `· copilot idle`（灰色）— agent 空闲
 
