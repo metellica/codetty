@@ -1,6 +1,8 @@
 package main
 
 import (
+	"codetty/daemon"
+
 	"net"
 	"strings"
 	"sync"
@@ -560,5 +562,74 @@ func TestListMode_SidebarClickDoesNotForwardRelease(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 	if cap.contains("\x1b[<") {
 		t.Fatal("sidebar click must not forward mouse events to the PTY")
+	}
+}
+
+func TestResizeSessionPTYs_ReservesTabBarRow(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := server.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	m := newListTestModel()
+	m.conn = &daemonConn{conn: client}
+	m.sessions[1].Tabs = []tuiTab{{Name: "sh"}, {Name: "cp"}}
+
+	m.resizeSessionPTYs()
+
+	cols, rows := m.focusedContentSize()
+	if got := m.sessions[0].Rows; int(got) != rows {
+		t.Fatalf("single-tab session rows = %d, want %d", got, rows)
+	}
+	if got := m.sessions[1].Rows; int(got) != rows-1 {
+		t.Fatalf("tab-bar session rows = %d, want %d (one row reserved for tab bar)", got, rows-1)
+	}
+	if got := m.sessions[0].Cols; int(got) != cols {
+		t.Fatalf("cols = %d, want %d", got, cols)
+	}
+}
+
+func TestSyncTabInfo_RefitsPTYWhenTabBarAppears(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := server.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	m := newListTestModel()
+	m.conn = &daemonConn{conn: client}
+	m.resizeSessionPTYs()
+	cols, rows := m.focusedContentSize()
+	_ = cols
+
+	// Second tab appears: PTY must shrink by one row for the tab bar.
+	m.syncTabInfo(m.sessions[0], daemon.SessionInfo{
+		Tabs:      []daemon.TabInfo{{Name: "sh"}, {Name: "cp"}},
+		ActiveTab: 1,
+	})
+	if got := m.sessions[0].Rows; int(got) != rows-1 {
+		t.Fatalf("rows after tab bar appears = %d, want %d", got, rows-1)
+	}
+
+	// Back to one tab: full height again.
+	m.syncTabInfo(m.sessions[0], daemon.SessionInfo{
+		Tabs:      []daemon.TabInfo{{Name: "sh"}},
+		ActiveTab: 0,
+	})
+	if got := m.sessions[0].Rows; int(got) != rows {
+		t.Fatalf("rows after tab bar disappears = %d, want %d", got, rows)
 	}
 }

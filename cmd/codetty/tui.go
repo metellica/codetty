@@ -481,8 +481,11 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 }
 
 // syncTabInfo updates a tuiSession's tab list from daemon SessionInfo.
+// When the tab bar appears or disappears the PTY is re-fitted so its rows
+// match what is actually displayed.
 func (m *tuiModel) syncTabInfo(sess *tuiSession, info daemon.SessionInfo) {
 	if len(info.Tabs) > 0 {
+		hadTabBar := len(sess.Tabs) > 1
 		tabs := make([]tuiTab, len(info.Tabs))
 		for i, t := range info.Tabs {
 			tabs[i] = tuiTab{Name: t.Name, Command: t.Command, Agent: t.Agent, AgentState: t.AgentState}
@@ -492,6 +495,16 @@ func (m *tuiModel) syncTabInfo(sess *tuiSession, info daemon.SessionInfo) {
 		}
 		sess.Tabs = tabs
 		sess.ActiveTab = info.ActiveTab
+		if hasTabBar := len(sess.Tabs) > 1; hasTabBar != hadTabBar && m.conn != nil {
+			if ordered := m.orderedSessions(); m.floatingIdx >= 0 && m.floatingIdx < len(ordered) && ordered[m.floatingIdx] == sess {
+				_, _, cw, ch := m.floatingContentRect()
+				if cw > 0 && ch > 0 {
+					m.resizeSessionPTY(sess, cw, ch)
+				}
+			} else if cols, rows := m.focusedContentSize(); cols > 0 && rows > 0 {
+				m.resizeSessionPTY(sess, cols, rows)
+			}
+		}
 	}
 }
 
@@ -761,18 +774,32 @@ func (m *tuiModel) applyDesiredOrder() {
 }
 
 // resizeSessionPTYs sends the effective content size of the focused panel to the daemon,
-// and resizes local vt10x terminals to match.
+// and resizes local vt10x terminals to match. Sessions showing a tab bar
+// get one row less, so the PTY matches the rows actually displayed.
 func (m *tuiModel) resizeSessionPTYs() {
 	if m.conn == nil {
 		return
 	}
 	cols, rows := m.focusedContentSize()
-	if cols > 0 && rows > 0 {
-		m.conn.SendResize(uint16(cols), uint16(rows))
-		for _, sess := range m.sessions {
-			sess.Resize(uint16(cols), uint16(rows))
-		}
+	if cols <= 0 || rows <= 0 {
+		return
 	}
+	for _, sess := range m.sessions {
+		m.resizeSessionPTY(sess, cols, rows)
+	}
+}
+
+// resizeSessionPTY resizes one session's local terminal and daemon PTY to
+// the given content size, reserving one row for the tab bar if shown.
+func (m *tuiModel) resizeSessionPTY(sess *tuiSession, cols, rows int) {
+	if len(sess.Tabs) > 1 {
+		rows--
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	sess.Resize(uint16(cols), uint16(rows))
+	m.conn.SendResizeSession(sess.Name, uint16(cols), uint16(rows))
 }
 
 // openFloating opens the floating window for the given visible-session index and resizes its PTY.
@@ -789,9 +816,7 @@ func (m *tuiModel) openFloating(visIdx int) {
 	if m.conn != nil && orderIdx >= 0 && orderIdx < len(m.orderedSessions()) {
 		_, _, cw, ch := m.floatingContentRect()
 		if cw > 0 && ch > 0 {
-			sess := m.orderedSessions()[orderIdx]
-			sess.Resize(uint16(cw), uint16(ch))
-			m.conn.SendResizeSession(sess.Name, uint16(cw), uint16(ch))
+			m.resizeSessionPTY(m.orderedSessions()[orderIdx], cw, ch)
 		}
 	}
 }
