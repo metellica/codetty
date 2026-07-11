@@ -61,6 +61,43 @@ func (s *ScreenMirror) Size() (uint16, uint16) {
 	return uint16(cols), uint16(rows)
 }
 
+// TailText returns the bottom n rows of the screen as plain text (lines
+// joined by newlines, trailing spaces trimmed). n <= 0 returns the whole
+// screen. Wide-character continuation cells (NUL) are skipped.
+func (s *ScreenMirror) TailText(n int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.written {
+		return ""
+	}
+
+	s.term.Lock()
+	defer s.term.Unlock()
+
+	cols, rows := s.term.Size()
+	start := 0
+	if n > 0 && n < rows {
+		start = rows - n
+	}
+
+	var lines []string
+	var line strings.Builder
+	for y := start; y < rows; y++ {
+		line.Reset()
+		line.Grow(cols)
+		for x := 0; x < cols; x++ {
+			g := s.term.Cell(x, y)
+			if g.Char == 0 {
+				continue // wide-char continuation cell
+			}
+			line.WriteRune(g.Char)
+		}
+		lines = append(lines, strings.TrimRight(line.String(), " "))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // Snapshot returns an ANSI byte sequence that reconstructs the current screen.
 // Returns nil if nothing has been written yet.
 func (s *ScreenMirror) Snapshot() []byte {

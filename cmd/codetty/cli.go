@@ -754,7 +754,35 @@ func formatSessionList(sessions []daemon.SessionInfo) string {
 	}
 	var sb strings.Builder
 	for _, s := range sessions {
-		fmt.Fprintf(&sb, "%s: %s (clients: %d)\n", s.Name, s.Command, s.Attached)
+		fmt.Fprintf(&sb, "%s: %s (clients: %d)", s.Name, s.Command, s.Attached)
+		if tabs := formatTabList(s.Tabs); tabs != "" {
+			fmt.Fprintf(&sb, " [%s]", tabs)
+		}
+		sb.WriteByte('\n')
 	}
 	return sb.String()
+}
+
+// formatTabList renders tabs with agent states, e.g. "1:shell 2:copilot(blocked)".
+// Returns "" when there is nothing worth showing (single tab, no agents).
+func formatTabList(tabs []daemon.TabInfo) string {
+	hasAgent := false
+	for _, t := range tabs {
+		if t.Agent != "" {
+			hasAgent = true
+			break
+		}
+	}
+	if len(tabs) <= 1 && !hasAgent {
+		return ""
+	}
+	parts := make([]string, len(tabs))
+	for i, t := range tabs {
+		part := fmt.Sprintf("%d:%s", i+1, t.Name)
+		if t.Agent != "" {
+			part += fmt.Sprintf(" %s(%s)", t.Agent, t.AgentState)
+		}
+		parts[i] = part
+	}
+	return strings.Join(parts, " ")
 }

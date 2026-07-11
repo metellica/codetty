@@ -18,6 +18,14 @@ const (
 // sidePanelTitleColor is a light green used for all side panel title bars.
 var sidePanelTitleColor = lipgloss.Color("78") // light green
 
+// Agent state accent colors: blocked demands attention, working is a hint,
+// done marks a finished run awaiting review.
+var (
+	agentBlockedColor = lipgloss.Color("160") // red
+	agentWorkingColor = lipgloss.Color("208") // orange
+	agentDoneColor    = lipgloss.Color("42")  // green
+)
+
 // fullscreenView renders only the selected session filling the entire terminal.
 func (m *tuiModel) fullscreenView() string {
 	sess := m.selectedSession()
@@ -45,7 +53,7 @@ func (m *tuiModel) fullscreenView() string {
 	}
 
 	if hasTabBar {
-		tabBar := renderTabBar(sess.Tabs, sess.ActiveTab, m.width)
+		tabBar := renderTabBar(sess.Tabs, sess.ActiveTab, m.width, false)
 		return content + "\n" + tabBar
 	}
 	return content
@@ -67,7 +75,7 @@ func (m *tuiModel) focusBigView() string {
 
 	if n == 1 {
 		sess := sessions[m.selected]
-		title := fmt.Sprintf("[1] %s", sess.Name)
+		title := panelTitle(1, sess)
 		panel := m.renderPanel(sess, title, m.width, availableH, true)
 		return lipgloss.JoinVertical(lipgloss.Left, panel, status)
 	}
@@ -116,7 +124,7 @@ func (m *tuiModel) focusBigWide(sessions []*tuiSession, availH int) string {
 		if idx == visible-1 {
 			h = availH - slotH*idx
 		}
-		title := fmt.Sprintf("[%d] %s", i+1, sess.Name)
+		title := panelTitle(i+1, sess)
 		highlighted := m.inputFocus == i
 		if highlighted {
 			title = "▶ " + title
@@ -144,7 +152,7 @@ func (m *tuiModel) focusBigNarrow(sessions []*tuiSession, availH int) string {
 	var bottomPanel string
 	for i, sess := range sessions {
 		if i != m.selected {
-			title := fmt.Sprintf("[%d] %s", i+1, sess.Name)
+			title := panelTitle(i+1, sess)
 			highlighted := m.inputFocus == i
 			if highlighted {
 				title = "▶ " + title
@@ -189,7 +197,7 @@ func (m *tuiModel) gridView() string {
 				continue
 			}
 			sess := sessions[idx]
-			title := fmt.Sprintf("[%d] %s", idx+1, sess.Name)
+			title := panelTitle(idx+1, sess)
 			focused := idx == m.selected
 			if focused {
 				title = "▶ " + title
@@ -215,9 +223,26 @@ func (m *tuiModel) renderPanel(sess *tuiSession, title string, w, h int, focused
 // If colorIdx >= 0, the title gets a light green background and content is dimmed.
 // If showContent is false, only the title is rendered (useful for very small side panels).
 func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int, focused bool, colorIdx int, showContent bool) string {
+	agentState := sessionAgentState(sess)
+
 	style := tuiNormalBorder.Width(w - 2).Height(h - 2)
 	if focused {
 		style = tuiFocusBorder.Width(w - 2).Height(h - 2)
+	}
+	// Border color encodes the most urgent agent state: blocked (red)
+	// overrides even the focus color; working (orange) and done (green)
+	// only replace the unfocused border.
+	switch agentState {
+	case "blocked":
+		style = style.BorderForeground(agentBlockedColor)
+	case "working":
+		if !focused {
+			style = style.BorderForeground(agentWorkingColor)
+		}
+	case "done":
+		if !focused {
+			style = style.BorderForeground(agentDoneColor)
+		}
 	}
 
 	innerW := w - 2
@@ -243,6 +268,9 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 			titleMaxW = 4
 		}
 		displayTitle := title
+		if label := agentStateLabel(agentState); label != "" {
+			displayTitle += " " + label
+		}
 		if lipgloss.Width(displayTitle) > titleMaxW {
 			displayTitle = ansi.Truncate(displayTitle, titleMaxW, "…")
 		}
@@ -254,18 +282,37 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 		}
 		pad := strings.Repeat(" ", padW)
 
+		// A blocked agent turns the whole title bar red.
+		titleFg, titleBg := lipgloss.Color("232"), sidePanelTitleColor
+		if agentState == "blocked" {
+			titleFg, titleBg = lipgloss.Color("231"), agentBlockedColor
+		}
 		titleStyle := lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("232")).
-			Background(sidePanelTitleColor).
+			Foreground(titleFg).
+			Background(titleBg).
 			Width(innerW)
 		header = titleStyle.Render(" " + displayTitle + pad + buttons)
 	} else {
+		label := agentStateLabel(agentState)
 		maxTitleW := w - 4
+		if label != "" {
+			maxTitleW -= lipgloss.Width(label) + 1
+		}
 		if maxTitleW > 0 && lipgloss.Width(title) > maxTitleW {
 			title = ansi.Truncate(title, maxTitleW, "…")
 		}
 		header = lipgloss.NewStyle().Bold(focused).Render(title)
+		if label != "" {
+			labelColor := agentWorkingColor
+			switch agentState {
+			case "blocked":
+				labelColor = agentBlockedColor
+			case "done":
+				labelColor = agentDoneColor
+			}
+			header += " " + lipgloss.NewStyle().Bold(true).Foreground(labelColor).Render(label)
+		}
 	}
 
 	if !showContent {
@@ -299,15 +346,117 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 	content := strings.Join(lines, "\n")
 
 	if hasTabBar {
-		tabBar := renderTabBar(sess.Tabs, sess.ActiveTab, innerW)
+		tabBar := renderTabBar(sess.Tabs, sess.ActiveTab, innerW, isSidePanel)
 		return style.Render(header + "\n" + content + "\n" + tabBar)
 	}
 	return style.Render(header + "\n" + content)
 }
 
+// effectiveAgentState folds the TUI-side done marker into a tab's agent
+// state: a finished-but-unseen run reads as "done".
+func effectiveAgentState(tab tuiTab) string {
+	if tab.Done && (tab.AgentState == "idle" || tab.AgentState == "") {
+		return "done"
+	}
+	return tab.AgentState
+}
+
+// agentBadge returns a one-cell state indicator for a tab, or "".
+func agentBadge(state string) string {
+	switch state {
+	case "blocked":
+		return "■"
+	case "working":
+		return "●"
+	case "done":
+		return "✓"
+	}
+	return ""
+}
+
+// sessionAgentState aggregates tab agent states into the most urgent one
+// for session-level display (blocked > done > working > idle > none).
+func sessionAgentState(sess *tuiSession) string {
+	agg := ""
+	for _, tab := range sess.Tabs {
+		switch effectiveAgentState(tab) {
+		case "blocked":
+			return "blocked"
+		case "done":
+			agg = "done"
+		case "working":
+			if agg != "done" {
+				agg = "working"
+			}
+		case "idle":
+			if agg == "" {
+				agg = "idle"
+			}
+		}
+	}
+	return agg
+}
+
+// panelTitle builds a panel title. Agent state is conveyed by the panel
+// border, header label, and status bar rather than by the title itself.
+func panelTitle(num int, sess *tuiSession) string {
+	return fmt.Sprintf("[%d] %s", num, sess.Name)
+}
+
+// agentStateLabel returns a short "badge + word" label for a session-level
+// agent state, or "" when there is nothing to show.
+func agentStateLabel(state string) string {
+	switch state {
+	case "blocked":
+		return "■ blocked"
+	case "working":
+		return "● working"
+	case "done":
+		return "✓ done"
+	}
+	return ""
+}
+
+// tabBarLabel builds the display label for a tab, including the agent
+// state badge. Used by both renderTabBar and hitTestTabBar so rendered
+// widths and hit-test widths stay in sync.
+func tabBarLabel(i int, tab tuiTab) string {
+	label := tab.Name
+	if label == "" {
+		label = fmt.Sprintf("%d", i+1)
+	}
+	if badge := agentBadge(effectiveAgentState(tab)); badge != "" {
+		return fmt.Sprintf(" %d:%s %s ", i+1, label, badge)
+	}
+	return fmt.Sprintf(" %d:%s ", i+1, label)
+}
+
+// tabStyleKind decides which style class a tab gets. Extracted for testing
+// since rendered color output depends on the terminal color profile.
+// In muted mode (small side panels) agent state outranks the active
+// highlight, and the active tab gets only a subtle emphasis.
+func tabStyleKind(tab tuiTab, isActive, muted bool) string {
+	state := effectiveAgentState(tab)
+	switch {
+	case !muted && isActive:
+		return "active"
+	case state == "blocked":
+		return "blocked"
+	case state == "done":
+		return "done"
+	case state == "working":
+		return "working"
+	case isActive:
+		return "mutedActive"
+	default:
+		return "inactive"
+	}
+}
+
 // renderTabBar renders a tab bar at the bottom of a panel.
-// Active tab is highlighted, others are dimmed. Aligned to the left.
-func renderTabBar(tabs []tuiTab, activeIdx, maxW int) string {
+// In muted mode (small side panels) the active tab keeps no highlight
+// color so agent state colors stand out as the only accent.
+func renderTabBar(tabs []tuiTab, activeIdx, maxW int, muted bool) string {
 	activeStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("232")).
@@ -317,6 +466,28 @@ func renderTabBar(tabs []tuiTab, activeIdx, maxW int) string {
 		Foreground(lipgloss.Color("250")).
 		Background(lipgloss.Color("238"))
 
+	// Muted active tab: same base as inactive, just bold + brighter text.
+	mutedActiveStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("255")).
+		Background(lipgloss.Color("238"))
+
+	// Agent-state variants: blocked demands attention, working is a
+	// softer hint.
+	blockedStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("231")).
+		Background(lipgloss.Color("124"))
+
+	workingStyle := lipgloss.NewStyle().
+		Foreground(agentWorkingColor).
+		Background(lipgloss.Color("238"))
+
+	doneStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(agentDoneColor).
+		Background(lipgloss.Color("238"))
+
 	separatorStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("240"))
 
@@ -324,12 +495,7 @@ func renderTabBar(tabs []tuiTab, activeIdx, maxW int) string {
 	totalW := 0
 
 	for i, tab := range tabs {
-		label := tab.Name
-		if label == "" {
-			label = fmt.Sprintf("%d", i+1)
-		}
-		// Compact label with index prefix
-		tabLabel := fmt.Sprintf(" %d:%s ", i+1, label)
+		tabLabel := tabBarLabel(i, tab)
 		tabW := lipgloss.Width(tabLabel)
 
 		// Check if adding this tab would exceed width
@@ -340,9 +506,18 @@ func renderTabBar(tabs []tuiTab, activeIdx, maxW int) string {
 			break
 		}
 
-		if i == activeIdx {
+		switch tabStyleKind(tab, i == activeIdx, muted) {
+		case "active":
 			parts = append(parts, activeStyle.Render(tabLabel))
-		} else {
+		case "blocked":
+			parts = append(parts, blockedStyle.Render(tabLabel))
+		case "done":
+			parts = append(parts, doneStyle.Render(tabLabel))
+		case "working":
+			parts = append(parts, workingStyle.Render(tabLabel))
+		case "mutedActive":
+			parts = append(parts, mutedActiveStyle.Render(tabLabel))
+		default:
 			parts = append(parts, inactiveStyle.Render(tabLabel))
 		}
 		totalW += tabW
@@ -363,12 +538,8 @@ func hitTestTabBar(tabs []tuiTab, activeIdx, maxW, x int) int {
 	totalW := 0
 
 	for i, tab := range tabs {
-		label := tab.Name
-		if label == "" {
-			label = fmt.Sprintf("%d", i+1)
-		}
-		tabLabel := fmt.Sprintf(" %d:%s ", i+1, label)
-		tabW := len(tabLabel) // visual width of ASCII label
+		tabLabel := tabBarLabel(i, tab)
+		tabW := lipgloss.Width(tabLabel)
 
 		// Same overflow check as renderTabBar
 		if totalW+tabW+1 > maxW && i > 0 {
@@ -474,10 +645,58 @@ func (m *tuiModel) statusBar() string {
 		modeName = "fullscreen"
 	}
 	right := fmt.Sprintf(" %s | %s prefix | Ctrl+click switch ", modeName, m.prefixLabel)
-	contentW := max(0, m.width-2)
+
+	// Agent state summary, rendered as its own colored block at the left
+	// edge so its background isn't cancelled by the status bar style.
+	seg := m.agentStatusSegment()
+	segW := lipgloss.Width(seg)
+
+	contentW := max(0, m.width-2-segW)
 	mid := strings.Repeat(" ", max(0, contentW-lipgloss.Width(left)-lipgloss.Width(right)))
 
-	return tuiStatusStyle.Width(m.width).Render(left + mid + right)
+	bar := tuiStatusStyle.Width(max(0, m.width-segW)).Render(left + mid + right)
+	return seg + bar
+}
+
+// agentStatusSegment summarizes agent states across all sessions (including
+// hidden ones) for the status bar. Returns "" when no agent is active.
+func (m *tuiModel) agentStatusSegment() string {
+	blocked, working, done := 0, 0, 0
+	for _, sess := range m.sessions {
+		for _, tab := range sess.Tabs {
+			switch effectiveAgentState(tab) {
+			case "blocked":
+				blocked++
+			case "working":
+				working++
+			case "done":
+				done++
+			}
+		}
+	}
+
+	var parts []string
+	if blocked > 0 {
+		style := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("231")).
+			Background(agentBlockedColor)
+		parts = append(parts, style.Render(fmt.Sprintf(" ■ %d blocked ", blocked)))
+	}
+	if done > 0 {
+		style := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("232")).
+			Background(agentDoneColor)
+		parts = append(parts, style.Render(fmt.Sprintf(" ✓ %d done ", done)))
+	}
+	if working > 0 {
+		style := lipgloss.NewStyle().
+			Foreground(agentWorkingColor).
+			Background(lipgloss.Color("235"))
+		parts = append(parts, style.Render(fmt.Sprintf(" ● %d working ", working)))
+	}
+	return strings.Join(parts, "")
 }
 
 func (m *tuiModel) hitTest(x, y int) int {

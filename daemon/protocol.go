@@ -86,8 +86,10 @@ type SessionInfo struct {
 
 // TabInfo describes a single tab within a session.
 type TabInfo struct {
-	Name    string `json:"name"`
-	Command string `json:"command"`
+	Name       string `json:"name"`
+	Command    string `json:"command"`
+	Agent      string `json:"agent,omitempty"`       // detected agent name (e.g. "copilot")
+	AgentState string `json:"agent_state,omitempty"` // "idle", "working", "blocked"
 }
 
 // ResizePayload for FrameResize.

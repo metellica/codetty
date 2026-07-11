@@ -428,6 +428,7 @@ func (m *tuiModel) forwardKey(msg tea.KeyMsg) {
 	raw := tuiKeyToBytes(msg)
 	if len(raw) > 0 {
 		m.conn.SendInput(sess.Name, raw)
+		m.ackAgentDoneSession(sess.Name)
 	}
 }
 
@@ -441,6 +442,7 @@ func (m *tuiModel) forwardKeyTo(msg tea.KeyMsg, idx int) {
 	raw := tuiKeyToBytes(msg)
 	if len(raw) > 0 {
 		m.conn.SendInput(sessions[idx].Name, raw)
+		m.ackAgentDoneSession(sessions[idx].Name)
 	}
 }
 

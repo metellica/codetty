@@ -59,8 +59,14 @@ type tuiSession struct {
 
 // tuiTab represents a tab entry for display in the TUI.
 type tuiTab struct {
-	Name    string
-	Command string
+	Name       string
+	Command    string
+	Agent      string // detected agent name (e.g. "copilot"), "" if none
+	AgentState string // "idle", "working", "blocked", "" if unknown
+	// Done marks a finished agent run (working → idle/exit) that the user
+	// has not looked at yet. TUI-side only; cleared by ackAgentDone once
+	// the tab is viewed as the focused panel's active tab.
+	Done bool
 }
 
 func newTUISession(name, command string, cols, rows uint16) *tuiSession {

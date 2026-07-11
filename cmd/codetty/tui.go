@@ -117,6 +117,11 @@ type tuiModel struct {
 
 	// Pending tabs from config reload (created when session appears).
 	pendingReloadTabs map[string][]config.ResolvedTab
+
+	// pendingTabAck records sessions where this client requested a tab
+	// switch; the agent-done marker of the new tab is acknowledged when
+	// the daemon's tab_switched event arrives.
+	pendingTabAck map[string]bool
 }
 
 // modeState captures a view state for back-navigation.
@@ -170,6 +175,21 @@ func (m *tuiModel) Init() tea.Cmd {
 }
 
 func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	prevName, prevTab := m.attentionTarget()
+	model, cmd := m.update(msg)
+	// A done marker is acknowledged only when the user engages with the
+	// tab: navigating to it (attention target change caused by key/mouse)
+	// or sending input into it (acked at the forwarding sites).
+	switch msg.(type) {
+	case tea.KeyMsg, tea.MouseMsg:
+		if name, tab := m.attentionTarget(); name != "" && (name != prevName || tab != prevTab) {
+			m.ackAgentDoneSession(name)
+		}
+	}
+	return model, cmd
+}
+
+func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -377,6 +397,17 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 			m.syncTabInfo(sess, evt.Info)
 			// On tab switch, invalidate the render cache so new tab content shows
 			sess.invalidateCache()
+			// A tab switch this client requested means the user navigated
+			// to the now-active tab: acknowledge its done marker.
+			if evt.Type == "tab_switched" && m.pendingTabAck[evt.Session] {
+				delete(m.pendingTabAck, evt.Session)
+				m.ackAgentDoneSession(evt.Session)
+			}
+		}
+
+	case "agent_state":
+		if sess := m.sessionByName(evt.Session); sess != nil {
+			m.syncTabInfo(sess, evt.Info)
 		}
 
 	case "exited":
@@ -393,10 +424,65 @@ func (m *tuiModel) syncTabInfo(sess *tuiSession, info daemon.SessionInfo) {
 	if len(info.Tabs) > 0 {
 		tabs := make([]tuiTab, len(info.Tabs))
 		for i, t := range info.Tabs {
-			tabs[i] = tuiTab{Name: t.Name, Command: t.Command}
+			tabs[i] = tuiTab{Name: t.Name, Command: t.Command, Agent: t.Agent, AgentState: t.AgentState}
+			if i < len(sess.Tabs) {
+				tabs[i].Done = agentDoneAfterUpdate(sess.Tabs[i], tabs[i])
+			}
 		}
 		sess.Tabs = tabs
 		sess.ActiveTab = info.ActiveTab
+	}
+}
+
+// agentDoneAfterUpdate carries or sets the "finished, not yet seen" flag
+// across a tab state update. A working agent that reaches idle (or exits)
+// is done; any new working/blocked activity clears the flag.
+func agentDoneAfterUpdate(old, new tuiTab) bool {
+	switch new.AgentState {
+	case "working", "blocked":
+		return false
+	}
+	if old.AgentState == "working" {
+		return true // finished (idle) or exited since the last update
+	}
+	return old.Done
+}
+
+// attentionTarget returns the session name and active tab index of the
+// panel the user's input is directed at: the input-focused session, or
+// the selected panel when input focus is unset.
+func (m *tuiModel) attentionTarget() (string, int) {
+	visible := m.visibleSessions()
+	if len(visible) == 0 {
+		return "", -1
+	}
+	idx := m.inputFocus
+	if idx < 0 || idx >= len(visible) {
+		idx = m.selected
+	}
+	if idx < 0 || idx >= len(visible) {
+		return "", -1
+	}
+	if m.floatingIdx >= 0 {
+		ordered := m.orderedSessions()
+		if m.floatingIdx < len(ordered) {
+			sess := ordered[m.floatingIdx]
+			return sess.Name, sess.ActiveTab
+		}
+	}
+	sess := visible[idx]
+	return sess.Name, sess.ActiveTab
+}
+
+// ackAgentDoneSession marks the named session's active tab as seen,
+// clearing its agent-done marker.
+func (m *tuiModel) ackAgentDoneSession(name string) {
+	sess := m.sessionByName(name)
+	if sess == nil {
+		return
+	}
+	if sess.ActiveTab >= 0 && sess.ActiveTab < len(sess.Tabs) {
+		sess.Tabs[sess.ActiveTab].Done = false
 	}
 }
 
@@ -775,6 +861,19 @@ func (m *tuiModel) focusedContentSize() (int, int) {
 }
 
 // switchTab switches the active tab in a session by delta (-1 or +1).
+// requestTabSwitch asks the daemon to switch a session's active tab and
+// marks the session for done-acknowledgement when the switch confirms.
+func (m *tuiModel) requestTabSwitch(sessionName string, idx int) {
+	if m.conn == nil {
+		return
+	}
+	if m.pendingTabAck == nil {
+		m.pendingTabAck = make(map[string]bool)
+	}
+	m.pendingTabAck[sessionName] = true
+	m.conn.SwitchTab(sessionName, idx)
+}
+
 func (m *tuiModel) switchTab(sess *tuiSession, delta int) {
 	if len(sess.Tabs) <= 1 || m.conn == nil {
 		return
@@ -785,5 +884,5 @@ func (m *tuiModel) switchTab(sess *tuiSession, delta int) {
 	} else if newIdx >= len(sess.Tabs) {
 		newIdx = 0
 	}
-	m.conn.SwitchTab(sess.Name, newIdx)
+	m.requestTabSwitch(sess.Name, newIdx)
 }

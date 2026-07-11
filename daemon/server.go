@@ -44,7 +44,46 @@ func (s *Server) Start() error {
 
 	s.wg.Add(1)
 	go s.acceptLoop()
+
+	s.wg.Add(1)
+	go s.agentPollLoop()
 	return nil
+}
+
+// agentPollInterval is how often each native session's tabs are scanned
+// for agent state changes.
+const agentPollInterval = 500 * time.Millisecond
+
+// agentPollLoop periodically runs agent detection on all native sessions
+// and broadcasts an "agent_state" session event when anything changed.
+func (s *Server) agentPollLoop() {
+	defer s.wg.Done()
+	ticker := time.NewTicker(agentPollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.done:
+			return
+		case now := <-ticker.C:
+			s.mu.Lock()
+			sessions := make([]*DaemonSession, 0, len(s.sessions))
+			for _, sess := range s.sessions {
+				sessions = append(sessions, sess)
+			}
+			s.mu.Unlock()
+
+			for _, sess := range sessions {
+				if sess.PollAgentStates(now) {
+					s.notifySubscribers(SessionEvent{
+						Type:    "agent_state",
+						Session: sess.Name,
+						Info:    sess.Info(),
+					})
+				}
+			}
+		}
+	}
 }
 
 // Stop shuts down the server, killing all sessions and cleaning up.

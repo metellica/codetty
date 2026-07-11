@@ -3,8 +3,10 @@ package daemon
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"codetty/agentdetect"
 	"codetty/terminal"
 )
 
@@ -24,6 +26,15 @@ type SessionTab struct {
 	exited   bool
 	exitCode int
 	doneCh   chan struct{}
+
+	// Agent detection state (owned by the server's agent poll loop).
+	// contentSeq counts PTY output writes so unchanged screens can skip
+	// rescanning. agent/agentState are the last published values,
+	// protected by the session mutex.
+	contentSeq atomic.Uint64
+	detector   agentdetect.Detector
+	agent      string
+	agentState agentdetect.AgentState
 }
 
 // DaemonSession represents a managed session within the daemon.
@@ -192,9 +203,68 @@ func (s *DaemonSession) TabInfos() []TabInfo {
 		if len(tab.Command) > 0 {
 			cmd = tab.Command[0]
 		}
-		infos[i] = TabInfo{Name: tab.Name, Command: cmd}
+		infos[i] = TabInfo{
+			Name:       tab.Name,
+			Command:    cmd,
+			Agent:      tab.agent,
+			AgentState: string(tab.agentState),
+		}
 	}
 	return infos
+}
+
+// PollAgentStates runs agent detection for every tab in a native session.
+// It returns true when any tab's published agent or state changed.
+// Called periodically by the server's agent poll loop.
+func (s *DaemonSession) PollAgentStates(now time.Time) bool {
+	if s.Type != SessionTypeNative {
+		return false
+	}
+
+	s.mu.Lock()
+	tabs := append([]*SessionTab(nil), s.Tabs...)
+	s.mu.Unlock()
+
+	changedAny := false
+	for _, tab := range tabs {
+		if s.pollTabAgentState(tab, now) {
+			changedAny = true
+		}
+	}
+	return changedAny
+}
+
+func (s *DaemonSession) pollTabAgentState(tab *SessionTab, now time.Time) bool {
+	seq := tab.contentSeq.Load()
+	if !tab.detector.NeedsScan(seq, now) {
+		return false
+	}
+
+	s.mu.Lock()
+	exited := tab.exited
+	s.mu.Unlock()
+
+	agentName := ""
+	raw := agentdetect.StateUnknown
+	if !exited {
+		if name, argv, ok := agentdetect.ForegroundCommand(tab.Terminal.Fd()); ok {
+			if spec := agentdetect.Identify(name, argv); spec != nil {
+				agentName = spec.Name
+				raw = spec.Evaluate(tab.Screen.TailText(0))
+			}
+		}
+	}
+
+	state, changed := tab.detector.Commit(agentName, raw, seq, now)
+	if !changed {
+		return false
+	}
+
+	s.mu.Lock()
+	tab.agent = agentName
+	tab.agentState = state
+	s.mu.Unlock()
+	return true
 }
 
 func (s *DaemonSession) readLoopForTab(tab *SessionTab) {
@@ -205,6 +275,7 @@ func (s *DaemonSession) readLoopForTab(tab *SessionTab) {
 			data := make([]byte, n)
 			copy(data, buf[:n])
 			tab.Screen.Write(data)
+			tab.contentSeq.Add(1)
 
 			// Only broadcast output if this is the active tab
 			s.mu.Lock()
@@ -371,7 +442,7 @@ func (s *DaemonSession) Info() SessionInfo {
 		Attached:   s.clientCount(),
 		CreatedAt:  s.CreatedAt.Format(time.RFC3339),
 	}
-	if s.Type == SessionTypeNative && len(s.Tabs) > 1 {
+	if s.Type == SessionTypeNative && len(s.Tabs) >= 1 {
 		info.Tabs = s.TabInfos()
 		info.ActiveTab = s.GetActiveTab()
 	}

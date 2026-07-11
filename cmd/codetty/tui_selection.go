@@ -109,9 +109,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				if msg.Y == tabBarY && msg.X >= r.contentX && msg.X < r.contentX+r.contentW {
 					localX := msg.X - r.contentX
 					if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, r.contentW, localX); tabIdx >= 0 {
-						if m.conn != nil {
-							m.conn.SwitchTab(sess.Name, tabIdx)
-						}
+						m.requestTabSwitch(sess.Name, tabIdx)
 						m.sel = textSelection{}
 						return nil
 					}
@@ -340,9 +338,7 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			// Check tab bar click in fullscreen (tab bar is on the last line)
 			if len(sess.Tabs) > 1 && msg.Y == m.height-1 {
 				if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, m.width, msg.X); tabIdx >= 0 {
-					if m.conn != nil {
-						m.conn.SwitchTab(sess.Name, tabIdx)
-					}
+					m.requestTabSwitch(sess.Name, tabIdx)
 					m.sel = textSelection{}
 					return nil
 				}
@@ -462,6 +458,7 @@ func (m *tuiModel) forwardMouseToPTY(msg tea.MouseMsg) {
 	}
 	seq := fmt.Sprintf("\x1b[<%d;%d;%d%c", btn, x, y, suffix)
 	m.conn.SendInput(sess.Name, []byte(seq))
+	m.ackAgentDoneSession(sess.Name)
 }
 
 // forwardClickToPTY sends a click (press+release) to PTY at the given local coords.
@@ -474,6 +471,7 @@ func (m *tuiModel) forwardClickToPTY(localX, localY int) {
 	press := fmt.Sprintf("\x1b[<0;%d;%dM", x, y)
 	release := fmt.Sprintf("\x1b[<0;%d;%dm", x, y)
 	m.conn.SendInput(sess.Name, []byte(press+release))
+	m.ackAgentDoneSession(sess.Name)
 }
 
 // floatingContentRect returns the content area (x, y, w, h) of the floating window.
@@ -525,9 +523,7 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 				// Check for tab bar click in floating window (last line of content)
 				if len(sess.Tabs) > 1 && localY == ch-1 {
 					if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, cw, localX); tabIdx >= 0 {
-						if m.conn != nil {
-							m.conn.SwitchTab(sess.Name, tabIdx)
-						}
+						m.requestTabSwitch(sess.Name, tabIdx)
 						m.sel = textSelection{}
 						return nil
 					}
@@ -584,6 +580,7 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 				press := fmt.Sprintf("\x1b[<0;%d;%dM", x, y)
 				release := fmt.Sprintf("\x1b[<0;%d;%dm", x, y)
 				m.conn.SendInput(sess.Name, []byte(press+release))
+				m.ackAgentDoneSession(sess.Name)
 			}
 			m.sel = textSelection{}
 		} else if inside && mouseOn {
@@ -632,6 +629,7 @@ func (m *tuiModel) forwardMouseToSession(name string, msg tea.MouseMsg, localX, 
 	}
 	seq := fmt.Sprintf("\x1b[<%d;%d;%d%c", btn, x, y, suffix)
 	m.conn.SendInput(name, []byte(seq))
+	m.ackAgentDoneSession(name)
 }
 
 // titleBarRegion describes a side panel's title bar location.
