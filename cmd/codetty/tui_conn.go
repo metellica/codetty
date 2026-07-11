@@ -201,3 +201,30 @@ func (dc *daemonConn) Detach() {
 func (dc *daemonConn) RefreshTmux() {
 	daemon.WriteFrame(dc.conn, daemon.FrameRefreshTmux, nil)
 }
+
+// CreateTab requests the daemon to create a new tab within a session.
+func (dc *daemonConn) CreateTab(session, name string, command []string, dir string, env []string) {
+	daemon.WriteFrame(dc.conn, daemon.FrameCreateTab, daemon.MarshalJSON(daemon.CreateTabRequest{
+		Session: session,
+		Name:    name,
+		Command: command,
+		Dir:     dir,
+		Env:     env,
+	}))
+}
+
+// CloseTab requests the daemon to close a tab in a session.
+func (dc *daemonConn) CloseTab(session string, index int) {
+	daemon.WriteFrame(dc.conn, daemon.FrameCloseTab, daemon.MarshalJSON(daemon.CloseTabRequest{
+		Session: session,
+		Index:   index,
+	}))
+}
+
+// SwitchTab requests the daemon to switch the active tab in a session.
+func (dc *daemonConn) SwitchTab(session string, index int) {
+	daemon.WriteFrame(dc.conn, daemon.FrameSwitchTab, daemon.MarshalJSON(daemon.SwitchTabRequest{
+		Session: session,
+		Index:   index,
+	}))
+}

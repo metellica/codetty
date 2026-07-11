@@ -361,3 +361,111 @@ func TestResolve_OmittedDirDefaultsToConfigDir(t *testing.T) {
 		t.Fatalf("window Dir = %q, want /project", results[1].Windows[0].Dir)
 	}
 }
+
+func TestResolve_NativeSessionTabs(t *testing.T) {
+	cfg := &SessionsConfig{
+		Session: []SessionDef{
+			{
+				Name:    "dev",
+				Command: []string{"bash"},
+				Dir:     "./project",
+				Tab: []TabDef{
+					{Name: "editor", Command: []string{"nvim", "."}},
+					{Name: "server", Command: []string{"npm", "run", "dev"}, Dir: "./frontend"},
+					{Name: "shell"},
+				},
+			},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	results, err := cfg.Resolve("/home/user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := results[0]
+	if len(rs.Tabs) != 3 {
+		t.Fatalf("got %d tabs, want 3", len(rs.Tabs))
+	}
+	// First tab inherits nothing special for dir, gets session dir
+	if rs.Tabs[0].Name != "editor" {
+		t.Fatalf("tab[0].Name = %q, want editor", rs.Tabs[0].Name)
+	}
+	if rs.Tabs[0].Dir != "/home/user/project" {
+		t.Fatalf("tab[0].Dir = %q, want /home/user/project", rs.Tabs[0].Dir)
+	}
+	// Second tab has explicit dir
+	if rs.Tabs[1].Dir != "/home/user/frontend" {
+		t.Fatalf("tab[1].Dir = %q, want /home/user/frontend", rs.Tabs[1].Dir)
+	}
+	if rs.Tabs[1].Command[0] != "npm" {
+		t.Fatalf("tab[1].Command = %v, want [npm run dev]", rs.Tabs[1].Command)
+	}
+	// Third tab with no command inherits session command
+	if rs.Tabs[2].Command[0] != "bash" {
+		t.Fatalf("tab[2].Command = %v, want [bash]", rs.Tabs[2].Command)
+	}
+}
+
+func TestValidate_TabErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  SessionsConfig
+	}{
+		{"tab on tmux session", SessionsConfig{Session: []SessionDef{
+			{Name: "a", Type: "tmux", TmuxSession: "x", Tab: []TabDef{{Name: "t1"}}},
+		}}},
+		{"tab empty name", SessionsConfig{Session: []SessionDef{
+			{Name: "a", Tab: []TabDef{{Name: ""}}},
+		}}},
+		{"tab duplicate name", SessionsConfig{Session: []SessionDef{
+			{Name: "a", Tab: []TabDef{{Name: "t1"}, {Name: "t1"}}},
+		}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.cfg.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestLoadSessions_WithTabs(t *testing.T) {
+	dir := t.TempDir()
+	content := `
+[[session]]
+name = "dev"
+command = ["bash"]
+
+  [[session.tab]]
+  name = "editor"
+  command = ["nvim"]
+
+  [[session.tab]]
+  name = "server"
+  command = ["npm", "start"]
+  dir = "./src"
+`
+	cfgPath := filepath.Join(dir, ".codetty.toml")
+	os.WriteFile(cfgPath, []byte(content), 0o644)
+
+	cfg, _, err := LoadSessions("", dir)
+	if err != nil {
+		t.Fatalf("LoadSessions: %v", err)
+	}
+	if len(cfg.Session) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(cfg.Session))
+	}
+	if len(cfg.Session[0].Tab) != 2 {
+		t.Fatalf("got %d tabs, want 2", len(cfg.Session[0].Tab))
+	}
+	if cfg.Session[0].Tab[0].Name != "editor" {
+		t.Fatalf("tab[0].Name = %q, want editor", cfg.Session[0].Tab[0].Name)
+	}
+	if cfg.Session[0].Tab[1].Dir != "./src" {
+		t.Fatalf("tab[1].Dir = %q, want ./src", cfg.Session[0].Tab[1].Dir)
+	}
+}

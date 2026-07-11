@@ -119,6 +119,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.handleSubscribeAll(conn, req)
 	case ActionRefreshTmux:
 		s.handleRefreshTmux(conn)
+	case ActionCreateTab:
+		s.handleCreateTab(conn, req)
 	default:
 		s.sendError(conn, fmt.Sprintf("unknown action: %s", req.Action))
 	}
@@ -153,6 +155,11 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 	if err != nil {
 		s.sendError(conn, fmt.Sprintf("start session: %v", err))
 		return
+	}
+
+	// Set the first tab's name if provided
+	if req.TabName != "" && len(sess.Tabs) > 0 {
+		sess.Tabs[0].Name = req.TabName
 	}
 
 	// Apply session type metadata (e.g. from codetty up).
@@ -648,3 +655,158 @@ func (s *Server) handleRefreshTmux(conn net.Conn) {
 	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true, Session: fmt.Sprintf("%d new tmux sessions", n)}))
 }
 
+// createTabForSubscriber creates a new tab within an existing session.
+func (s *Server) createTabForSubscriber(sub *Subscriber, req CreateTabRequest) {
+	sess := s.SessionByName(req.Session)
+	if sess == nil {
+		return
+	}
+
+	cmd := req.Command
+	if len(cmd) == 0 {
+		cmd = []string{terminal.DefaultShell()}
+	}
+
+	name := req.Name
+	if name == "" {
+		name = fmt.Sprintf("tab-%d", sess.TabCount())
+	}
+
+	// Use the active tab's screen size for the new tab
+	s.mu.Lock()
+	var cols, rows uint16
+	if len(sess.Tabs) > 0 {
+		cols, rows = sess.Tabs[sess.ActiveTab].Screen.Size()
+	} else {
+		cols, rows = 80, 24
+	}
+	s.mu.Unlock()
+
+	idx, err := sess.AddTab(name, cmd, cols, rows, req.Dir, req.Env)
+	if err != nil {
+		return
+	}
+
+	// Notify all subscribers about the new tab
+	s.notifySubscribers(SessionEvent{
+		Type:    "tab_created",
+		Session: req.Session,
+		Info:    sess.Info(),
+	})
+
+	// Auto-switch to the new tab
+	sess.SwitchTab(idx)
+	s.notifyTabSwitch(sub, sess, idx)
+}
+
+// handleCreateTab handles a create_tab request from a non-subscriber connection.
+func (s *Server) handleCreateTab(conn net.Conn, req Request) {
+	sess := s.SessionByName(req.Session)
+	if sess == nil {
+		s.sendError(conn, fmt.Sprintf("session %q not found", req.Session))
+		return
+	}
+
+	cmd := req.Command
+	if len(cmd) == 0 {
+		cmd = []string{terminal.DefaultShell()}
+	}
+
+	name := req.TabName
+	if name == "" {
+		name = fmt.Sprintf("tab-%d", sess.TabCount())
+	}
+
+	cols, rows := req.Cols, req.Rows
+	if cols == 0 || rows == 0 {
+		sess.mu.Lock()
+		if len(sess.Tabs) > 0 {
+			cols, rows = sess.Tabs[sess.ActiveTab].Screen.Size()
+		} else {
+			cols, rows = 80, 24
+		}
+		sess.mu.Unlock()
+	}
+
+	_, err := sess.AddTab(name, cmd, cols, rows, req.Dir, req.Env)
+	if err != nil {
+		s.sendError(conn, fmt.Sprintf("create tab: %v", err))
+		return
+	}
+
+	// Also rename the first tab if it's still named "default" and this is the first extra tab
+	sess.mu.Lock()
+	if len(sess.Tabs) == 2 && sess.Tabs[0].Name == "default" {
+		sess.Tabs[0].Name = sess.Tabs[0].Name // keep as-is unless renamed
+	}
+	sess.mu.Unlock()
+
+	// Notify subscribers
+	s.notifySubscribers(SessionEvent{
+		Type:    "tab_created",
+		Session: sess.Name,
+		Info:    sess.Info(),
+	})
+
+	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
+}
+
+// closeTabForSubscriber closes a tab in a session.
+func (s *Server) closeTabForSubscriber(sub *Subscriber, req CloseTabRequest) {
+	sess := s.SessionByName(req.Session)
+	if sess == nil {
+		return
+	}
+
+	if err := sess.CloseTab(req.Index); err != nil {
+		return
+	}
+
+	s.notifySubscribers(SessionEvent{
+		Type:    "tab_closed",
+		Session: req.Session,
+		Info:    sess.Info(),
+	})
+
+	// Send snapshot of the new active tab
+	s.sendTabSnapshot(sub, sess)
+}
+
+// switchTabForSubscriber switches the active tab in a session.
+func (s *Server) switchTabForSubscriber(sub *Subscriber, req SwitchTabRequest) {
+	sess := s.SessionByName(req.Session)
+	if sess == nil {
+		return
+	}
+
+	if err := sess.SwitchTab(req.Index); err != nil {
+		return
+	}
+
+	s.notifyTabSwitch(sub, sess, req.Index)
+}
+
+// notifyTabSwitch notifies subscribers about a tab switch and sends a snapshot.
+func (s *Server) notifyTabSwitch(sub *Subscriber, sess *DaemonSession, tabIdx int) {
+	s.notifySubscribers(SessionEvent{
+		Type:    "tab_switched",
+		Session: sess.Name,
+		Info:    sess.Info(),
+	})
+
+	// Send a snapshot of the new active tab's screen
+	s.sendTabSnapshot(sub, sess)
+}
+
+// sendTabSnapshot sends the active tab's screen content to all subscribers.
+func (s *Server) sendTabSnapshot(sub *Subscriber, sess *DaemonSession) {
+	snap := sess.Screen.Snapshot()
+	if len(snap) > 0 {
+		s.mu.Lock()
+		subs := append([]*Subscriber(nil), s.subscribers...)
+		s.mu.Unlock()
+		for _, s := range subs {
+			s.SendTaggedOutput(sess.Name, snap)
+		}
+	}
+}

@@ -249,3 +249,90 @@ func TestServer_NewSession_DuplicateTmuxTarget(t *testing.T) {
 		t.Errorf("TmuxTarget = %q, want dev", resp3.Sessions[0].TmuxTarget)
 	}
 }
+
+func TestServer_CreateTab(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "test.sock")
+	srv := NewServer(sockPath)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	// Create a session first
+	conn1, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Request{
+		Action:  ActionNewSession,
+		Session: "tabtest",
+		Command: []string{"cat"},
+		Cols:    80,
+		Rows:    24,
+		TabName: "main",
+	}
+	WriteFrame(conn1, FrameRequest, MarshalJSON(req))
+	ft, payload, err := ReadFrame(conn1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ft != FrameResponse {
+		t.Fatalf("expected response frame, got %d", ft)
+	}
+	var resp Response
+	json.Unmarshal(payload, &resp)
+	if !resp.OK {
+		t.Fatalf("new_session failed: %s", resp.Error)
+	}
+	WriteFrame(conn1, FrameDetach, nil)
+	conn1.Close()
+	time.Sleep(50 * time.Millisecond)
+
+	// Create a tab
+	conn2, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tabReq := Request{
+		Action:  ActionCreateTab,
+		Session: "tabtest",
+		TabName: "secondary",
+		Command: []string{"cat"},
+	}
+	WriteFrame(conn2, FrameRequest, MarshalJSON(tabReq))
+	ft2, payload2, err := ReadFrame(conn2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ft2 != FrameResponse {
+		t.Fatalf("expected response frame, got %d", ft2)
+	}
+	var resp2 Response
+	json.Unmarshal(payload2, &resp2)
+	if !resp2.OK {
+		t.Fatalf("create_tab failed: %s", resp2.Error)
+	}
+	conn2.Close()
+
+	// Verify via list
+	conn3, _ := net.Dial("unix", sockPath)
+	defer conn3.Close()
+	WriteFrame(conn3, FrameRequest, MarshalJSON(Request{Action: ActionList}))
+	_, payload3, _ := ReadFrame(conn3)
+	var resp3 Response
+	json.Unmarshal(payload3, &resp3)
+	if len(resp3.Sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(resp3.Sessions))
+	}
+	sess := resp3.Sessions[0]
+	if len(sess.Tabs) != 2 {
+		t.Fatalf("expected 2 tabs, got %d", len(sess.Tabs))
+	}
+	if sess.Tabs[0].Name != "main" {
+		t.Errorf("tab[0].Name = %q, want main", sess.Tabs[0].Name)
+	}
+	if sess.Tabs[1].Name != "secondary" {
+		t.Errorf("tab[1].Name = %q, want secondary", sess.Tabs[1].Name)
+	}
+}

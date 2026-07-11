@@ -21,6 +21,14 @@ type SessionTemplate struct {
 	Window []WindowDef `toml:"window"`
 }
 
+// TabDef defines a tab within a native session.
+type TabDef struct {
+	Name    string            `toml:"name"`
+	Command []string          `toml:"command"` // command to run in this tab
+	Dir     string            `toml:"dir"`     // working directory override
+	Env     map[string]string `toml:"env"`     // extra environment variables
+}
+
 // SessionDef defines a single session in the config file.
 type SessionDef struct {
 	Name           string            `toml:"name"`
@@ -29,6 +37,7 @@ type SessionDef struct {
 	Dir            string            `toml:"dir"`              // working directory
 	Env            map[string]string `toml:"env"`              // extra environment variables
 	Hidden         bool              `toml:"hidden"`           // hidden on startup
+	Tab            []TabDef          `toml:"tab"`              // tabs within a native session
 	Template       string            `toml:"template"`         // template name (tmux only)
 	TmuxSession    string            `toml:"tmux_session"`     // tmux session name
 	TmuxAttachOnly bool              `toml:"tmux_attach_only"` // only attach, don't create windows
@@ -43,6 +52,14 @@ type WindowDef struct {
 	Dir     string `toml:"dir"`     // override working directory
 }
 
+// ResolvedTab is a resolved tab definition for a native session.
+type ResolvedTab struct {
+	Name    string
+	Command []string
+	Dir     string
+	Env     map[string]string
+}
+
 // ResolvedSession is a session definition with template applied.
 type ResolvedSession struct {
 	Name           string
@@ -51,6 +68,7 @@ type ResolvedSession struct {
 	Dir            string
 	Env            map[string]string
 	Hidden         bool
+	Tabs           []ResolvedTab // tabs within a native session (empty means single-tab)
 	TmuxSession    string
 	TmuxAttachOnly bool
 	Windows        []WindowDef
@@ -122,6 +140,23 @@ func (cfg *SessionsConfig) Validate() error {
 				return fmt.Errorf("session %q: template %q not found", sd.Name, sd.Template)
 			}
 		}
+
+		// Validate tabs (native sessions only).
+		if len(sd.Tab) > 0 {
+			if sd.Type == "tmux" {
+				return fmt.Errorf("session %q: tabs are only supported for native sessions", sd.Name)
+			}
+			tabNames := make(map[string]bool)
+			for _, tab := range sd.Tab {
+				if tab.Name == "" {
+					return fmt.Errorf("session %q: tab with empty name", sd.Name)
+				}
+				if tabNames[tab.Name] {
+					return fmt.Errorf("session %q: duplicate tab name %q", sd.Name, tab.Name)
+				}
+				tabNames[tab.Name] = true
+			}
+		}
 	}
 
 	for name, tmpl := range cfg.Template {
@@ -175,6 +210,26 @@ func (cfg *SessionsConfig) resolveSession(sd SessionDef, configDir string) (Reso
 	}
 
 	if rs.Type == "native" {
+		// Resolve tabs for native sessions.
+		for _, tab := range sd.Tab {
+			rt := ResolvedTab{
+				Name:    tab.Name,
+				Command: tab.Command,
+				Env:     tab.Env,
+			}
+			if tab.Dir != "" {
+				rt.Dir = resolveDir(tab.Dir, configDir)
+			} else {
+				rt.Dir = rs.Dir
+			}
+			if len(rt.Command) == 0 {
+				rt.Command = rs.Command // inherit session command
+			}
+			if rt.Env == nil && rs.Env != nil {
+				rt.Env = rs.Env // inherit session env
+			}
+			rs.Tabs = append(rs.Tabs, rt)
+		}
 		return rs, nil
 	}
 

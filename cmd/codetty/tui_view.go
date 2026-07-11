@@ -25,15 +25,30 @@ func (m *tuiModel) fullscreenView() string {
 		m.mode = modeFocusBig
 		return m.focusBigView()
 	}
+
+	hasTabBar := len(sess.Tabs) > 1
+	contentH := m.height
+	if hasTabBar {
+		contentH--
+	}
+
+	var content string
 	if m.sel.session == sess.Name && (m.sel.active || m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY) {
 		selFn := func(col, row int) bool {
 			return m.selectionCovers(sess.Name, col, row)
 		}
-		lines := sess.RenderANSIWithSelection(m.width, m.height, selFn)
-		return strings.Join(lines, "\n")
+		lines := sess.RenderANSIWithSelection(m.width, contentH, selFn)
+		content = strings.Join(lines, "\n")
+	} else {
+		lines, _, _ := sess.RenderANSI(m.width, contentH)
+		content = strings.Join(lines, "\n")
 	}
-	lines, _, _ := sess.RenderANSI(m.width, m.height)
-	return strings.Join(lines, "\n")
+
+	if hasTabBar {
+		tabBar := renderTabBar(sess.Tabs, sess.ActiveTab, m.width)
+		return content + "\n" + tabBar
+	}
+	return content
 }
 
 func (m *tuiModel) focusBigView() string {
@@ -258,20 +273,88 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 		return style.Render(padding + header)
 	}
 
+	// Reserve space for tab bar if session has multiple tabs
+	contentH := innerH
+	hasTabBar := len(sess.Tabs) > 1
+	if hasTabBar {
+		contentH-- // 1 line for tab bar
+	}
+	if contentH < 1 {
+		contentH = 1
+		hasTabBar = false
+	}
+
 	var lines []string
 	if isSidePanel && !focused {
-		lines = sess.RenderDimmed(innerW, innerH)
+		lines = sess.RenderDimmed(innerW, contentH)
 	} else if m.sel.session == sess.Name && (m.sel.active || m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY) {
 		selFn := func(col, row int) bool {
 			return m.selectionCovers(sess.Name, col, row)
 		}
-		lines = sess.RenderANSIWithSelection(innerW, innerH, selFn)
+		lines = sess.RenderANSIWithSelection(innerW, contentH, selFn)
 	} else {
-		lines, _, _ = sess.RenderANSI(innerW, innerH)
+		lines, _, _ = sess.RenderANSI(innerW, contentH)
 	}
 
 	content := strings.Join(lines, "\n")
+
+	if hasTabBar {
+		tabBar := renderTabBar(sess.Tabs, sess.ActiveTab, innerW)
+		return style.Render(header + "\n" + content + "\n" + tabBar)
+	}
 	return style.Render(header + "\n" + content)
+}
+
+// renderTabBar renders a tab bar at the bottom of a panel.
+// Active tab is highlighted, others are dimmed. Aligned to the left.
+func renderTabBar(tabs []tuiTab, activeIdx, maxW int) string {
+	activeStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("232")).
+		Background(lipgloss.Color("86"))
+
+	inactiveStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("250")).
+		Background(lipgloss.Color("238"))
+
+	separatorStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240"))
+
+	var parts []string
+	totalW := 0
+
+	for i, tab := range tabs {
+		label := tab.Name
+		if label == "" {
+			label = fmt.Sprintf("%d", i+1)
+		}
+		// Compact label with index prefix
+		tabLabel := fmt.Sprintf(" %d:%s ", i+1, label)
+		tabW := lipgloss.Width(tabLabel)
+
+		// Check if adding this tab would exceed width
+		if totalW+tabW+1 > maxW && i > 0 {
+			remaining := len(tabs) - i
+			more := fmt.Sprintf(" +%d ", remaining)
+			parts = append(parts, inactiveStyle.Render(more))
+			break
+		}
+
+		if i == activeIdx {
+			parts = append(parts, activeStyle.Render(tabLabel))
+		} else {
+			parts = append(parts, inactiveStyle.Render(tabLabel))
+		}
+		totalW += tabW
+
+		if i < len(tabs)-1 {
+			sep := separatorStyle.Render("│")
+			parts = append(parts, sep)
+			totalW++
+		}
+	}
+
+	return strings.Join(parts, "")
 }
 
 // overlayFloating renders a floating window on top of the base view.
@@ -347,7 +430,7 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	if m.prefix {
-		help := m.prefixLabel + ": d detach  c new  m shell  x kill  r rename  n/p nav  f full/float  g grid  h/l move  t tmux  w sessions  q close  1-9 jump"
+		help := m.prefixLabel + ": d detach  c new  T tab  x kill  X close-tab  r rename  n/p nav  f full  g grid  Shift+←→ tabs"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 

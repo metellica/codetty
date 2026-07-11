@@ -325,6 +325,9 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 			m.sessions = append(m.sessions, sess)
 			m.order = append(m.order, evt.Session)
 		}
+		// Sync tab info from daemon
+		m.syncTabInfo(sess, evt.Info)
+
 		if m.focusTarget != "" && evt.Session == m.focusTarget {
 			m.selected = m.visibleIndexByName(evt.Session)
 			m.focusTarget = ""
@@ -349,12 +352,31 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 			}
 		}
 
+	case "tab_created", "tab_closed", "tab_switched":
+		if sess := m.sessionByName(evt.Session); sess != nil {
+			m.syncTabInfo(sess, evt.Info)
+			// On tab switch, invalidate the render cache so new tab content shows
+			sess.invalidateCache()
+		}
+
 	case "exited":
 		if sess := m.sessionByName(evt.Session); sess != nil {
 			sess.Exited = true
 			sess.ExitCode = evt.ExitCode
 		}
 		m.removeSession(evt.Session)
+	}
+}
+
+// syncTabInfo updates a tuiSession's tab list from daemon SessionInfo.
+func (m *tuiModel) syncTabInfo(sess *tuiSession, info daemon.SessionInfo) {
+	if len(info.Tabs) > 0 {
+		tabs := make([]tuiTab, len(info.Tabs))
+		for i, t := range info.Tabs {
+			tabs[i] = tuiTab{Name: t.Name, Command: t.Command}
+		}
+		sess.Tabs = tabs
+		sess.ActiveTab = info.ActiveTab
 	}
 }
 
@@ -730,4 +752,18 @@ func (m *tuiModel) focusedContentSize() (int, int) {
 		contentH = 1
 	}
 	return contentW, contentH
+}
+
+// switchTab switches the active tab in a session by delta (-1 or +1).
+func (m *tuiModel) switchTab(sess *tuiSession, delta int) {
+	if len(sess.Tabs) <= 1 || m.conn == nil {
+		return
+	}
+	newIdx := sess.ActiveTab + delta
+	if newIdx < 0 {
+		newIdx = len(sess.Tabs) - 1
+	} else if newIdx >= len(sess.Tabs) {
+		newIdx = 0
+	}
+	m.conn.SwitchTab(sess.Name, newIdx)
 }

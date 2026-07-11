@@ -87,6 +87,21 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.closeFloatingFocusNext()
 			return nil
 		}
+		// Tab switching in floating mode
+		if msg.Type == tea.KeyShiftLeft || msg.Type == tea.KeyShiftRight {
+			ordered := m.orderedSessions()
+			if m.floatingIdx < len(ordered) {
+				sess := ordered[m.floatingIdx]
+				if len(sess.Tabs) > 1 {
+					delta := 1
+					if msg.Type == tea.KeyShiftLeft {
+						delta = -1
+					}
+					m.switchTab(sess, delta)
+					return nil
+				}
+			}
+		}
 		m.forwardKeyTo(msg, m.floatingIdx)
 		return nil
 	}
@@ -113,6 +128,19 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		if m.mode == modeFocusBig && m.inputFocus >= 0 && m.inputFocus != m.selected {
 			m.openFloating(m.inputFocus)
+			return nil
+		}
+	}
+
+	// Tab switching: Shift+Left/Right when focused session has multiple tabs
+	if msg.Type == tea.KeyShiftLeft || msg.Type == tea.KeyShiftRight {
+		sess := m.focusedSession()
+		if sess != nil && len(sess.Tabs) > 1 {
+			delta := 1
+			if msg.Type == tea.KeyShiftLeft {
+				delta = -1
+			}
+			m.switchTab(sess, delta)
 			return nil
 		}
 	}
@@ -233,6 +261,12 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 				m.conn.KillSession(sess.Name, true)
 			}
 			return nil
+		case 'X':
+			// Close the active tab (if multiple tabs exist)
+			if sess := m.focusedSession(); sess != nil && len(sess.Tabs) > 1 && m.conn != nil {
+				m.conn.CloseTab(sess.Name, sess.ActiveTab)
+			}
+			return nil
 		case 'c':
 			if daemon.IsTmuxAvailable() {
 				m.createChooser = true
@@ -325,6 +359,12 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		case 't':
 			m.openTmuxPicker()
+			return nil
+		case 'T':
+			// Create a new tab in the focused session
+			if sess := m.focusedSession(); sess != nil && sess.Type == "native" && m.conn != nil {
+				m.conn.CreateTab(sess.Name, "", nil, "", nil)
+			}
 			return nil
 		case 'w':
 			m.openSessionManager()

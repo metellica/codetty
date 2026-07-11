@@ -26,6 +26,9 @@ const (
 	FrameKillSession   FrameType = 0x14 // C→S: JSON kill session request
 	FrameRenameSession FrameType = 0x15 // C→S: JSON rename session request
 	FrameRefreshTmux   FrameType = 0x16 // C→S: request tmux session refresh (no payload)
+	FrameCreateTab     FrameType = 0x17 // C→S: JSON create tab request
+	FrameCloseTab      FrameType = 0x18 // C→S: JSON close tab request
+	FrameSwitchTab     FrameType = 0x19 // C→S: JSON switch tab request
 )
 
 // Action identifies the requested operation in a Request frame.
@@ -39,6 +42,7 @@ const (
 	ActionKillServer   Action = "kill_server"
 	ActionSubscribeAll Action = "subscribe_all"
 	ActionRefreshTmux  Action = "refresh_tmux"
+	ActionCreateTab    Action = "create_tab"
 )
 
 // Request is the JSON payload for FrameRequest.
@@ -53,6 +57,7 @@ type Request struct {
 	Type       string   `json:"type,omitempty"`         // "native" or "tmux"
 	TmuxTarget string   `json:"tmux_target,omitempty"`  // tmux session name (when Type=="tmux")
 	NoAttach   bool     `json:"no_attach,omitempty"`    // create session but don't start attached client
+	TabName    string   `json:"tab_name,omitempty"`     // tab name for create_tab action
 }
 
 // Response is the JSON payload for FrameResponse.
@@ -69,8 +74,16 @@ type SessionInfo struct {
 	Command    string `json:"command"`
 	Type       string `json:"type,omitempty"`
 	TmuxTarget string `json:"tmux_target,omitempty"` // tmux session name (when Type=="tmux")
+	Tabs       []TabInfo `json:"tabs,omitempty"`      // tabs within this session (native only)
+	ActiveTab  int    `json:"active_tab,omitempty"`   // index of the active tab
 	Attached   int    `json:"attached"`
 	CreatedAt  string `json:"created_at"`
+}
+
+// TabInfo describes a single tab within a session.
+type TabInfo struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
 }
 
 // ResizePayload for FrameResize.
@@ -122,6 +135,36 @@ type KillSessionRequest struct {
 type RenameSessionRequest struct {
 	OldName string `json:"old_name"`
 	NewName string `json:"new_name"`
+}
+
+// CreateTabRequest is the payload for FrameCreateTab.
+type CreateTabRequest struct {
+	Session string   `json:"session"`          // session to add the tab to
+	Name    string   `json:"name,omitempty"`   // tab name (auto-generated if empty)
+	Command []string `json:"command,omitempty"` // command to run (default shell if empty)
+	Dir     string   `json:"dir,omitempty"`    // working directory
+	Env     []string `json:"env,omitempty"`    // environment variables
+}
+
+// CloseTabRequest is the payload for FrameCloseTab.
+type CloseTabRequest struct {
+	Session string `json:"session"` // session name
+	Index   int    `json:"index"`   // tab index to close
+}
+
+// SwitchTabRequest is the payload for FrameSwitchTab.
+type SwitchTabRequest struct {
+	Session string `json:"session"` // session name
+	Index   int    `json:"index"`   // tab index to switch to
+}
+
+// TabEvent describes a tab lifecycle change (sent via FrameSessionEvent).
+type TabEvent struct {
+	Type      string  `json:"type"`               // "tab_created", "tab_closed", "tab_switched"
+	Session   string  `json:"session"`            // session name
+	TabIndex  int     `json:"tab_index"`          // affected tab index
+	TabName   string  `json:"tab_name,omitempty"` // tab name
+	ActiveTab int     `json:"active_tab"`         // new active tab index
 }
 
 // EncodeTaggedOutput prepends session name length + name to output data.

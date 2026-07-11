@@ -129,6 +129,24 @@ func (s *Subscriber) Run(srv *Server) {
 				srv.renameSessionForSubscriber(req)
 			}
 
+		case FrameCreateTab:
+			var req CreateTabRequest
+			if json.Unmarshal(payload, &req) == nil {
+				srv.createTabForSubscriber(s, req)
+			}
+
+		case FrameCloseTab:
+			var req CloseTabRequest
+			if json.Unmarshal(payload, &req) == nil {
+				srv.closeTabForSubscriber(s, req)
+			}
+
+		case FrameSwitchTab:
+			var req SwitchTabRequest
+			if json.Unmarshal(payload, &req) == nil {
+				srv.switchTabForSubscriber(s, req)
+			}
+
 		case FrameRefreshTmux:
 			srv.DiscoverAndAttachTmux()
 

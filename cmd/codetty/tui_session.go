@@ -31,6 +31,10 @@ type tuiSession struct {
 	CreatedAt string
 	Temporary bool // created via Ctrl+A m, killed on floating close
 
+	// Tab support
+	Tabs      []tuiTab // tabs within this session (native only)
+	ActiveTab int      // index of the currently active tab
+
 	term vt10x.Terminal
 	mu   sync.Mutex
 
@@ -53,6 +57,12 @@ type tuiSession struct {
 	dimStale  bool
 }
 
+// tuiTab represents a tab entry for display in the TUI.
+type tuiTab struct {
+	Name    string
+	Command string
+}
+
 func newTUISession(name, command string, cols, rows uint16) *tuiSession {
 	term := vt10x.New(vt10x.WithSize(int(cols), int(rows)), vt10x.WithWriter(io.Discard))
 	return &tuiSession{
@@ -69,6 +79,15 @@ func (s *tuiSession) WriteOutput(data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.term.Write(data)
+	s.dimStale = true
+}
+
+// invalidateCache forces a full re-render on the next frame.
+func (s *tuiSession) invalidateCache() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lineValid = nil
+	s.lineCache = nil
 	s.dimStale = true
 }
 
