@@ -16,9 +16,10 @@ type SessionsConfig struct {
 	Session  []SessionDef               `toml:"session"`  // session definitions
 }
 
-// SessionTemplate defines a reusable set of windows for tmux sessions.
+// SessionTemplate defines a reusable set of windows/tabs.
 type SessionTemplate struct {
-	Window []WindowDef `toml:"window"`
+	Window []WindowDef `toml:"window"` // for tmux sessions
+	Tab    []TabDef    `toml:"tab"`    // for native sessions
 }
 
 // TabDef defines a tab within a native session.
@@ -170,6 +171,16 @@ func (cfg *SessionsConfig) Validate() error {
 			}
 			winNames[w.Name] = true
 		}
+		tabNames := make(map[string]bool)
+		for _, t := range tmpl.Tab {
+			if t.Name == "" {
+				return fmt.Errorf("template %q: tab with empty name", name)
+			}
+			if tabNames[t.Name] {
+				return fmt.Errorf("template %q: duplicate tab name %q", name, t.Name)
+			}
+			tabNames[t.Name] = true
+		}
 	}
 
 	return nil
@@ -210,8 +221,40 @@ func (cfg *SessionsConfig) resolveSession(sd SessionDef, configDir string) (Reso
 	}
 
 	if rs.Type == "native" {
-		// Resolve tabs for native sessions.
-		for _, tab := range sd.Tab {
+		// Resolve tabs: start from template if specified, then apply inline tabs.
+		var baseTabs []TabDef
+
+		if sd.Template != "" {
+			tmpl := cfg.Template[sd.Template]
+			baseTabs = make([]TabDef, len(tmpl.Tab))
+			copy(baseTabs, tmpl.Tab)
+		}
+
+		// Inline tabs override or append to template tabs (same logic as tmux windows).
+		for _, it := range sd.Tab {
+			found := false
+			for i, bt := range baseTabs {
+				if bt.Name == it.Name {
+					if len(it.Command) > 0 {
+						baseTabs[i].Command = it.Command
+					}
+					if it.Dir != "" {
+						baseTabs[i].Dir = it.Dir
+					}
+					if it.Env != nil {
+						baseTabs[i].Env = it.Env
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				baseTabs = append(baseTabs, it)
+			}
+		}
+
+		// Resolve each tab
+		for _, tab := range baseTabs {
 			rt := ResolvedTab{
 				Name:    tab.Name,
 				Command: tab.Command,
