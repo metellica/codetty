@@ -585,6 +585,7 @@ func (s *Server) handleSubscribeAll(conn net.Conn, req Request) {
 }
 
 func (s *Server) watchSession(sess *DaemonSession) {
+	sess.setTabsChangedCallback(s.handleTabsAutoChanged)
 	<-sess.doneCh
 
 	notif := Notification{Event: "session_exited", Session: sess.Name, ExitCode: sess.exitCode}
@@ -604,6 +605,31 @@ func (s *Server) watchSession(sess *DaemonSession) {
 
 	if remaining == 0 {
 		go s.Stop()
+	}
+}
+
+// handleTabsAutoChanged broadcasts tab list changes that originate inside
+// the daemon (auto-close of an exited shell tab, shell respawn in a tab
+// whose command exited) rather than from a client request.
+func (s *Server) handleTabsAutoChanged(sess *DaemonSession, event string) {
+	s.notifySubscribers(SessionEvent{
+		Type:    event,
+		Session: sess.Name,
+		Info:    sess.Info(),
+	})
+
+	// The active tab may have changed (auto-close): send a fresh snapshot
+	// so clients re-render the newly active tab.
+	if event == "tab_closed" {
+		snap := sess.Screen.Snapshot()
+		if len(snap) > 0 {
+			s.mu.Lock()
+			subs := append([]*Subscriber(nil), s.subscribers...)
+			s.mu.Unlock()
+			for _, sub := range subs {
+				sub.SendTaggedOutput(sess.Name, snap)
+			}
+		}
 	}
 }
 

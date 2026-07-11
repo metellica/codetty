@@ -174,8 +174,8 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 			sess.Tabs = append(sess.Tabs, tab)
 
 			// Start read/wait loops for recovered tabs
-			go sess.readLoopForTab(tab)
-			go sess.waitLoopForTab(tab)
+			go sess.readLoopForTab(tab, term)
+			go sess.waitLoopForTab(tab, term)
 		}
 
 		if len(sess.Tabs) > 0 {

@@ -211,7 +211,7 @@ func TestIntegration_SessionExitNotification(t *testing.T) {
 	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{
 		Action:  daemon.ActionNewSession,
 		Session: "short",
-		Command: []string{"echo", "bye"},
+		Command: []string{"sh", "-c", "echo bye"},
 		Cols:    80,
 		Rows:    24,
 	}))
