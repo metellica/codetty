@@ -15,8 +15,8 @@ const (
 	tuiSidePanelContentThreshold = 6
 )
 
-// sidePanelTitleColor is a light green used for all side panel title bars.
-var sidePanelTitleColor = lipgloss.Color("78") // light green
+// sidePanelTitleColor is a muted teal used for all side panel title bars.
+var sidePanelTitleColor = lipgloss.Color("#7aa4a1") // muted teal
 
 // Agent state accent colors: blocked demands attention, working is a hint,
 // done marks a finished run awaiting review.
@@ -467,7 +467,7 @@ func renderTabBar(tabs []tuiTab, activeIdx, maxW int, muted bool) string {
 	activeStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("232")).
-		Background(lipgloss.Color("#efb58e"))
+		Background(lipgloss.Color("#b8a58c"))
 
 	inactiveStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("250")).
