@@ -404,12 +404,16 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			m.sel = textSelection{}
 		} else if m.sel.pending {
 			m.sel.pending = false
-			if mouseOn {
+			// Don't forward clicks on the tab bar to PTY
+			if mouseOn && !(len(sess.Tabs) > 1 && m.sel.startY == m.height-1) {
 				m.forwardClickToPTY(m.sel.startX, m.sel.startY)
 			}
 			m.sel = textSelection{}
 		} else {
-			m.forwardMouseToPTY(msg)
+			// Don't forward release events on the tab bar line
+			if !(len(sess.Tabs) > 1 && msg.Y == m.height-1) {
+				m.forwardMouseToPTY(msg)
+			}
 		}
 	}
 	return nil
@@ -518,6 +522,16 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 		if msg.Button == tea.MouseButtonLeft {
 			if inside {
+				// Check for tab bar click in floating window (last line of content)
+				if len(sess.Tabs) > 1 && localY == ch-1 {
+					if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, cw, localX); tabIdx >= 0 {
+						if m.conn != nil {
+							m.conn.SwitchTab(sess.Name, tabIdx)
+						}
+						m.sel = textSelection{}
+						return nil
+					}
+				}
 				// Always start pending selection; on release we decide
 				// whether to copy text or forward click to PTY.
 				m.sel = textSelection{
