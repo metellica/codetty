@@ -106,6 +106,11 @@ type tuiModel struct {
 	// Panel drag-to-reorder state
 	drag panelDrag
 
+	// mouseFwdDown is true while a left-button press has been forwarded to
+	// a mouse-enabled app in the big panel, so the matching drag/release
+	// events are forwarded too (and spurious releases are not).
+	mouseFwdDown bool
+
 	// Hidden sessions (still running but not displayed)
 	hidden map[string]bool
 

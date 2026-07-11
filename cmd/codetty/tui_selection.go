@@ -138,9 +138,11 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					localX := msg.X - r.contentX
 					if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, r.contentW, localX); tabIdx >= 0 {
 						m.requestTabSwitch(sess.Name, tabIdx)
-						m.sel = textSelection{}
-						return nil
 					}
+					// The tab bar row belongs to the TUI, not the app:
+					// consume the click either way.
+					m.sel = textSelection{}
+					return nil
 				}
 			}
 
@@ -154,8 +156,17 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 						m.sel = textSelection{}
 						return nil
 					}
-					// Clicking the big panel: start selection
+					// Clicking the big panel. If the app handles its own
+					// mouse (tmux, vim, copilot, ...), forward the real
+					// press so in-app clicks and drags work; otherwise
+					// start a text selection.
 					sess := sessions[r.sessionIdx]
+					if sess.MouseEnabled() {
+						m.forwardMouseToSession(sess.Name, msg, localX, localY)
+						m.mouseFwdDown = true
+						m.sel = textSelection{}
+						return nil
+					}
 					m.sel = textSelection{
 						pending: true,
 						session: sess.Name,
@@ -362,6 +373,21 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				}
 			}
 			m.sel = textSelection{}
+		} else if m.mouseFwdDown && (m.mode == modeFocusBig || m.mode == modeList) {
+			// The press was forwarded directly to a mouse-enabled app, so
+			// forward the matching release too.
+			m.mouseFwdDown = false
+			if sess := m.selectedSession(); sess != nil && sess.MouseEnabled() {
+				for _, r := range m.panelRegions() {
+					if r.sessionIdx != m.selected {
+						continue
+					}
+					localX := clamp(msg.X-r.contentX, 0, r.contentW-1)
+					localY := clamp(msg.Y-r.contentY, 0, r.contentH-1)
+					m.forwardMouseToSession(sess.Name, msg, localX, localY)
+					break
+				}
+			}
 		}
 	}
 	return nil
@@ -385,6 +411,15 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 					m.sel = textSelection{}
 					return nil
 				}
+			}
+
+			// Mouse-enabled app: forward the real press so drags and
+			// press/release pairs reach the app; selection is bypassed.
+			if mouseOn {
+				m.forwardMouseToPTY(msg)
+				m.mouseFwdDown = true
+				m.sel = textSelection{}
+				return nil
 			}
 
 			m.sel = textSelection{
@@ -449,6 +484,7 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			m.sel = textSelection{}
 		} else {
+			m.mouseFwdDown = false
 			// Don't forward release events on the tab bar line
 			if !(len(sess.Tabs) > 1 && msg.Y == m.height-1) {
 				m.forwardMouseToPTY(msg)

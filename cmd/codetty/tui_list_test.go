@@ -3,7 +3,9 @@ package main
 import (
 	"net"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -452,5 +454,111 @@ func TestListMode_MouseClickHeaderDoesNotSwitchTab(t *testing.T) {
 	}
 	if m.pendingTabAck["beta"] {
 		t.Fatal("header click must not request a tab switch")
+	}
+}
+
+// pipeCapture drains a net.Pipe end and accumulates the bytes for assertions.
+type pipeCapture struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (c *pipeCapture) drain(conn net.Conn) {
+	buf := make([]byte, 1024)
+	for {
+		n, err := conn.Read(buf)
+		c.mu.Lock()
+		c.buf = append(c.buf, buf[:n]...)
+		c.mu.Unlock()
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (c *pipeCapture) contains(sub string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Contains(string(c.buf), sub)
+}
+
+func (c *pipeCapture) waitFor(t *testing.T, sub string) {
+	t.Helper()
+	for i := 0; i < 100; i++ {
+		if c.contains(sub) {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	t.Fatalf("pipe output %q does not contain %q", c.buf, sub)
+}
+
+func TestListMode_BigPanelPressForwardedToMouseApp(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	cap := &pipeCapture{}
+	go cap.drain(server)
+
+	m := newListTestModel()
+	m.conn = &daemonConn{conn: client}
+	// Enable mouse reporting on the big-panel session (like tmux/copilot).
+	m.sessions[0].WriteOutput([]byte("\x1b[?1003h\x1b[?1006h"))
+
+	press := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: 4}
+	m.handleMouse(press)
+
+	if m.sel.pending || m.sel.active {
+		t.Fatal("press on mouse-enabled app must not start a text selection")
+	}
+	if !m.mouseFwdDown {
+		t.Fatal("mouseFwdDown should be set after forwarding the press")
+	}
+	// contentX=1, contentY=2 → local (4,2) → SGR 1-based (5,3), press = 'M'.
+	cap.waitFor(t, "\x1b[<0;5;3M")
+
+	release := tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 5, Y: 4}
+	m.handleMouse(release)
+
+	if m.mouseFwdDown {
+		t.Fatal("mouseFwdDown should be cleared after the release")
+	}
+	cap.waitFor(t, "\x1b[<0;5;3m")
+}
+
+func TestListMode_BigPanelPressStartsSelectionWithoutMouseApp(t *testing.T) {
+	m := newListTestModel()
+
+	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: 4})
+
+	if !m.sel.pending {
+		t.Fatal("press on a plain shell should start a pending text selection")
+	}
+	if m.mouseFwdDown {
+		t.Fatal("mouseFwdDown must not be set for plain shells")
+	}
+}
+
+func TestListMode_SidebarClickDoesNotForwardRelease(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	cap := &pipeCapture{}
+	go cap.drain(server)
+
+	m := newListTestModel()
+	m.conn = &daemonConn{conn: client}
+	m.sessions[0].WriteOutput([]byte("\x1b[?1003h\x1b[?1006h"))
+	mainW, _ := m.listLayoutWidths()
+
+	// Click a sidebar row, then release: nothing should reach the PTY.
+	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: mainW + 2, Y: 3})
+	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: mainW + 2, Y: 3})
+
+	time.Sleep(20 * time.Millisecond)
+	if cap.contains("\x1b[<") {
+		t.Fatal("sidebar click must not forward mouse events to the PTY")
 	}
 }
