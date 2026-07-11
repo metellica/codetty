@@ -258,6 +258,13 @@ func TestIntegration_KillServer(t *testing.T) {
 	if err == nil {
 		t.Error("server should be stopped after kill-server")
 	}
+
+	// Done() must close so the daemon process can exit.
+	select {
+	case <-srv.Done():
+	case <-time.After(3 * time.Second):
+		t.Error("srv.Done() not closed after kill-server; daemon process would linger")
+	}
 }
 
 func containsStr(data []byte, s string) bool {

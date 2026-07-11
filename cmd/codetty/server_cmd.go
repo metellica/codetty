@@ -30,9 +30,12 @@ func cmdServer(args []string) {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	<-sigCh
-
-	srv.Stop()
+	select {
+	case <-sigCh:
+		srv.Stop()
+	case <-srv.Done():
+		// Stopped internally (kill-server or auto-exit): just exit.
+	}
 }
 
 // cmdServerUpgrade recovers daemon state from a previous instance.
@@ -50,7 +53,10 @@ func cmdServerUpgrade(stateFile string) {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	<-sigCh
-
-	srv.Stop()
+	select {
+	case <-sigCh:
+		srv.Stop()
+	case <-srv.Done():
+		// Stopped internally (kill-server or auto-exit): just exit.
+	}
 }

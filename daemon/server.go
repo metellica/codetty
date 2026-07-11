@@ -20,6 +20,7 @@ type Server struct {
 	subscribers []*Subscriber
 	mu          sync.Mutex
 	done        chan struct{}
+	stopped     chan struct{}
 	wg          sync.WaitGroup
 }
 
@@ -29,6 +30,7 @@ func NewServer(sockPath string) *Server {
 		sockPath: sockPath,
 		sessions: make(map[string]*DaemonSession),
 		done:     make(chan struct{}),
+		stopped:  make(chan struct{}),
 	}
 }
 
@@ -88,6 +90,13 @@ func (s *Server) agentPollLoop() {
 }
 
 // Stop shuts down the server, killing all sessions and cleaning up.
+// Done returns a channel closed once the server has fully shut down (via
+// kill-server, auto-exit, or Stop). The daemon process waits on it to exit.
+func (s *Server) Done() <-chan struct{} {
+	return s.stopped
+}
+
+// Stop shuts down the server, killing all sessions.
 func (s *Server) Stop() {
 	select {
 	case <-s.done:
@@ -108,6 +117,7 @@ func (s *Server) Stop() {
 	s.mu.Unlock()
 
 	os.Remove(s.sockPath)
+	close(s.stopped)
 }
 
 func (s *Server) acceptLoop() {
