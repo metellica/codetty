@@ -119,8 +119,8 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				if len(sess.Tabs) <= 1 {
 					continue
 				}
-				// Tab bar is on the last line of the content area
-				tabBarY := r.contentY + r.contentH - 1
+				// Tab bar is on the info line below the content area
+				tabBarY := r.contentY + r.contentH
 				if msg.Y == tabBarY && msg.X >= r.contentX && msg.X < r.contentX+r.contentW {
 					localX := msg.X - r.contentX
 					if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, r.contentW, localX); tabIdx >= 0 {
