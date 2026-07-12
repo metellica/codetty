@@ -74,3 +74,23 @@ func TestScreenMirror_TailTextEmpty(t *testing.T) {
 		t.Errorf("expected empty tail before writes, got %q", got)
 	}
 }
+
+func TestScreenMirror_SnapshotWideCharsNoExtraSpaces(t *testing.T) {
+	// Regression: snapshot of wide (CJK) chars must not insert extra spaces
+	// between characters when replayed into a new terminal.
+	sm := NewScreenMirror(40, 4)
+	sm.Write([]byte("你好世界"))
+
+	snap := sm.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("expected non-empty snapshot")
+	}
+
+	// Replay into a fresh ScreenMirror and verify text is intact.
+	sm2 := NewScreenMirror(40, 4)
+	sm2.Write(snap)
+	tail := sm2.TailText(0)
+	if !strings.Contains(tail, "你好世界") {
+		t.Errorf("wide chars corrupted after snapshot replay: %q", tail)
+	}
+}

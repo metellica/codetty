@@ -131,7 +131,7 @@ func (s *ScreenMirror) Snapshot() []byte {
 		for x := 0; x < cols; x++ {
 			g := s.term.Cell(x, y)
 			if g.Char == 0 {
-				g.Char = ' '
+				continue // skip wide-char continuation cell
 			}
 
 			if g.FG != prevFG || g.BG != prevBG || g.Mode != prevMode || (needReset && (g.FG != vt10x.DefaultFG || g.BG != vt10x.DefaultBG || g.Mode != 0)) {
