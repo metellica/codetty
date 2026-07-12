@@ -17,11 +17,21 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("231")).
 			Background(lipgloss.Color("238"))
-	// Selected session: a subtle low-contrast background instead of a marker.
-	listSelectedStyle = lipgloss.NewStyle().Background(lipgloss.Color("236"))
-	listExitedStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	listIdleStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	// Selected session: a low-contrast selection highlight (VS Code Dark+
+	// selection blue), visibly distinct from the gray cursor bar.
+	listSelectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("254")).
+				Background(lipgloss.Color("#264f78"))
+	listExitedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	listIdleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	// listAccentStyle colors the left accent border for the active session,
+	// similar to VS Code's focus indicator.
+	listAccentStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#007fd4"))
 )
+
+// listAccentChar is the left accent indicator for the active session.
+const listAccentChar = "▎"
 
 // listLayoutWidths returns the big panel and sidebar widths for list mode.
 func (m *tuiModel) listLayoutWidths() (mainW, sideW int) {
@@ -49,24 +59,54 @@ type listLine struct {
 	header  bool // true for the session name row (vs. an agent detail row)
 }
 
-// buildListLines renders sidebar rows: one header per session followed by
-// one row per agent-bearing tab (a session can have 0..N agents).
+// buildListLines renders sidebar rows as a tree: one header per session
+// (with expand/collapse indicator) followed by tab rows when expanded.
+// Agent tabs get a special ◆ indicator.
 func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine {
 	var lines []listLine
 	for i, sess := range sessions {
-		label := fmt.Sprintf(" %d %s", i+1, sess.Name)
+		isSelected := i == m.selected
+		contentW := innerW
+		if isSelected {
+			contentW = innerW - 1 // reserve 1 column for accent bar
+			if contentW < 1 {
+				contentW = 1
+			}
+		}
+
+		collapsed := m.listCollapsed[sess.Name]
+		// Determine if session has agents to show in tree.
+		hasAgent := false
+		for _, tab := range sess.Tabs {
+			if tab.Agent != "" {
+				hasAgent = true
+				break
+			}
+		}
+		arrow := " "
+		if hasAgent {
+			arrow = "▾"
+			if collapsed {
+				arrow = "▸"
+			}
+		}
+
+		label := fmt.Sprintf("%s %d %s", arrow, i+1, sess.Name)
+		if isSelected {
+			label = fmt.Sprintf("%s%d %s", arrow, i+1, sess.Name)
+		}
 		if sess.Exited {
 			label += " (exited)"
 		}
-		if lipgloss.Width(label) > innerW {
-			label = ansi.Truncate(label, innerW, "…")
+		if lipgloss.Width(label) > contentW {
+			label = ansi.Truncate(label, contentW, "…")
 		}
-		pad := strings.Repeat(" ", max(0, innerW-lipgloss.Width(label)))
+		pad := strings.Repeat(" ", max(0, contentW-lipgloss.Width(label)))
 		var text string
 		switch {
 		case m.listFocus && i == m.listCursor && m.listCursorTab < 0:
 			text = listCursorStyle.Render(label + pad)
-		case i == m.selected:
+		case isSelected:
 			style := listSelectedStyle
 			if sess.Exited {
 				style = style.Foreground(lipgloss.Color("243"))
@@ -77,26 +117,37 @@ func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine
 		default:
 			text = label
 		}
+		if isSelected {
+			text = listAccentStyle.Render(listAccentChar) + text
+		}
 		lines = append(lines, listLine{text: text, sessIdx: i, tabIdx: -1, header: true})
 
+		// Show agent children when expanded.
+		if collapsed || !hasAgent {
+			continue
+		}
 		for ti, tab := range sess.Tabs {
 			if tab.Agent == "" {
 				continue
 			}
 			state := effectiveAgentState(tab)
-			badge := agentBadge(state)
-			if badge == "" {
-				badge = "·"
-			}
 			word := state
 			if word == "" {
 				word = "idle"
 			}
-			agentLabel := fmt.Sprintf("    %s %s %s", badge, tab.Agent, word)
-			if lipgloss.Width(agentLabel) > innerW {
-				agentLabel = ansi.Truncate(agentLabel, innerW, "…")
+
+			indent := "    "
+			if isSelected {
+				indent = "   " // 1 char less for accent bar
 			}
-			style := listIdleStyle
+			tabLabel := fmt.Sprintf("%s◆ %s %s", indent, tab.Agent, word)
+
+			if lipgloss.Width(tabLabel) > contentW {
+				tabLabel = ansi.Truncate(tabLabel, contentW, "…")
+			}
+
+			// Style based on agent state
+			var style lipgloss.Style
 			switch state {
 			case "blocked":
 				style = lipgloss.NewStyle().Bold(true).Foreground(agentBlockedColor)
@@ -104,11 +155,13 @@ func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine
 				style = lipgloss.NewStyle().Foreground(agentWorkingColor)
 			case "done":
 				style = lipgloss.NewStyle().Bold(true).Foreground(agentDoneColor)
+			default:
+				style = listIdleStyle
 			}
-			text := style.Render(agentLabel)
-			if m.listFocus && i == m.listCursor && ti == m.listCursorTab {
-				agentPad := strings.Repeat(" ", max(0, innerW-lipgloss.Width(agentLabel)))
-				text = listCursorStyle.Render(agentLabel + agentPad)
+
+			text := style.Render(tabLabel)
+			if isSelected {
+				text = listAccentStyle.Render(listAccentChar) + text
 			}
 			lines = append(lines, listLine{text: text, sessIdx: i, tabIdx: ti})
 		}
@@ -116,7 +169,7 @@ func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine
 	return lines
 }
 
-// listView renders list mode: big panel on the left, session list sidebar
+// listView renders list mode: session tree sidebar on the left, big panel
 // on the right.
 func (m *tuiModel) listView() string {
 	sessions := m.visibleSessions()
@@ -141,7 +194,7 @@ func (m *tuiModel) listView() string {
 	mainPanel := m.renderPanel(primary, mainTitle, mainW, availH, !m.listFocus)
 	sidebar := m.renderSessionList(sessions, sideW, availH)
 
-	row := lipgloss.JoinHorizontal(lipgloss.Top, mainPanel, sidebar)
+	row := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainPanel)
 	return lipgloss.JoinVertical(lipgloss.Left, row, status)
 }
 
@@ -160,7 +213,7 @@ func (m *tuiModel) renderSessionList(sessions []*tuiSession, w, h int) string {
 
 	title := " Sessions"
 	if m.listFocus {
-		title += "  ↑/↓ Enter"
+		title += " ↑↓←→"
 	}
 	if lipgloss.Width(title) > innerW {
 		title = ansi.Truncate(title, innerW, "…")
@@ -213,16 +266,11 @@ type listPos struct {
 }
 
 // listPositions returns the navigable sidebar entries in display order:
-// each session header followed by its agent rows.
-func listPositions(sessions []*tuiSession) []listPos {
+// only session headers (agent rows are display-only, not selectable).
+func (m *tuiModel) listPositions(sessions []*tuiSession) []listPos {
 	var pos []listPos
-	for i, sess := range sessions {
+	for i := range sessions {
 		pos = append(pos, listPos{sessIdx: i, tabIdx: -1})
-		for ti, tab := range sess.Tabs {
-			if tab.Agent != "" {
-				pos = append(pos, listPos{sessIdx: i, tabIdx: ti})
-			}
-		}
 	}
 	return pos
 }
@@ -245,26 +293,34 @@ func (m *tuiModel) listCursorPos(positions []listPos) int {
 }
 
 // listShiftTabPositions returns the Shift+Tab traversal order for the
-// sidebar: agents needing attention first (blocked, then done), followed
-// by the session header rows.
+// sidebar: sessions with blocked agents first, then done, then the rest.
 func (m *tuiModel) listShiftTabPositions() []listPos {
 	sessions := m.visibleSessions()
-	var blocked, done, headers []listPos
+	var blocked, done, rest []listPos
 	for i, sess := range sessions {
-		headers = append(headers, listPos{sessIdx: i, tabIdx: -1})
-		for ti, tab := range sess.Tabs {
+		hasBlocked, hasDone := false, false
+		for _, tab := range sess.Tabs {
 			if tab.Agent == "" {
 				continue
 			}
-			switch effectiveAgentState(tab) {
-			case "blocked":
-				blocked = append(blocked, listPos{sessIdx: i, tabIdx: ti})
-			case "done":
-				done = append(done, listPos{sessIdx: i, tabIdx: ti})
+			state := effectiveAgentState(tab)
+			if state == "blocked" {
+				hasBlocked = true
+			} else if state == "done" {
+				hasDone = true
 			}
 		}
+		switch {
+		case hasBlocked:
+			blocked = append(blocked, listPos{sessIdx: i, tabIdx: -1})
+		case hasDone:
+			done = append(done, listPos{sessIdx: i, tabIdx: -1})
+		default:
+			rest = append(rest, listPos{sessIdx: i, tabIdx: -1})
+		}
 	}
-	return append(append(blocked, done...), headers...)
+	result := append(blocked, done...)
+	return append(result, rest...)
 }
 
 // handleListKey processes keyboard input while the sidebar has focus.
@@ -281,7 +337,7 @@ func (m *tuiModel) handleListKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	switch msg.Type {
 	case tea.KeyUp, tea.KeyDown:
-		positions := listPositions(sessions)
+		positions := m.listPositions(sessions)
 		pi := m.listCursorPos(positions)
 		if msg.Type == tea.KeyUp {
 			pi = (pi - 1 + len(positions)) % len(positions)
@@ -289,42 +345,72 @@ func (m *tuiModel) handleListKey(msg tea.KeyMsg) tea.Cmd {
 			pi = (pi + 1) % len(positions)
 		}
 		m.listCursor = positions[pi].sessIdx
-		m.listCursorTab = positions[pi].tabIdx
+		m.listCursorTab = -1
+	case tea.KeyLeft:
+		// Collapse agent tree for current session
+		if m.listCursor < n {
+			m.listCollapsed[sessions[m.listCursor].Name] = true
+		}
+	case tea.KeyRight:
+		// Expand agent tree for current session
+		if m.listCursor < n {
+			m.listCollapsed[sessions[m.listCursor].Name] = false
+		}
 	case tea.KeyEnter:
 		m.selected = m.listCursor
 		m.inputFocus = -1
 		m.listFocus = false
-		// Enter on an agent row also activates that agent's tab.
-		if m.listCursorTab >= 0 && m.listCursor < n {
+		// Auto-switch to priority tab: noticed agent > active tab > first.
+		if m.listCursor < n {
 			sess := sessions[m.listCursor]
-			if m.listCursorTab < len(sess.Tabs) && m.listCursorTab != sess.ActiveTab {
-				m.requestTabSwitch(sess.Name, m.listCursorTab)
+			targetTab := sessionPriorityTab(sess)
+			if targetTab >= 0 && targetTab != sess.ActiveTab {
+				m.requestTabSwitch(sess.Name, targetTab)
 			}
 		}
 	case tea.KeyEscape:
 		m.listFocus = false
 	default:
-		// Any other key returns focus to the big panel without forwarding,
-		// so stray typing can't leak into the PTY.
 		m.listFocus = false
 	}
 	return nil
 }
 
+// sessionPriorityTab returns the tab to show when selecting a session.
+// Priority: a) first noticed agent (blocked > done), b) current active tab,
+// c) first tab. Returns -1 if the session has no tabs.
+func sessionPriorityTab(sess *tuiSession) int {
+	for ti, tab := range sess.Tabs {
+		if tab.Agent != "" && effectiveAgentState(tab) == "blocked" {
+			return ti
+		}
+	}
+	for ti, tab := range sess.Tabs {
+		if tab.Agent != "" && effectiveAgentState(tab) == "done" {
+			return ti
+		}
+	}
+	if sess.ActiveTab >= 0 && sess.ActiveTab < len(sess.Tabs) {
+		return sess.ActiveTab
+	}
+	if len(sess.Tabs) > 0 {
+		return 0
+	}
+	return -1
+}
+
 // listHitTest maps a screen coordinate inside the sidebar to a visible
-// session index and, for agent detail rows, the tab index of the clicked
-// agent. Returns (-1, -1) when the position is not on a list entry and
-// tabIdx -1 for session header rows.
+// session index. Returns (-1, -1) when the position is not on a list entry.
 func (m *tuiModel) listHitTest(x, y int) (sessIdx, tabIdx int) {
 	sessions := m.visibleSessions()
 	if len(sessions) == 0 {
 		return -1, -1
 	}
-	mainW, sideW := m.listLayoutWidths()
+	_, sideW := m.listLayoutWidths()
 	availH := m.height - 1 // status bar
 	innerW := sideW - 2
 	innerH := availH - 3
-	localX := x - mainW - 1
+	localX := x - 1 // sidebar is on the left; skip left border
 	localY := y - 2 // top border + title line
 	if localX < 0 || localX >= innerW || localY < 0 || localY >= innerH {
 		return -1, -1

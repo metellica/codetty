@@ -714,8 +714,8 @@ func (m *tuiModel) hitTest(x, y int) int {
 	availH := m.height - statusH
 
 	if m.mode == modeList {
-		mainW, _ := m.listLayoutWidths()
-		if x < mainW && y < availH {
+		_, sideW := m.listLayoutWidths()
+		if x >= sideW && y < availH {
 			return m.selected
 		}
 		idx, _ := m.listHitTest(x, y)

@@ -82,19 +82,20 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
 			// List mode sidebar: clicking an entry switches the big
-			// panel; clicking an agent row also activates that tab.
+			// panel and auto-activates the priority tab.
 			if m.mode == modeList {
-				if mainW, _ := m.listLayoutWidths(); msg.X >= mainW {
-					if idx, tabIdx := m.listHitTest(msg.X, msg.Y); idx >= 0 {
+				if _, sideW := m.listLayoutWidths(); msg.X < sideW {
+					if idx, _ := m.listHitTest(msg.X, msg.Y); idx >= 0 {
 						m.selected = idx
 						m.listCursor = idx
-						m.listCursorTab = tabIdx
+						m.listCursorTab = -1
 						m.inputFocus = -1
 						sessions := m.visibleSessions()
-						if tabIdx >= 0 && idx < len(sessions) {
+						if idx < len(sessions) {
 							sess := sessions[idx]
-							if tabIdx < len(sess.Tabs) && tabIdx != sess.ActiveTab {
-								m.requestTabSwitch(sess.Name, tabIdx)
+							targetTab := sessionPriorityTab(sess)
+							if targetTab >= 0 && targetTab != sess.ActiveTab {
+								m.requestTabSwitch(sess.Name, targetTab)
 							}
 						}
 					}
@@ -228,7 +229,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 			// List mode sidebar: scroll the session list.
 			if m.mode == modeList {
-				if mainW, _ := m.listLayoutWidths(); msg.X >= mainW {
+				if _, sideW := m.listLayoutWidths(); msg.X < sideW {
 					if msg.Button == tea.MouseButtonWheelUp {
 						m.listScroll--
 					} else {
@@ -798,7 +799,7 @@ func (m *tuiModel) panelRegions() []panelRegion {
 // listPanelRegions returns the single big-panel region in list mode; the
 // sidebar is hit-tested separately and never forwards mouse events to a PTY.
 func (m *tuiModel) listPanelRegions(availH int) []panelRegion {
-	mainW, _ := m.listLayoutWidths()
+	mainW, sideW := m.listLayoutWidths()
 	contentW := mainW - 2
 	contentH := availH - 3
 	if contentW < 1 {
@@ -809,7 +810,7 @@ func (m *tuiModel) listPanelRegions(availH int) []panelRegion {
 	}
 	return []panelRegion{{
 		sessionIdx: m.selected,
-		contentX:   1,
+		contentX:   sideW + 1, // sidebar on left + main panel left border
 		contentY:   2,
 		contentW:   contentW,
 		contentH:   contentH,

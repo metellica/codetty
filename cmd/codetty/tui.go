@@ -68,6 +68,7 @@ type tuiModel struct {
 	listCursor    int
 	listCursorTab int
 	listScroll    int
+	listCollapsed map[string]bool // sessions with collapsed tree nodes
 
 	// floatingIdx: index of session shown in floating overlay, -1 means none.
 	floatingIdx int
@@ -177,6 +178,7 @@ func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tui
 		conn:              conn,
 		mode:              modeList,
 		listCursorTab:     -1,
+		listCollapsed:     make(map[string]bool),
 		width:             120,
 		height:            40,
 		inputFocus:        -1,
@@ -289,6 +291,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.listCursor = 0
 		m.listCursorTab = -1
 		m.listScroll = 0
+		m.listCollapsed = make(map[string]bool)
 		m.sel = textSelection{}
 		if prog == nil || m.conn.Subscribe(prog) != nil {
 			return m, tea.Quit

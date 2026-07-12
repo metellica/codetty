@@ -118,15 +118,14 @@ func TestListKey_UpDownTraversesAgentRows(t *testing.T) {
 		{Name: "cp", Agent: "copilot", AgentState: "working"},
 		{Name: "cl", Agent: "claude", AgentState: "blocked"},
 	}
-	// Focus the list at the first header directly (Shift+Tab would now
-	// jump to the blocked agent first).
+	// Focus the list at the first header directly.
 	m.listFocus = true
 	m.listCursor = 0
 	m.listCursorTab = -1
 
-	// Down: alpha → beta → beta/copilot → beta/claude → gamma → wrap alpha.
+	// Agent rows are not selectable. Down: alpha → beta → gamma → wrap alpha.
 	steps := []struct{ sess, tab int }{
-		{1, -1}, {1, 1}, {1, 2}, {2, -1}, {0, -1},
+		{1, -1}, {2, -1}, {0, -1},
 	}
 	for i, want := range steps {
 		m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
@@ -136,18 +135,14 @@ func TestListKey_UpDownTraversesAgentRows(t *testing.T) {
 		}
 	}
 
-	// Up wraps back to gamma then walks agent rows in reverse.
+	// Up wraps back to gamma.
 	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
 	if m.listCursor != 2 || m.listCursorTab != -1 {
 		t.Fatalf("cursor = (%d, %d), want (2, -1)", m.listCursor, m.listCursorTab)
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	if m.listCursor != 1 || m.listCursorTab != 2 {
-		t.Fatalf("cursor = (%d, %d), want (1, 2)", m.listCursor, m.listCursorTab)
-	}
 }
 
-func TestListKey_EnterOnAgentRowActivatesTab(t *testing.T) {
+func TestListKey_EnterOnSessionUsePriorityTab(t *testing.T) {
 	client, server := net.Pipe()
 	defer server.Close()
 	defer client.Close()
@@ -164,15 +159,14 @@ func TestListKey_EnterOnAgentRowActivatesTab(t *testing.T) {
 	m.conn = &daemonConn{conn: client}
 	m.sessions[1].Tabs = []tuiTab{
 		{Name: "sh"},
-		{Name: "cp", Agent: "copilot", AgentState: "working"},
+		{Name: "cp", Agent: "copilot", AgentState: "blocked"},
 	}
 	m.sessions[1].ActiveTab = 0
 
+	// Shift+Tab lands on session with noticed agent (beta has blocked).
 	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
-	m.handleKey(tea.KeyMsg{Type: tea.KeyDown}) // beta header
-	m.handleKey(tea.KeyMsg{Type: tea.KeyDown}) // beta/copilot agent row
-	if m.listCursor != 1 || m.listCursorTab != 1 {
-		t.Fatalf("cursor = (%d, %d), want (1, 1)", m.listCursor, m.listCursorTab)
+	if m.listCursor != 1 || m.listCursorTab != -1 {
+		t.Fatalf("cursor = (%d, %d), want (1, -1)", m.listCursor, m.listCursorTab)
 	}
 	m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 
@@ -182,8 +176,9 @@ func TestListKey_EnterOnAgentRowActivatesTab(t *testing.T) {
 	if m.listFocus {
 		t.Fatal("Enter should drop list focus")
 	}
+	// Priority tab should be the blocked agent (tab 1), not active tab 0.
 	if !m.pendingTabAck["beta"] {
-		t.Fatal("Enter on an agent row should request a tab switch (pendingTabAck not set)")
+		t.Fatal("Enter on session with blocked agent should request a tab switch")
 	}
 }
 
@@ -230,9 +225,10 @@ func TestListMode_ShiftTabPrioritizesAttentionAgents(t *testing.T) {
 		{Name: "cl", Agent: "claude", AgentState: "blocked"},
 	}
 
-	// blocked first, then done, then session headers, then big panel.
+	// Noticed agents are at session level only. Priority: blocked (sess 2)
+	// first, then done (sess 0), then remaining session 1, then big panel.
 	steps := []struct{ sess, tab int }{
-		{2, 0}, {0, 1}, {0, -1}, {1, -1}, {2, -1},
+		{2, -1}, {0, -1}, {1, -1},
 	}
 	for i, want := range steps {
 		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
@@ -277,14 +273,13 @@ func TestListView_DoneMarkerShown(t *testing.T) {
 
 func TestListMode_MouseClickSidebarSwitches(t *testing.T) {
 	m := newListTestModel()
-	mainW, _ := m.listLayoutWidths()
 
-	// Click the third session's header row: sidebar rows start at y=2
-	// (border + title), one line per session (no agent tabs here).
+	// Click the third session's header row: sidebar is on the left,
+	// rows start at y=2 (border + title), one line per session.
 	m.handleMouse(tea.MouseMsg{
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
-		X:      mainW + 2,
+		X:      2,
 		Y:      2 + 2,
 	})
 	if m.selected != 2 {
@@ -349,15 +344,15 @@ func TestListMode_PrefixFEntersAndExitsFullscreen(t *testing.T) {
 func TestListHitTest_ScrolledList(t *testing.T) {
 	m := newListTestModel()
 	m.listScroll = 1
-	mainW, _ := m.listLayoutWidths()
+	_, sideW := m.listLayoutWidths()
 
 	// Row y=2 is the first visible line; with scroll offset 1 it maps to
-	// the second session.
-	if idx, tabIdx := m.listHitTest(mainW+2, 2); idx != 1 || tabIdx != -1 {
+	// the second session. Sidebar is on the left.
+	if idx, tabIdx := m.listHitTest(2, 2); idx != 1 || tabIdx != -1 {
 		t.Fatalf("listHitTest = (%d, %d), want (1, -1)", idx, tabIdx)
 	}
-	// Outside the sidebar content area.
-	if idx, _ := m.listHitTest(mainW-1, 2); idx != -1 {
+	// Outside the sidebar content area (big panel area on the right).
+	if idx, _ := m.listHitTest(sideW+1, 2); idx != -1 {
 		t.Fatalf("listHitTest = %d, want -1 for big panel area", idx)
 	}
 }
@@ -369,21 +364,21 @@ func TestListHitTest_AgentRowReturnsTabIndex(t *testing.T) {
 		{Name: "cp", Agent: "copilot", AgentState: "working"},
 		{Name: "cl", Agent: "claude", AgentState: "blocked"},
 	}
-	mainW, _ := m.listLayoutWidths()
 
-	// Sidebar rows: y=2 alpha, y=3 beta, y=4 copilot(tab 1), y=5 claude(tab 2), y=6 gamma.
-	if idx, tabIdx := m.listHitTest(mainW+2, 3); idx != 1 || tabIdx != -1 {
+	// Sidebar is on left. Only agent tabs shown. Rows: y=2 alpha(sess 0),
+	// y=3 beta(sess 1), y=4 copilot(tab 1), y=5 claude(tab 2), y=6 gamma(sess 2).
+	if idx, tabIdx := m.listHitTest(2, 3); idx != 1 || tabIdx != -1 {
 		t.Fatalf("header row = (%d, %d), want (1, -1)", idx, tabIdx)
 	}
-	if idx, tabIdx := m.listHitTest(mainW+2, 4); idx != 1 || tabIdx != 1 {
-		t.Fatalf("agent row = (%d, %d), want (1, 1)", idx, tabIdx)
+	if idx, tabIdx := m.listHitTest(2, 4); idx != 1 || tabIdx != 1 {
+		t.Fatalf("copilot row = (%d, %d), want (1, 1)", idx, tabIdx)
 	}
-	if idx, tabIdx := m.listHitTest(mainW+2, 5); idx != 1 || tabIdx != 2 {
-		t.Fatalf("agent row = (%d, %d), want (1, 2)", idx, tabIdx)
+	if idx, tabIdx := m.listHitTest(2, 5); idx != 1 || tabIdx != 2 {
+		t.Fatalf("claude row = (%d, %d), want (1, 2)", idx, tabIdx)
 	}
 }
 
-func TestListMode_MouseClickAgentRowActivatesTab(t *testing.T) {
+func TestListMode_MouseClickAgentRowSelectsSession(t *testing.T) {
 	client, server := net.Pipe()
 	defer server.Close()
 	defer client.Close()
@@ -401,24 +396,29 @@ func TestListMode_MouseClickAgentRowActivatesTab(t *testing.T) {
 	m.conn = &daemonConn{conn: client}
 	m.sessions[1].Tabs = []tuiTab{
 		{Name: "sh"},
-		{Name: "cp", Agent: "copilot", AgentState: "working"},
+		{Name: "cp", Agent: "copilot", AgentState: "blocked"},
 	}
 	m.sessions[1].ActiveTab = 0
-	mainW, _ := m.listLayoutWidths()
 
-	// Click the copilot agent row (y=4, see layout in the hit-test test).
+	// Click the copilot agent row. Only agents shown: y=2 alpha, y=3 beta,
+	// y=4 copilot(tab 1), y=5 gamma.
 	m.handleMouse(tea.MouseMsg{
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
-		X:      mainW + 2,
+		X:      2,
 		Y:      4,
 	})
 
 	if m.selected != 1 {
 		t.Fatalf("selected = %d, want 1", m.selected)
 	}
+	// listCursorTab should be -1 (agents not selectable).
+	if m.listCursorTab != -1 {
+		t.Fatalf("listCursorTab = %d, want -1", m.listCursorTab)
+	}
+	// Priority tab is the blocked agent (tab 1), so a switch is requested.
 	if !m.pendingTabAck["beta"] {
-		t.Fatal("clicking an agent row should request a tab switch (pendingTabAck not set)")
+		t.Fatal("clicking an agent row should select session and switch to priority tab")
 	}
 }
 
@@ -441,13 +441,12 @@ func TestListMode_MouseClickHeaderDoesNotSwitchTab(t *testing.T) {
 		{Name: "sh"},
 		{Name: "cp", Agent: "copilot", AgentState: "working"},
 	}
-	mainW, _ := m.listLayoutWidths()
 
-	// Click beta's header row (y=3).
+	// Click beta's header row (y=3). Sidebar on left.
 	m.handleMouse(tea.MouseMsg{
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
-		X:      mainW + 2,
+		X:      2,
 		Y:      3,
 	})
 
@@ -506,10 +505,11 @@ func TestListMode_BigPanelPressForwardedToMouseApp(t *testing.T) {
 
 	m := newListTestModel()
 	m.conn = &daemonConn{conn: client}
+	_, sideW := m.listLayoutWidths()
 	// Enable mouse reporting on the big-panel session (like tmux/copilot).
 	m.sessions[0].WriteOutput([]byte("\x1b[?1003h\x1b[?1006h"))
 
-	press := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: 4}
+	press := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: sideW + 5, Y: 4}
 	m.handleMouse(press)
 
 	if m.sel.pending || m.sel.active {
@@ -518,10 +518,10 @@ func TestListMode_BigPanelPressForwardedToMouseApp(t *testing.T) {
 	if !m.mouseFwdDown {
 		t.Fatal("mouseFwdDown should be set after forwarding the press")
 	}
-	// contentX=1, contentY=2 → local (4,2) → SGR 1-based (5,3), press = 'M'.
+	// contentX=sideW+1, contentY=2 → local (4,2) → SGR 1-based (5,3), press = 'M'.
 	cap.waitFor(t, "\x1b[<0;5;3M")
 
-	release := tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 5, Y: 4}
+	release := tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: sideW + 5, Y: 4}
 	m.handleMouse(release)
 
 	if m.mouseFwdDown {
@@ -532,8 +532,9 @@ func TestListMode_BigPanelPressForwardedToMouseApp(t *testing.T) {
 
 func TestListMode_BigPanelPressStartsSelectionWithoutMouseApp(t *testing.T) {
 	m := newListTestModel()
+	_, sideW := m.listLayoutWidths()
 
-	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 5, Y: 4})
+	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: sideW + 5, Y: 4})
 
 	if !m.sel.pending {
 		t.Fatal("press on a plain shell should start a pending text selection")
@@ -553,11 +554,11 @@ func TestListMode_SidebarClickDoesNotForwardRelease(t *testing.T) {
 	m := newListTestModel()
 	m.conn = &daemonConn{conn: client}
 	m.sessions[0].WriteOutput([]byte("\x1b[?1003h\x1b[?1006h"))
-	mainW, _ := m.listLayoutWidths()
 
 	// Click a sidebar row, then release: nothing should reach the PTY.
-	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: mainW + 2, Y: 3})
-	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: mainW + 2, Y: 3})
+	// Sidebar is on the left.
+	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: 2, Y: 3})
+	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: 2, Y: 3})
 
 	time.Sleep(20 * time.Millisecond)
 	if cap.contains("\x1b[<") {
