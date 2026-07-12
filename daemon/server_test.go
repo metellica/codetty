@@ -193,63 +193,6 @@ func TestServer_AutoSessionName(t *testing.T) {
 	}
 }
 
-func TestServer_NewSession_DuplicateTmuxTarget(t *testing.T) {
-	dir := t.TempDir()
-	sockPath := filepath.Join(dir, "test.sock")
-	srv := NewServer(sockPath)
-	srv.Start()
-	defer srv.Stop()
-
-	// First session managing tmux target "dev". The command doesn't need
-	// to be a real tmux attach — the guard only inspects Type/TmuxTarget.
-	conn1, _ := net.Dial("unix", sockPath)
-	defer conn1.Close()
-	req := Request{
-		Action: ActionNewSession, Session: "dev",
-		Command: []string{"cat"}, Cols: 80, Rows: 24,
-		Type: SessionTypeTmux, TmuxTarget: "dev", NoAttach: true,
-	}
-	WriteFrame(conn1, FrameRequest, MarshalJSON(req))
-	_, payload, _ := ReadFrame(conn1)
-	var resp Response
-	json.Unmarshal(payload, &resp)
-	if !resp.OK {
-		t.Fatalf("first session failed: %s", resp.Error)
-	}
-
-	// Second session with a different name but the same tmux target must
-	// be rejected — a tmux session may be managed by only one daemon session.
-	conn2, _ := net.Dial("unix", sockPath)
-	defer conn2.Close()
-	req2 := Request{
-		Action: ActionNewSession, Session: "[tmux] dev",
-		Command: []string{"cat"}, Cols: 80, Rows: 24,
-		Type: SessionTypeTmux, TmuxTarget: "dev", NoAttach: true,
-	}
-	WriteFrame(conn2, FrameRequest, MarshalJSON(req2))
-	_, payload2, _ := ReadFrame(conn2)
-	var resp2 Response
-	json.Unmarshal(payload2, &resp2)
-	if resp2.OK {
-		t.Fatal("duplicate tmux target should be rejected")
-	}
-
-	// List must expose the tmux target so clients (codetty up) can detect
-	// already-managed tmux sessions.
-	conn3, _ := net.Dial("unix", sockPath)
-	defer conn3.Close()
-	WriteFrame(conn3, FrameRequest, MarshalJSON(Request{Action: ActionList}))
-	_, payload3, _ := ReadFrame(conn3)
-	var resp3 Response
-	json.Unmarshal(payload3, &resp3)
-	if len(resp3.Sessions) != 1 {
-		t.Fatalf("expected 1 session, got %d", len(resp3.Sessions))
-	}
-	if resp3.Sessions[0].TmuxTarget != "dev" {
-		t.Errorf("TmuxTarget = %q, want dev", resp3.Sessions[0].TmuxTarget)
-	}
-}
-
 func TestServer_CreateTab(t *testing.T) {
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "test.sock")

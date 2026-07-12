@@ -31,8 +31,8 @@ var (
 func (m *tuiModel) fullscreenView() string {
 	sess := m.selectedSession()
 	if sess == nil {
-		m.mode = modeFocusBig
-		return m.focusBigView()
+		m.mode = modeList
+		return m.listView()
 	}
 
 	hasTabBar := len(sess.Tabs) > 1
@@ -58,162 +58,6 @@ func (m *tuiModel) fullscreenView() string {
 		return content + "\n" + tabBar
 	}
 	return content
-}
-
-func (m *tuiModel) focusBigView() string {
-	sessions := m.visibleSessions()
-	n := len(sessions)
-	if n == 0 || m.selected >= n {
-		return m.gridView()
-	}
-
-	status := m.statusBar()
-	statusH := lipgloss.Height(status)
-	availableH := m.height - statusH
-	if availableH < 1 {
-		return status
-	}
-
-	if n == 1 {
-		sess := sessions[m.selected]
-		title := panelTitle(1, sess)
-		panel := m.renderPanel(sess, title, m.width, availableH, true)
-		return lipgloss.JoinVertical(lipgloss.Left, panel, status)
-	}
-
-	if m.width >= 120 {
-		return lipgloss.JoinVertical(lipgloss.Left, m.focusBigWide(sessions, availableH), status)
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, m.focusBigNarrow(sessions, availableH), status)
-}
-
-func (m *tuiModel) focusBigWide(sessions []*tuiSession, availH int) string {
-	primary := sessions[m.selected]
-	mainW := m.width * 7 / 10
-	sideW := m.width - mainW
-	if sideW < tuiMinPanelW {
-		sideW = tuiMinPanelW
-		mainW = m.width - sideW
-	}
-
-	mainTitle := fmt.Sprintf("▶ [%d] %s", m.selected+1, primary.Name)
-	mainPanel := m.renderPanel(primary, mainTitle, mainW, availH, true)
-
-	secondaryCount := len(sessions) - 1
-	if secondaryCount == 0 {
-		return mainPanel
-	}
-	slotH := availH / secondaryCount
-	if slotH < tuiMinPanelH {
-		slotH = tuiMinPanelH
-	}
-	visible := availH / slotH
-	if visible > secondaryCount {
-		visible = secondaryCount
-	}
-
-	var sides []string
-	idx := 0
-	for i, sess := range sessions {
-		if i == m.selected {
-			continue
-		}
-		if idx >= visible {
-			break
-		}
-		h := slotH
-		if idx == visible-1 {
-			h = availH - slotH*idx
-		}
-		title := panelTitle(i+1, sess)
-		highlighted := m.inputFocus == i
-		if highlighted {
-			title = "▶ " + title
-		}
-		if m.drag.active && i == m.drag.targetIdx && i != m.drag.sourceIdx {
-			title = "⬇ " + title
-		}
-		showContent := h >= tuiSidePanelContentThreshold
-		sides = append(sides, m.renderPanelWithColor(sess, title, sideW, h, highlighted, i, showContent))
-		idx++
-	}
-
-	side := lipgloss.JoinVertical(lipgloss.Left, sides...)
-	return lipgloss.JoinHorizontal(lipgloss.Top, mainPanel, side)
-}
-
-func (m *tuiModel) focusBigNarrow(sessions []*tuiSession, availH int) string {
-	primary := sessions[m.selected]
-	mainH := availH * 7 / 10
-	sideH := availH - mainH
-
-	mainTitle := fmt.Sprintf("▶ [%d] %s", m.selected+1, primary.Name)
-	mainPanel := m.renderPanel(primary, mainTitle, m.width, mainH, true)
-
-	var bottomPanel string
-	for i, sess := range sessions {
-		if i != m.selected {
-			title := panelTitle(i+1, sess)
-			highlighted := m.inputFocus == i
-			if highlighted {
-				title = "▶ " + title
-			}
-			if m.drag.active && i == m.drag.targetIdx && i != m.drag.sourceIdx {
-				title = "⬇ " + title
-			}
-			showContent := sideH >= tuiSidePanelContentThreshold
-			bottomPanel = m.renderPanelWithColor(sess, title, m.width, sideH, highlighted, i, showContent)
-			break
-		}
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, mainPanel, bottomPanel)
-}
-
-func (m *tuiModel) gridView() string {
-	sessions := m.visibleSessions()
-	n := len(sessions)
-	if n == 0 {
-		return m.statusBar()
-	}
-
-	status := m.statusBar()
-	statusH := lipgloss.Height(status)
-	availH := m.height - statusH
-
-	cols := gridCols(n, m.width)
-	rows := (n + cols - 1) / cols
-	panelW := m.width / cols
-	panelH := availH / rows
-	if panelH < tuiMinPanelH {
-		panelH = tuiMinPanelH
-	}
-
-	var rowViews []string
-	for r := 0; r < rows; r++ {
-		var colViews []string
-		for c := 0; c < cols; c++ {
-			idx := r*cols + c
-			if idx >= n {
-				colViews = append(colViews, strings.Repeat(" ", panelW))
-				continue
-			}
-			sess := sessions[idx]
-			title := panelTitle(idx+1, sess)
-			focused := idx == m.selected
-			if focused {
-				title = "▶ " + title
-			}
-			if m.drag.active && idx == m.drag.targetIdx && idx != m.drag.sourceIdx {
-				title = "⬇ " + title
-			}
-			// All grid panels use colored title; only non-selected panels dim content
-			colViews = append(colViews, m.renderPanelWithColor(sess, title, panelW, panelH, focused, idx, panelH >= tuiSidePanelContentThreshold))
-		}
-		rowViews = append(rowViews, lipgloss.JoinHorizontal(lipgloss.Top, colViews...))
-	}
-
-	grid := lipgloss.JoinVertical(lipgloss.Left, rowViews...)
-	return lipgloss.JoinVertical(lipgloss.Left, grid, status)
 }
 
 func (m *tuiModel) renderPanel(sess *tuiSession, title string, w, h int, focused bool) string {
@@ -611,16 +455,8 @@ func (m *tuiModel) statusBar() string {
 		prompt := fmt.Sprintf(" Rename: %s█  (Enter confirm, Esc cancel)", m.renameText)
 		return tuiStatusStyle.Width(m.width).Render(prompt)
 	}
-	if m.createChooser {
-		prompt := " New session: [c]odetty  [t]mux  (Esc cancel)"
-		return tuiStatusStyle.Width(m.width).Render(prompt)
-	}
 	if m.creating {
-		kind := "session"
-		if m.createTmux {
-			kind = "tmux session"
-		}
-		prompt := fmt.Sprintf(" New %s name: %s█  (Enter confirm, Esc cancel)", kind, m.createText)
+		prompt := fmt.Sprintf(" New session name: %s█  (Enter confirm, Esc cancel)", m.createText)
 		return tuiStatusStyle.Width(m.width).Render(prompt)
 	}
 
@@ -631,19 +467,16 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	if m.prefix {
-		help := m.prefixLabel + ": d detach  c new  T tab  x kill  X close-tab  r rename  n/p nav  s list  b big  g grid  f full  Shift+←→ tabs"
+		help := m.prefixLabel + ": d detach  c new  T tab  x kill  X close-tab  r rename  n/p nav  s list  f full  Shift+←→ tabs"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 
 	left := fmt.Sprintf(" [%s] %d/%d", name, m.selected+1, len(m.visibleSessions()))
-	modeName := "focus"
+	modeName := "list"
 	switch m.mode {
-	case modeGrid:
-		modeName = "grid"
 	case modeFullscreen:
 		modeName = "fullscreen"
 	case modeList:
-		modeName = "list"
 		if m.listFocus {
 			modeName = "list*"
 		}
@@ -705,8 +538,7 @@ func (m *tuiModel) agentStatusSegment() string {
 
 func (m *tuiModel) hitTest(x, y int) int {
 	sessions := m.visibleSessions()
-	n := len(sessions)
-	if n == 0 || m.mode == modeFullscreen {
+	if len(sessions) == 0 || m.mode == modeFullscreen {
 		return -1
 	}
 
@@ -721,85 +553,7 @@ func (m *tuiModel) hitTest(x, y int) int {
 		idx, _ := m.listHitTest(x, y)
 		return idx
 	}
-
-	if m.mode == modeGrid {
-		cols := gridCols(n, m.width)
-		panelW := m.width / cols
-		rows := (n + cols - 1) / cols
-		panelH := availH / rows
-		if panelH < tuiMinPanelH {
-			panelH = tuiMinPanelH
-		}
-		col := x / panelW
-		row := y / panelH
-		idx := row*cols + col
-		if idx >= 0 && idx < n {
-			return idx
-		}
-		return -1
-	}
-
-	// Focus-big mode
-	if n == 1 {
-		if y < availH {
-			return 0
-		}
-		return -1
-	}
-
-	if m.width >= 120 {
-		mainW := m.width * 7 / 10
-		if x < mainW {
-			return m.selected
-		}
-		// Sidebar panels
-		sideW := m.width - mainW
-		if sideW < tuiMinPanelW {
-			return m.selected
-		}
-		secondaryCount := n - 1
-		slotH := availH / secondaryCount
-		if slotH < tuiMinPanelH {
-			slotH = tuiMinPanelH
-		}
-		visible := availH / slotH
-		if visible > secondaryCount {
-			visible = secondaryCount
-		}
-		slot := y / slotH
-		if slot >= visible {
-			return -1
-		}
-		idx := 0
-		for i := 0; i < n; i++ {
-			if i == m.selected {
-				continue
-			}
-			if idx == slot {
-				return i
-			}
-			idx++
-		}
-	} else {
-		// Narrow: top is main, bottom is secondary
-		mainH := availH * 7 / 10
-		if y < mainH {
-			return m.selected
-		}
-		for i := 0; i < n; i++ {
-			if i != m.selected {
-				return i
-			}
-		}
-	}
 	return -1
-}
-
-func gridCols(n, width int) int {
-	if n <= 1 {
-		return 1
-	}
-	return 2
 }
 
 // imeCursorSeq returns an ANSI CUP sequence that moves the real terminal
@@ -811,8 +565,8 @@ func gridCols(n, width int) int {
 func (m *tuiModel) imeCursorSeq() string {
 	// Overlays and text-input prompts capture keyboard for non-PTY input —
 	// no meaningful session cursor position to anchor the IME window to.
-	if m.tmuxPicker.active || m.sessMgr.active || m.switcher.active ||
-		m.confirmKill || m.renaming || m.creating || m.createChooser {
+	if m.sessMgr.active || m.switcher.active ||
+		m.confirmKill || m.renaming || m.creating {
 		return ""
 	}
 
@@ -886,38 +640,9 @@ func (m *tuiModel) imeCursorSeq() string {
 		}
 		return fmt.Sprintf("\x1b[%d;%dH", curY+1, curX+1)
 
-	case modeGrid:
-		cols := gridCols(n, m.width)
-		rows := (n + cols - 1) / cols
-		panelW := m.width / cols
-		panelH := availH / rows
-		if panelH < tuiMinPanelH {
-			panelH = tuiMinPanelH
-		}
-		pRow := m.selected / cols
-		pCol := m.selected % cols
-		return mkSeq(pRow*panelH, pCol*panelW, panelW-2, panelH-3)
-
 	case modeList:
 		mainW, _ := m.listLayoutWidths()
 		return mkSeq(0, 0, mainW-2, availH-3)
-
-	default: // modeFocusBig
-		// The selected session is always the big/main panel at the top-left.
-		if n == 1 {
-			return mkSeq(0, 0, m.width-2, availH-3)
-		}
-		if m.width >= 120 {
-			mainW := m.width * 7 / 10
-			sideW := m.width - mainW
-			if sideW < tuiMinPanelW {
-				sideW = tuiMinPanelW
-				mainW = m.width - sideW
-			}
-			return mkSeq(0, 0, mainW-2, availH-3)
-		}
-		// Narrow layout: main panel takes top 70% of height.
-		mainH := availH * 7 / 10
-		return mkSeq(0, 0, m.width-2, mainH-3)
 	}
+	return ""
 }

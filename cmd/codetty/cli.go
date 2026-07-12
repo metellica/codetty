@@ -23,10 +23,10 @@ import (
 // startupConfig holds TUI startup parameters.
 type startupConfig struct {
 	focusTarget string
-	layout      string            // "list", "focus-big", "grid", "fullscreen"
-	order       []string          // desired session display order
-	hidden      map[string]bool   // sessions hidden on startup
-	autoCreate  []string          // command to auto-create if no sessions exist
+	layout      string          // "list", "fullscreen"
+	order       []string        // desired session display order
+	hidden      map[string]bool // sessions hidden on startup
+	autoCreate  []string        // command to auto-create if no sessions exist
 }
 
 func cmdNew(args []string) {
@@ -136,13 +136,9 @@ func startTUI(sockPath string, sc startupConfig) {
 
 	// Apply startup layout mode (default is modeList).
 	switch sc.layout {
-	case "focus-big":
-		model.mode = modeFocusBig
-	case "grid":
-		model.mode = modeGrid
 	case "fullscreen":
 		model.mode = modeFullscreen
-	case "list":
+	default:
 		model.mode = modeList
 	}
 
@@ -207,85 +203,55 @@ func cmdUp(args []string) {
 		log.Fatalf("cannot start daemon: %v", err)
 	}
 
-	existing, tmuxManaged := listExistingSessions(sockPath)
+	existing := listExistingSessions(sockPath)
 	cols, rows := terminalSize()
 
-	// nameFor maps a config session to the daemon session that actually
-	// backs it (which may pre-exist under a different name, e.g. a tmux
-	// session already attached as "[tmux] NAME").
-	nameFor := make(map[string]string, len(sessions))
-
 	for _, s := range sessions {
-		nameFor[s.Name] = s.Name
-
 		if existing[s.Name] {
 			fmt.Fprintf(os.Stderr, "session %q already exists, skipping\n", s.Name)
 			continue
 		}
 
-		switch s.Type {
-		case "tmux":
-			if managedBy, ok := tmuxManaged[s.TmuxSession]; ok {
-				nameFor[s.Name] = managedBy
-				fmt.Fprintf(os.Stderr, "tmux session %q already managed by %q, skipping\n", s.TmuxSession, managedBy)
-				continue
-			}
-			if err := setupTmuxSession(s); err != nil {
-				log.Printf("setup tmux %q: %v", s.Name, err)
-				continue
-			}
-			// "=" forces exact session-name matching in tmux.
-			cmd := []string{"tmux", "attach-session", "-t", "=" + s.TmuxSession}
-			if err := createDaemonSession(sockPath, s.Name, cmd, cols, rows, "", nil, daemon.SessionTypeTmux, s.TmuxSession, ""); err != nil {
-				log.Printf("create session %q: %v", s.Name, err)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "created tmux session %q\n", s.Name)
+		cmd := s.Command
+		dir := s.Dir
+		env := envToSlice(s.Env)
 
-		default: // native
-			cmd := s.Command
-			dir := s.Dir
-			env := envToSlice(s.Env)
+		if len(s.Tabs) > 0 {
+			firstTab := s.Tabs[0]
+			if len(firstTab.Command) > 0 {
+				cmd = firstTab.Command
+			}
+			if firstTab.Dir != "" {
+				dir = firstTab.Dir
+			}
+			if firstTab.Env != nil {
+				env = envToSlice(firstTab.Env)
+			}
+		}
 
-			// If tabs are configured, use the first tab's settings for the initial session
-			if len(s.Tabs) > 0 {
-				firstTab := s.Tabs[0]
-				if len(firstTab.Command) > 0 {
-					cmd = firstTab.Command
+		if len(cmd) == 0 {
+			cmd = []string{terminal.DefaultShell()}
+		}
+		firstTabName := ""
+		if len(s.Tabs) > 0 {
+			firstTabName = s.Tabs[0].Name
+		}
+		if err := createDaemonSession(sockPath, s.Name, cmd, cols, rows, dir, env, firstTabName); err != nil {
+			log.Printf("create session %q: %v", s.Name, err)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "created session %q\n", s.Name)
+
+		if len(s.Tabs) > 1 {
+			for _, tab := range s.Tabs[1:] {
+				tabCmd := tab.Command
+				if len(tabCmd) == 0 {
+					tabCmd = cmd
 				}
-				if firstTab.Dir != "" {
-					dir = firstTab.Dir
-				}
-				if firstTab.Env != nil {
-					env = envToSlice(firstTab.Env)
-				}
-			}
-
-			if len(cmd) == 0 {
-				cmd = []string{terminal.DefaultShell()}
-			}
-			firstTabName := ""
-			if len(s.Tabs) > 0 {
-				firstTabName = s.Tabs[0].Name
-			}
-			if err := createDaemonSession(sockPath, s.Name, cmd, cols, rows, dir, env, "", "", firstTabName); err != nil {
-				log.Printf("create session %q: %v", s.Name, err)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "created session %q\n", s.Name)
-
-			// Create additional tabs if configured
-			if len(s.Tabs) > 1 {
-				for _, tab := range s.Tabs[1:] {
-					tabCmd := tab.Command
-					if len(tabCmd) == 0 {
-						tabCmd = cmd
-					}
-					if err := createDaemonTab(sockPath, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
-						log.Printf("create tab %q in session %q: %v", tab.Name, s.Name, err)
-					} else {
-						fmt.Fprintf(os.Stderr, "  created tab %q\n", tab.Name)
-					}
+				if err := createDaemonTab(sockPath, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
+					log.Printf("create tab %q in session %q: %v", tab.Name, s.Name, err)
+				} else {
+					fmt.Fprintf(os.Stderr, "  created tab %q\n", tab.Name)
 				}
 			}
 		}
@@ -296,41 +262,20 @@ func cmdUp(args []string) {
 		focusTarget: cfg.Focus,
 		layout:      cfg.Layout,
 	}
-	if mapped, ok := nameFor[sc.focusTarget]; ok {
-		sc.focusTarget = mapped
-	}
 	for _, s := range sessions {
-		name := nameFor[s.Name]
-		sc.order = append(sc.order, name)
+		sc.order = append(sc.order, s.Name)
 		if s.Hidden {
 			if sc.hidden == nil {
 				sc.hidden = make(map[string]bool)
 			}
-			sc.hidden[name] = true
+			sc.hidden[s.Name] = true
 		}
 	}
 	if sc.focusTarget == "" && len(sessions) > 0 {
-		sc.focusTarget = nameFor[sessions[0].Name]
+		sc.focusTarget = sessions[0].Name
 	}
 
 	startTUI(sockPath, sc)
-}
-
-func setupTmuxSession(s config.ResolvedSession) error {
-	if s.TmuxAttachOnly {
-		if !daemon.TmuxSessionExists(s.TmuxSession) {
-			return fmt.Errorf("tmux session %q not found", s.TmuxSession)
-		}
-		return nil
-	}
-	windows := make([]daemon.TmuxWindowSetup, len(s.Windows))
-	for i, w := range s.Windows {
-		windows[i] = daemon.TmuxWindowSetup{
-			Name: w.Name, Command: w.Command, Dir: w.Dir,
-		}
-	}
-	_, err := daemon.SetupTmuxSessionWithWindows(s.TmuxSession, windows, envToSlice(s.Env))
-	return err
 }
 
 // envToSlice converts an env map to sorted "KEY=value" entries.
@@ -350,39 +295,33 @@ func envToSlice(env map[string]string) []string {
 	return result
 }
 
-// listExistingSessions queries the daemon for current sessions. It returns
-// the set of daemon session names and a map from managed tmux session name
-// to the daemon session that manages it.
-func listExistingSessions(sockPath string) (map[string]bool, map[string]string) {
+// listExistingSessions queries the daemon for current sessions.
+func listExistingSessions(sockPath string) map[string]bool {
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
-		return nil, nil
+		return nil
 	}
 	defer conn.Close()
 
 	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionList}))
 	ft, payload, err := daemon.ReadFrame(conn)
 	if err != nil || ft != daemon.FrameResponse {
-		return nil, nil
+		return nil
 	}
 	var resp daemon.Response
 	json.Unmarshal(payload, &resp)
 	if !resp.OK {
-		return nil, nil
+		return nil
 	}
 
 	names := make(map[string]bool)
-	tmuxManaged := make(map[string]string)
 	for _, s := range resp.Sessions {
 		names[s.Name] = true
-		if s.Type == daemon.SessionTypeTmux && s.TmuxTarget != "" {
-			tmuxManaged[s.TmuxTarget] = s.Name
-		}
 	}
-	return names, tmuxManaged
+	return names
 }
 
-func createDaemonSession(sockPath, name string, cmd []string, cols, rows uint16, dir string, env []string, sessType, tmuxTarget, tabName string) error {
+func createDaemonSession(sockPath, name string, cmd []string, cols, rows uint16, dir string, env []string, tabName string) error {
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -390,17 +329,15 @@ func createDaemonSession(sockPath, name string, cmd []string, cols, rows uint16,
 	defer conn.Close()
 
 	req := daemon.Request{
-		Action:     daemon.ActionNewSession,
-		Session:    name,
-		Command:    cmd,
-		Cols:       cols,
-		Rows:       rows,
-		Dir:        dir,
-		Env:        env,
-		Type:       sessType,
-		TmuxTarget: tmuxTarget,
-		NoAttach:   true,
-		TabName:    tabName,
+		Action:   daemon.ActionNewSession,
+		Session:  name,
+		Command:  cmd,
+		Cols:     cols,
+		Rows:     rows,
+		Dir:      dir,
+		Env:      env,
+		NoAttach: true,
+		TabName:  tabName,
 	}
 	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(req))
 
@@ -604,14 +541,10 @@ func cmdReload(args []string) {
 	}
 
 	// Get current sessions from daemon
-	existing, _ := listExistingSessions(sockPath)
+	existing := listExistingSessions(sockPath)
 	cols, rows := terminalSize()
 
 	for _, s := range sessions {
-		if s.Type != "native" {
-			continue
-		}
-
 		if !existing[s.Name] {
 			// Create new session with first tab
 			cmd := s.Command
@@ -625,7 +558,7 @@ func cmdReload(args []string) {
 			if len(s.Tabs) > 0 {
 				firstTabName = s.Tabs[0].Name
 			}
-			if err := createDaemonSession(sockPath, s.Name, cmd, cols, rows, s.Dir, envToSlice(s.Env), "", "", firstTabName); err != nil {
+			if err := createDaemonSession(sockPath, s.Name, cmd, cols, rows, s.Dir, envToSlice(s.Env), firstTabName); err != nil {
 				log.Printf("create session %q: %v", s.Name, err)
 				continue
 			}

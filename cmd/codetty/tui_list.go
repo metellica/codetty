@@ -50,7 +50,7 @@ func (m *tuiModel) listLayoutWidths() (mainW, sideW int) {
 type listLine struct {
 	text    string
 	sessIdx int
-	tabIdx  int // tab index for agent detail rows, -1 for header rows
+	tabIdx  int  // tab index for agent detail rows, -1 for header rows
 	header  bool // true for the session name row (vs. an agent detail row)
 }
 
@@ -149,7 +149,7 @@ func (m *tuiModel) listView() string {
 	sessions := m.visibleSessions()
 	n := len(sessions)
 	if n == 0 {
-		return m.gridView()
+		return m.statusBar()
 	}
 	if m.selected >= n {
 		m.selected = n - 1
@@ -322,7 +322,6 @@ func (m *tuiModel) handleListKey(msg tea.KeyMsg) tea.Cmd {
 		m.listCursorTab = -1
 	case tea.KeyEnter:
 		m.selected = m.listCursor
-		m.inputFocus = -1
 		m.listFocus = false
 		// Auto-switch to priority tab: noticed agent > active tab > first.
 		if m.listCursor < n {

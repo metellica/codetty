@@ -13,8 +13,7 @@ const switcherPanelH = 13
 
 // sessionSwitcher is the state for the fullscreen session switcher overlay.
 // It lists all visible sessions except the current one as live preview
-// panels (rendered like focus-big side panels) so the user can pick a
-// session by its current output.
+// panels so the user can pick a session by its current output.
 type sessionSwitcher struct {
 	active bool
 	cursor int // index into switcherCandidates()
@@ -101,7 +100,6 @@ func (m *tuiModel) handleSwitcherMouse(msg tea.MouseMsg) tea.Cmd {
 // (fullscreen) session and closes the switcher.
 func (m *tuiModel) switchToSession(visIdx int) tea.Cmd {
 	m.selected = visIdx
-	m.inputFocus = -1
 	m.switcher.active = false
 	m.resizeSessionPTYs()
 	return tea.ClearScreen

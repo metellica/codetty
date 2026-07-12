@@ -240,7 +240,7 @@ func TestDaemonConn_OutputCoalescing(t *testing.T) {
 
 	// Drain any remaining coalesced messages
 	totalBytes := len(first.Data)
-	drainLoop:
+drainLoop:
 	for {
 		select {
 		case msg := <-msgs:
@@ -358,7 +358,7 @@ func TestDaemonConn_SendMethodsWriteExpectedFrames(t *testing.T) {
 	dc.SendInput("sess", []byte("abc"))
 	dc.SendResize(120, 40)
 	dc.CreateSession("new", []string{"bash", "-lc", "echo hi"}, 90, 30)
-	dc.KillSession("old", true)
+	dc.KillSession("old")
 	dc.Detach()
 
 	select {

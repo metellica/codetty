@@ -147,9 +147,6 @@ func (s *Subscriber) Run(srv *Server) {
 				srv.switchTabForSubscriber(s, req)
 			}
 
-		case FrameRefreshTmux:
-			srv.DiscoverAndAttachTmux()
-
 		case FrameDetach:
 			return
 		}

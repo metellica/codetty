@@ -141,14 +141,6 @@ func TestHandlePrefixKey_CreateSessionUsesDefaultShell(t *testing.T) {
 		t.Fatal("create session should not return a command")
 	}
 
-	// If tmux is available, we enter chooser mode first; select 'c' for codetty
-	if daemon.IsTmuxAvailable() {
-		if !m.createChooser {
-			t.Fatal("createChooser = false, want true after prefix+c (tmux available)")
-		}
-		m.handleCreateChooserKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-	}
-
 	if !m.creating {
 		t.Fatal("creating = false, want true after type selection")
 	}
@@ -176,85 +168,12 @@ func TestHandlePrefixKey_CreateSessionUsesDefaultShell(t *testing.T) {
 		if req.Cols != 90 || req.Rows != 33 {
 			t.Errorf("size = %dx%d, want 90x33", req.Cols, req.Rows)
 		}
-		if req.Tmux {
-			t.Errorf("tmux = true, want false for codetty session")
-		}
 	}()
 
 	// Press Enter — should send CreateSession frame
 	m.handleCreateKey(tea.KeyMsg{Type: tea.KeyEnter})
 
 	<-done
-}
-
-func TestHandlePrefixKey_CreateTmuxSession(t *testing.T) {
-	if !daemon.IsTmuxAvailable() {
-		t.Skip("tmux not available")
-	}
-
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	m := newTUIModel(&daemonConn{conn: client}, "", nil)
-	m.width = 90
-	m.height = 33
-
-	// Press 'c' in prefix mode — enters chooser
-	m.handlePrefixKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-	if !m.createChooser {
-		t.Fatal("createChooser = false, want true")
-	}
-
-	// Select 't' for tmux
-	m.handleCreateChooserKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
-	if !m.creating || !m.createTmux {
-		t.Fatalf("creating=%v createTmux=%v, want both true", m.creating, m.createTmux)
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ft, payload, err := daemon.ReadFrame(server)
-		if err != nil {
-			t.Errorf("ReadFrame: %v", err)
-			return
-		}
-		if ft != daemon.FrameCreateSession {
-			t.Errorf("frame type = %v, want %v", ft, daemon.FrameCreateSession)
-			return
-		}
-		var req daemon.CreateSessionRequest
-		if err := json.Unmarshal(payload, &req); err != nil {
-			t.Errorf("json.Unmarshal: %v", err)
-			return
-		}
-		if !req.Tmux {
-			t.Errorf("tmux = false, want true")
-		}
-		if req.Name != "mysess" {
-			t.Errorf("name = %q, want %q", req.Name, "mysess")
-		}
-	}()
-
-	// Type name and press Enter
-	m.handleCreateKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("mysess")})
-	m.handleCreateKey(tea.KeyMsg{Type: tea.KeyEnter})
-
-	<-done
-}
-
-func TestHandleCreateChooserKey_EscCancels(t *testing.T) {
-	m := newTUIModel(nil, "", nil)
-	m.createChooser = true
-
-	m.handleCreateChooserKey(tea.KeyMsg{Type: tea.KeyEscape})
-	if m.createChooser {
-		t.Fatal("createChooser should be false after Esc")
-	}
-	if m.creating {
-		t.Fatal("creating should be false after Esc")
-	}
 }
 
 func TestUpdate_SubscribedAutoCreatesSessionWhenEmpty(t *testing.T) {
@@ -346,84 +265,6 @@ func TestHandlePrefixKey_SessionManager(t *testing.T) {
 	}
 	if items[0].Name != "sess" {
 		t.Fatalf("expected session name 'sess', got '%s'", items[0].Name)
-	}
-}
-
-func TestTmuxPicker_KeyHandling(t *testing.T) {
-	m := newTUIModel(nil, "", nil)
-	m.width = 100
-	m.height = 30
-	m.tmuxPicker = tmuxPicker{
-		items: []tmuxPickerItem{
-			{Name: "sess1", Selected: true},
-			{Name: "sess2", Selected: true},
-			{Name: "sess3", Selected: false},
-		},
-		cursor: 0,
-		active: true,
-	}
-
-	// Move down
-	m.handleTmuxPickerKey(tea.KeyMsg{Type: tea.KeyDown})
-	if m.tmuxPicker.cursor != 1 {
-		t.Fatalf("cursor = %d, want 1", m.tmuxPicker.cursor)
-	}
-
-	// Toggle with space
-	m.handleTmuxPickerKey(tea.KeyMsg{Type: tea.KeySpace})
-	if m.tmuxPicker.items[1].Selected {
-		t.Fatal("item 1 should be deselected after space")
-	}
-
-	// Select all with 'a'
-	m.handleTmuxPickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	for i, item := range m.tmuxPicker.items {
-		if !item.Selected {
-			t.Fatalf("item %d should be selected after 'a'", i)
-		}
-	}
-
-	// Deselect all with 'n'
-	m.handleTmuxPickerKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	for i, item := range m.tmuxPicker.items {
-		if item.Selected {
-			t.Fatalf("item %d should be deselected after 'n'", i)
-		}
-	}
-
-	// Esc closes picker
-	m.handleTmuxPickerKey(tea.KeyMsg{Type: tea.KeyEscape})
-	if m.tmuxPicker.active {
-		t.Fatal("picker should be inactive after Esc")
-	}
-}
-
-func TestHandleSessionEvent_TmuxTypePreserved(t *testing.T) {
-	m := newTUIModel(nil, "", nil)
-	m.width = 100
-	m.height = 30
-
-	m.handleSessionEvent(daemon.SessionEvent{
-		Type:    "created",
-		Session: "[tmux] myserver",
-		Cols:    80,
-		Rows:    24,
-		Info: daemon.SessionInfo{
-			Command:   "tmux",
-			Type:      "tmux",
-			CreatedAt: "2025-01-01T00:00:00Z",
-		},
-	})
-
-	sess := m.sessionByName("[tmux] myserver")
-	if sess == nil {
-		t.Fatal("tmux session not found")
-	}
-	if sess.Type != "tmux" {
-		t.Fatalf("session Type = %q, want %q", sess.Type, "tmux")
-	}
-	if sess.Command != "tmux" {
-		t.Fatalf("session Command = %q, want %q", sess.Command, "tmux")
 	}
 }
 
@@ -525,7 +366,6 @@ func TestSessionManagerItems(t *testing.T) {
 		newTUISession("shell1", "bash", 80, 24),
 		newTUISession("shell2", "bash", 80, 24),
 	}
-	m.sessions[1].Type = "tmux"
 	m.order = []string{"shell1", "shell2"}
 	m.hideSession("shell1")
 
@@ -538,9 +378,6 @@ func TestSessionManagerItems(t *testing.T) {
 	}
 	if items[1].Hidden {
 		t.Fatal("shell2 should not be hidden")
-	}
-	if items[1].Type != "tmux" {
-		t.Fatal("shell2 should be tmux type")
 	}
 }
 
@@ -617,8 +454,8 @@ func TestUpdate_PrefixKeyViaUpdate(t *testing.T) {
 	if m.prefix {
 		t.Fatal("prefix should be cleared after second key")
 	}
-	if !m.creating && !m.createChooser {
-		t.Fatal("should be in creating or createChooser mode after prefix+c")
+	if !m.creating {
+		t.Fatal("should be in creating mode after prefix+c")
 	}
 }
 
@@ -644,10 +481,10 @@ func TestUpdate_PrefixKeyNotInterceptedBySessionManager(t *testing.T) {
 		t.Fatal("prefix should be true after Ctrl+A")
 	}
 
-	// 'g' should toggle grid mode
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}})
-	if m.mode != modeGrid {
-		t.Fatalf("mode should be grid after prefix+g, got %d", m.mode)
+	// 'f' should toggle fullscreen
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'f'}})
+	if m.mode != modeFullscreen {
+		t.Fatalf("mode should be fullscreen after prefix+f, got %d", m.mode)
 	}
 }
 
@@ -742,9 +579,9 @@ func TestHandleKey_ShiftTabClosesFloatingAndFocusesNext(t *testing.T) {
 		return m
 	}
 
-	t.Run("grid mode selects next session", func(t *testing.T) {
+	t.Run("list mode selects next session", func(t *testing.T) {
 		m := newModel()
-		m.mode = modeGrid
+		m.mode = modeList
 		m.selected = 0
 		m.openFloating(0)
 		if m.floatingIdx != 0 {
@@ -756,17 +593,17 @@ func TestHandleKey_ShiftTabClosesFloatingAndFocusesNext(t *testing.T) {
 		if m.floatingIdx != -1 {
 			t.Fatalf("floatingIdx = %d, want -1 (closed)", m.floatingIdx)
 		}
-		if m.mode != modeGrid {
-			t.Fatalf("mode = %v, want %v", m.mode, modeGrid)
+		if m.mode != modeList {
+			t.Fatalf("mode = %v, want %v", m.mode, modeList)
 		}
 		if m.selected != 1 {
 			t.Fatalf("selected = %d, want 1", m.selected)
 		}
 	})
 
-	t.Run("grid mode wraps around", func(t *testing.T) {
+	t.Run("list mode wraps around", func(t *testing.T) {
 		m := newModel()
-		m.mode = modeGrid
+		m.mode = modeList
 		m.selected = 2
 		m.openFloating(2)
 
@@ -777,43 +614,6 @@ func TestHandleKey_ShiftTabClosesFloatingAndFocusesNext(t *testing.T) {
 		}
 		if m.selected != 0 {
 			t.Fatalf("selected = %d, want 0 (wrapped)", m.selected)
-		}
-	})
-
-	t.Run("focus-big mode highlights next side panel", func(t *testing.T) {
-		m := newModel()
-		m.mode = modeFocusBig
-		m.selected = 0
-		m.inputFocus = 1
-		m.openFloating(1)
-
-		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
-
-		if m.floatingIdx != -1 {
-			t.Fatalf("floatingIdx = %d, want -1 (closed)", m.floatingIdx)
-		}
-		if m.mode != modeFocusBig {
-			t.Fatalf("mode = %v, want %v", m.mode, modeFocusBig)
-		}
-		if m.inputFocus != 2 {
-			t.Fatalf("inputFocus = %d, want 2", m.inputFocus)
-		}
-	})
-
-	t.Run("focus-big next lands on big panel", func(t *testing.T) {
-		m := newModel()
-		m.mode = modeFocusBig
-		m.selected = 0
-		m.inputFocus = 2
-		m.openFloating(2)
-
-		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
-
-		if m.floatingIdx != -1 {
-			t.Fatalf("floatingIdx = %d, want -1 (closed)", m.floatingIdx)
-		}
-		if m.inputFocus != -1 {
-			t.Fatalf("inputFocus = %d, want -1 (big panel)", m.inputFocus)
 		}
 	})
 }

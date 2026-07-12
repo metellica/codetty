@@ -68,7 +68,6 @@ func TestUpdate_ReconnectedResetsStateAndSubscribes(t *testing.T) {
 		Info:    daemon.SessionInfo{Command: "bash"},
 	})
 	m.selected = 0
-	m.inputFocus = 0
 	m.listFocus = true
 
 	client, server := net.Pipe()
@@ -85,8 +84,8 @@ func TestUpdate_ReconnectedResetsStateAndSubscribes(t *testing.T) {
 	if len(m.sessions) != 0 || len(m.order) != 0 {
 		t.Fatalf("sessions/order not cleared: %d/%d", len(m.sessions), len(m.order))
 	}
-	if m.inputFocus != -1 || m.listFocus {
-		t.Fatalf("focus state not reset: inputFocus=%d listFocus=%v", m.inputFocus, m.listFocus)
+	if m.listFocus {
+		t.Fatalf("focus state not reset: listFocus=%v", m.listFocus)
 	}
 	if newConn.program != prog {
 		t.Fatal("program was not carried over to the new connection")

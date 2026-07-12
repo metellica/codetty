@@ -25,7 +25,6 @@ const (
 	FrameCreateSession FrameType = 0x13 // C→S: JSON create session request
 	FrameKillSession   FrameType = 0x14 // C→S: JSON kill session request
 	FrameRenameSession FrameType = 0x15 // C→S: JSON rename session request
-	FrameRefreshTmux   FrameType = 0x16 // C→S: request tmux session refresh (no payload)
 	FrameCreateTab     FrameType = 0x17 // C→S: JSON create tab request
 	FrameCloseTab      FrameType = 0x18 // C→S: JSON close tab request
 	FrameSwitchTab     FrameType = 0x19 // C→S: JSON switch tab request
@@ -42,7 +41,6 @@ const (
 	ActionKill         Action = "kill"
 	ActionKillServer   Action = "kill_server"
 	ActionSubscribeAll Action = "subscribe_all"
-	ActionRefreshTmux  Action = "refresh_tmux"
 	ActionCreateTab    Action = "create_tab"
 	ActionCloseTab     Action = "close_tab"
 	ActionUpgrade      Action = "upgrade"
@@ -50,18 +48,16 @@ const (
 
 // Request is the JSON payload for FrameRequest.
 type Request struct {
-	Action     Action   `json:"action"`
-	Session    string   `json:"session,omitempty"`
-	Command    []string `json:"command,omitempty"`
-	Env        []string `json:"env,omitempty"`
-	Cols       uint16   `json:"cols,omitempty"`
-	Rows       uint16   `json:"rows,omitempty"`
-	Dir        string   `json:"dir,omitempty"`          // working directory for new session
-	Type       string   `json:"type,omitempty"`         // "native" or "tmux"
-	TmuxTarget string   `json:"tmux_target,omitempty"`  // tmux session name (when Type=="tmux")
-	NoAttach   bool     `json:"no_attach,omitempty"`    // create session but don't start attached client
-	TabName    string   `json:"tab_name,omitempty"`     // tab name for create_tab action
-	TabIndex   int      `json:"tab_index,omitempty"`    // tab index for close_tab action
+	Action   Action   `json:"action"`
+	Session  string   `json:"session,omitempty"`
+	Command  []string `json:"command,omitempty"`
+	Env      []string `json:"env,omitempty"`
+	Cols     uint16   `json:"cols,omitempty"`
+	Rows     uint16   `json:"rows,omitempty"`
+	Dir      string   `json:"dir,omitempty"`       // working directory for new session
+	NoAttach bool     `json:"no_attach,omitempty"` // create session but don't start attached client
+	TabName  string   `json:"tab_name,omitempty"`  // tab name for create_tab action
+	TabIndex int      `json:"tab_index,omitempty"` // tab index for close_tab action
 }
 
 // Response is the JSON payload for FrameResponse.
@@ -74,14 +70,13 @@ type Response struct {
 
 // SessionInfo describes a session in list responses.
 type SessionInfo struct {
-	Name       string `json:"name"`
-	Command    string `json:"command"`
-	Type       string `json:"type,omitempty"`
-	TmuxTarget string `json:"tmux_target,omitempty"` // tmux session name (when Type=="tmux")
-	Tabs       []TabInfo `json:"tabs,omitempty"`      // tabs within this session (native only)
-	ActiveTab  int    `json:"active_tab,omitempty"`   // index of the active tab
-	Attached   int    `json:"attached"`
-	CreatedAt  string `json:"created_at"`
+	Name      string    `json:"name"`
+	Command   string    `json:"command"`
+	Type      string    `json:"type,omitempty"`
+	Tabs      []TabInfo `json:"tabs,omitempty"`
+	ActiveTab int       `json:"active_tab,omitempty"` // index of the active tab
+	Attached  int       `json:"attached"`
+	CreatedAt string    `json:"created_at"`
 }
 
 // TabInfo describes a single tab within a session.
@@ -123,18 +118,15 @@ type SessionEvent struct {
 
 // CreateSessionRequest is the payload for FrameCreateSession.
 type CreateSessionRequest struct {
-	Name       string   `json:"name,omitempty"`
-	Command    []string `json:"command,omitempty"`
-	Cols       uint16   `json:"cols"`
-	Rows       uint16   `json:"rows"`
-	Tmux       bool     `json:"tmux,omitempty"`        // create a new tmux session
-	TmuxAttach bool     `json:"tmux_attach,omitempty"` // attach to an existing tmux session (Name = tmux target)
+	Name    string   `json:"name,omitempty"`
+	Command []string `json:"command,omitempty"`
+	Cols    uint16   `json:"cols"`
+	Rows    uint16   `json:"rows"`
 }
 
 // KillSessionRequest is the payload for FrameKillSession.
 type KillSessionRequest struct {
-	Name     string `json:"name"`
-	KillTmux bool   `json:"kill_tmux,omitempty"` // also kill underlying tmux session
+	Name string `json:"name"`
 }
 
 // RenameSessionRequest is the payload for FrameRenameSession.
@@ -145,11 +137,11 @@ type RenameSessionRequest struct {
 
 // CreateTabRequest is the payload for FrameCreateTab.
 type CreateTabRequest struct {
-	Session string   `json:"session"`          // session to add the tab to
-	Name    string   `json:"name,omitempty"`   // tab name (auto-generated if empty)
+	Session string   `json:"session"`           // session to add the tab to
+	Name    string   `json:"name,omitempty"`    // tab name (auto-generated if empty)
 	Command []string `json:"command,omitempty"` // command to run (default shell if empty)
-	Dir     string   `json:"dir,omitempty"`    // working directory
-	Env     []string `json:"env,omitempty"`    // environment variables
+	Dir     string   `json:"dir,omitempty"`     // working directory
+	Env     []string `json:"env,omitempty"`     // environment variables
 }
 
 // CloseTabRequest is the payload for FrameCloseTab.
@@ -166,11 +158,11 @@ type SwitchTabRequest struct {
 
 // TabEvent describes a tab lifecycle change (sent via FrameSessionEvent).
 type TabEvent struct {
-	Type      string  `json:"type"`               // "tab_created", "tab_closed", "tab_switched"
-	Session   string  `json:"session"`            // session name
-	TabIndex  int     `json:"tab_index"`          // affected tab index
-	TabName   string  `json:"tab_name,omitempty"` // tab name
-	ActiveTab int     `json:"active_tab"`         // new active tab index
+	Type      string `json:"type"`               // "tab_created", "tab_closed", "tab_switched"
+	Session   string `json:"session"`            // session name
+	TabIndex  int    `json:"tab_index"`          // affected tab index
+	TabName   string `json:"tab_name,omitempty"` // tab name
+	ActiveTab int    `json:"active_tab"`         // new active tab index
 }
 
 // ReloadConfigRequest is the payload for FrameReloadConfig.

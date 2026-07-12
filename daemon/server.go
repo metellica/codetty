@@ -167,8 +167,6 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.handleKillServer(conn)
 	case ActionSubscribeAll:
 		s.handleSubscribeAll(conn, req)
-	case ActionRefreshTmux:
-		s.handleRefreshTmux(conn)
 	case ActionCreateTab:
 		s.handleCreateTab(conn, req)
 	case ActionCloseTab:
@@ -194,15 +192,6 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 		s.sendError(conn, fmt.Sprintf("session %q already exists", name))
 		return
 	}
-	// A tmux session must be managed by at most one daemon session:
-	// double-attaching would mirror the same tmux session in two panels.
-	if req.Type == SessionTypeTmux {
-		if existing := s.sessionByTmuxTargetLocked(req.TmuxTarget); existing != nil {
-			s.mu.Unlock()
-			s.sendError(conn, fmt.Sprintf("tmux session %q already managed by session %q", req.TmuxTarget, existing.Name))
-			return
-		}
-	}
 	s.mu.Unlock()
 
 	sess, err := newDaemonSession(name, req.Command, req.Cols, req.Rows, req.Dir, req.Env, s.broadcastToSubscribers)
@@ -216,26 +205,12 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 		sess.Tabs[0].Name = req.TabName
 	}
 
-	// Apply session type metadata (e.g. from codetty up).
-	if req.Type == SessionTypeTmux {
-		sess.Type = SessionTypeTmux
-		sess.TmuxTarget = req.TmuxTarget
-	}
-
 	s.mu.Lock()
 	if _, exists := s.sessions[name]; exists {
 		s.mu.Unlock()
 		sess.Kill()
 		s.sendError(conn, fmt.Sprintf("session %q already exists", name))
 		return
-	}
-	if sess.Type == SessionTypeTmux {
-		if existing := s.sessionByTmuxTargetLocked(sess.TmuxTarget); existing != nil {
-			s.mu.Unlock()
-			sess.Kill()
-			s.sendError(conn, fmt.Sprintf("tmux session %q already managed by session %q", sess.TmuxTarget, existing.Name))
-			return
-		}
 	}
 	s.sessions[name] = sess
 	s.mu.Unlock()
@@ -303,7 +278,7 @@ func (s *Server) handleKill(conn net.Conn, req Request) {
 		return
 	}
 
-	sess.KillWithTmux()
+	sess.Kill()
 	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
 }
 
@@ -373,14 +348,6 @@ func (s *Server) resizeAllSessions(cols, rows uint16) {
 }
 
 func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRequest) {
-	if req.TmuxAttach {
-		s.attachTmuxSessionForSubscriber(sub, req)
-		return
-	}
-	if req.Tmux {
-		s.createTmuxSessionForSubscriber(sub, req)
-		return
-	}
 	name := req.Name
 	if name == "" {
 		s.mu.Lock()
@@ -417,105 +384,12 @@ func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRe
 	s.notifySubscribers(SessionEvent{Type: "created", Session: name, Info: sess.Info()})
 }
 
-func (s *Server) createTmuxSessionForSubscriber(sub *Subscriber, req CreateSessionRequest) {
-	tmuxName := req.Name
-	if tmuxName == "" {
-		tmuxName = "codetty"
-	}
-	// Create the tmux session (detached)
-	if err := CreateTmuxSession(tmuxName); err != nil {
-		sub.SendSessionEvent(SessionEvent{Type: "error", Session: tmuxName})
-		return
-	}
-	// Attach it as a daemon session
-	displayName := "[tmux] " + tmuxName
-	cmd := []string{"tmux", "attach-session", "-t", tmuxName}
-
-	s.mu.Lock()
-	if _, exists := s.sessions[displayName]; exists {
-		s.mu.Unlock()
-		sub.SendSessionEvent(SessionEvent{Type: "error", Session: displayName})
-		return
-	}
-	s.mu.Unlock()
-
-	sess, err := newDaemonSession(displayName, cmd, req.Cols, req.Rows, "", nil, s.broadcastToSubscribers)
-	if err != nil {
-		sub.SendSessionEvent(SessionEvent{Type: "error", Session: displayName})
-		return
-	}
-	sess.Type = SessionTypeTmux
-	sess.TmuxTarget = tmuxName
-
-	s.mu.Lock()
-	if _, exists := s.sessions[displayName]; exists {
-		s.mu.Unlock()
-		sess.Kill()
-		sub.SendSessionEvent(SessionEvent{Type: "error", Session: displayName})
-		return
-	}
-	s.sessions[displayName] = sess
-	s.mu.Unlock()
-	go s.watchSession(sess)
-	s.notifySubscribers(SessionEvent{Type: "created", Session: displayName, Info: sess.Info()})
-}
-
-func (s *Server) attachTmuxSessionForSubscriber(sub *Subscriber, req CreateSessionRequest) {
-	tmuxName := req.Name
-	if tmuxName == "" {
-		return
-	}
-	displayName := "[tmux] " + tmuxName
-	cmd := []string{"tmux", "attach-session", "-t", tmuxName}
-
-	s.mu.Lock()
-	if _, exists := s.sessions[displayName]; exists {
-		s.mu.Unlock()
-		// Already managed, nothing to do
-		return
-	}
-	if s.sessionByTmuxTargetLocked(tmuxName) != nil {
-		s.mu.Unlock()
-		// Already managed under another name (e.g. by codetty up)
-		return
-	}
-	s.mu.Unlock()
-
-	sess, err := newDaemonSession(displayName, cmd, req.Cols, req.Rows, "", nil, s.broadcastToSubscribers)
-	if err != nil {
-		sub.SendSessionEvent(SessionEvent{Type: "error", Session: displayName})
-		return
-	}
-	sess.Type = SessionTypeTmux
-	sess.TmuxTarget = tmuxName
-
-	s.mu.Lock()
-	if _, exists := s.sessions[displayName]; exists {
-		s.mu.Unlock()
-		sess.Kill()
-		return
-	}
-	if s.sessionByTmuxTargetLocked(tmuxName) != nil {
-		s.mu.Unlock()
-		sess.Kill()
-		return
-	}
-	s.sessions[displayName] = sess
-	s.mu.Unlock()
-	go s.watchSession(sess)
-	s.notifySubscribers(SessionEvent{Type: "created", Session: displayName, Info: sess.Info()})
-}
-
 func (s *Server) killSessionForSubscriber(req KillSessionRequest) {
 	s.mu.Lock()
 	sess, exists := s.sessions[req.Name]
 	s.mu.Unlock()
 	if exists {
-		if req.KillTmux {
-			sess.KillWithTmux()
-		} else {
-			sess.Kill()
-		}
+		sess.Kill()
 	}
 }
 
@@ -532,20 +406,6 @@ func (s *Server) renameSessionForSubscriber(req RenameSessionRequest) {
 	if _, conflict := s.sessions[req.NewName]; conflict {
 		s.mu.Unlock()
 		return
-	}
-
-	// For tmux sessions, also rename in tmux server
-	if sess.Type == SessionTypeTmux && sess.TmuxTarget != "" {
-		newTmuxName := req.NewName
-		// Strip "[tmux] " prefix if present to get clean tmux name
-		if len(newTmuxName) > 7 && newTmuxName[:7] == "[tmux] " {
-			newTmuxName = newTmuxName[7:]
-		}
-		if err := RenameTmuxSession(sess.TmuxTarget, newTmuxName); err != nil {
-			s.mu.Unlock()
-			return
-		}
-		sess.TmuxTarget = newTmuxName
 	}
 
 	delete(s.sessions, req.OldName)
@@ -654,20 +514,6 @@ func (s *Server) SessionByName(name string) *DaemonSession {
 	return s.sessions[name]
 }
 
-// sessionByTmuxTargetLocked returns the live session managing the given tmux
-// session, or nil. Caller must hold s.mu.
-func (s *Server) sessionByTmuxTargetLocked(tmuxTarget string) *DaemonSession {
-	if tmuxTarget == "" {
-		return nil
-	}
-	for _, sess := range s.sessions {
-		if sess.Type == SessionTypeTmux && sess.TmuxTarget == tmuxTarget && !sess.isExited() {
-			return sess
-		}
-	}
-	return nil
-}
-
 // SessionNames returns session names in iteration order.
 func (s *Server) SessionNames() []string {
 	s.mu.Lock()
@@ -677,62 +523,6 @@ func (s *Server) SessionNames() []string {
 		names = append(names, name)
 	}
 	return names
-}
-
-// DiscoverAndAttachTmux discovers tmux sessions and creates DaemonSessions for them.
-// It skips sessions that are already managed. Returns the number of newly attached sessions.
-func (s *Server) DiscoverAndAttachTmux() int {
-	tmuxSessions, err := DiscoverTmuxSessions()
-	if err != nil || len(tmuxSessions) == 0 {
-		return 0
-	}
-
-	s.mu.Lock()
-	// Build set of already-managed tmux targets
-	managed := make(map[string]bool)
-	for _, sess := range s.sessions {
-		if sess.Type == SessionTypeTmux {
-			managed[sess.TmuxTarget] = true
-		}
-	}
-	s.mu.Unlock()
-
-	count := 0
-	for _, tmuxName := range tmuxSessions {
-		if managed[tmuxName] {
-			continue
-		}
-
-		name := "[tmux] " + tmuxName
-		cmd := []string{"tmux", "attach-session", "-t", tmuxName}
-
-		sess, err := newDaemonSession(name, cmd, 80, 24, "", nil, s.broadcastToSubscribers)
-		if err != nil {
-			log.Printf("tmux attach %q failed: %v", tmuxName, err)
-			continue
-		}
-		sess.Type = SessionTypeTmux
-		sess.TmuxTarget = tmuxName
-
-		s.mu.Lock()
-		if _, exists := s.sessions[name]; exists || s.sessionByTmuxTargetLocked(tmuxName) != nil {
-			s.mu.Unlock()
-			sess.Kill()
-			continue
-		}
-		s.sessions[name] = sess
-		s.mu.Unlock()
-
-		s.notifySubscribers(SessionEvent{Type: "created", Session: name, Info: sess.Info()})
-		go s.watchSession(sess)
-		count++
-	}
-	return count
-}
-
-func (s *Server) handleRefreshTmux(conn net.Conn) {
-	n := s.DiscoverAndAttachTmux()
-	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true, Session: fmt.Sprintf("%d new tmux sessions", n)}))
 }
 
 // createTabForSubscriber creates a new tab within an existing session.

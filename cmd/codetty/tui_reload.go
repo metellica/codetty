@@ -40,10 +40,6 @@ func (m *tuiModel) reloadConfig() {
 	}
 
 	for _, s := range sessions {
-		if s.Type != "native" {
-			continue
-		}
-
 		sess := m.sessionByName(s.Name)
 		if sess == nil {
 			// Session doesn't exist yet — create it with first tab

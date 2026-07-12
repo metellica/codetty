@@ -27,14 +27,10 @@ TUI Keys (%s prefix):
   x       Kill focused session
   c       Create new session
   r       Rename focused session
-  t       Discover/attach tmux sessions
   w       Session manager (hide/show/kill)
   n/p     Next/previous session
   f       Toggle fullscreen (no borders/status)
-  g       Toggle grid view
   s       Session-list mode (big panel + sidebar, default)
-  b       Focus-big mode
-  a       Auto grid mode
   h/l     Move session order left/right
   1-9     Jump to session by number
 

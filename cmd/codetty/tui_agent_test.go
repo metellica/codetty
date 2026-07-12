@@ -261,7 +261,7 @@ func TestEffectiveAgentState(t *testing.T) {
 }
 
 func TestAckAgentDoneSessionClearsOnlyActiveTab(t *testing.T) {
-	m := &tuiModel{inputFocus: -1}
+	m := &tuiModel{}
 	front := newTUISession("front", "zsh", 80, 24)
 	front.Tabs = []tuiTab{
 		{Name: "t1", AgentState: "idle", Done: true},
@@ -289,7 +289,7 @@ func TestAckAgentDoneSessionClearsOnlyActiveTab(t *testing.T) {
 // TestDoneRequiresUserInteraction verifies the done marker survives daemon
 // events and clears when the user navigates to the done panel.
 func TestDoneRequiresUserInteraction(t *testing.T) {
-	m := &tuiModel{inputFocus: -1, floatingIdx: -1, selected: 0, width: 80, height: 24}
+	m := &tuiModel{floatingIdx: -1, selected: 0, width: 80, height: 24}
 	dev := newTUISession("dev", "zsh", 80, 24)
 	dev.Tabs = []tuiTab{{Name: "main", Agent: "copilot", AgentState: "working"}}
 	other := newTUISession("other", "zsh", 80, 24)
@@ -318,7 +318,7 @@ func TestDoneRequiresUserInteraction(t *testing.T) {
 	// …a key that doesn't navigate must not acknowledge it either
 	// (nil conn: nothing is forwarded, attention target unchanged)…
 	m.prefix = true
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'g'}}) // toggle grid mode
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	if !dev.Tabs[0].Done {
 		t.Fatal("non-navigating interaction must not acknowledge a background panel")
 	}

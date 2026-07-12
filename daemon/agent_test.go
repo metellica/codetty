@@ -56,18 +56,3 @@ func TestPollAgentStates_ShellIsUnknown(t *testing.T) {
 		t.Errorf("shell tab published agent=%q state=%q, want none", agent, state)
 	}
 }
-
-// TestPollAgentStates_SkipsTmuxSessions verifies tmux-wrapped sessions are
-// excluded from detection.
-func TestPollAgentStates_SkipsTmuxSessions(t *testing.T) {
-	sess, err := newDaemonSession("agent-tmux", []string{"cat"}, 80, 24, "", nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sess.Kill()
-	sess.Type = SessionTypeTmux
-
-	if changed := sess.PollAgentStates(time.Now()); changed {
-		t.Error("tmux session must be skipped by agent polling")
-	}
-}

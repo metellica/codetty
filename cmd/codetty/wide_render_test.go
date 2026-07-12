@@ -12,7 +12,7 @@ import (
 
 // copilot's line editor inserts a wide char before existing wide text with the
 // sequence "中" BS "你好". The lone backspace lands the cursor in the middle of
-// the wide "中", so a standard terminal (xterm/st/tmux) erases the orphaned
+// the wide "中", so a standard terminal (xterm/st/terminal-multiplexer) erases the orphaned
 // half. codetty must match that faithful behaviour instead of leaving a
 // half-overwritten wide char that renders as garbage.
 func TestCopilotWideInsertMatchesStandardTerminal(t *testing.T) {
@@ -23,7 +23,7 @@ func TestCopilotWideInsertMatchesStandardTerminal(t *testing.T) {
 
 	lines, _, _ := renderTerminalANSI(term, 40, 3)
 	got := strings.TrimRight(ansi.Strip(lines[0]), " ")
-	// Matches `tmux` / xterm: the partially-overwritten 中 is erased, leaving a
+	// Matches a terminal multiplexer / xterm: the partially-overwritten 中 is erased, leaving a
 	// blank in its place. No orphaned continuation cell, no dropped glyph.
 	want := "\u276f  \u4f60\u597d" // "❯  你好"
 	if got != want {
@@ -55,4 +55,3 @@ func TestCursorOnWideContinuationCellIsRendered(t *testing.T) {
 		t.Fatalf("cursor highlight not rendered: %q", lines[0])
 	}
 }
-

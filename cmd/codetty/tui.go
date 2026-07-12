@@ -31,10 +31,8 @@ var (
 type layoutMode int
 
 const (
-	modeFocusBig layoutMode = iota
-	modeGrid
-	modeFullscreen // no borders, no status bar, just terminal
-	modeList       // big panel on the left, session list sidebar on the right
+	modeList       layoutMode = iota
+	modeFullscreen            // no borders, no status bar, just terminal
 )
 
 // tuiModel is the Bubble Tea model for the unified codetty TUI.
@@ -43,7 +41,7 @@ type tuiModel struct {
 	imeWriter *imeWriter // nil in tests; wraps stdout to fix IME cursor position
 	sessions  []*tuiSession
 	order     []string // session names in display order
-	selected  int      // primary/big panel in focus-big mode
+	selected  int      // selected session
 	mode      layoutMode
 
 	prefix bool // prefix key active (see prefixKey)
@@ -54,11 +52,6 @@ type tuiModel struct {
 	// its display label (e.g. "Ctrl+A"), set from config after construction.
 	prefixKey   tea.KeyType
 	prefixLabel string
-
-	// inputFocus overrides which session receives keyboard input.
-	// -1 means use m.selected. Set by clicking a side panel.
-	// Reset to -1 when m.selected changes (via hotkey/ctrl+click).
-	inputFocus int
 
 	// List mode (modeList) sidebar state. listFocus means the sidebar has
 	// keyboard focus (Shift+Tab); listCursor is the highlighted entry,
@@ -79,14 +72,9 @@ type tuiModel struct {
 	renaming   bool
 	renameText string
 
-	// Create session mode (type selection + name input)
-	creating      bool
-	createText    string
-	createChooser bool // true when showing [c]odetty / [t]mux type chooser
-	createTmux    bool // true when creating a tmux session (after chooser)
-
-	// Tmux session picker
-	tmuxPicker tmuxPicker
+	// Create session mode
+	creating   bool
+	createText string
 
 	// Text selection
 	sel textSelection
@@ -102,9 +90,6 @@ type tuiModel struct {
 	// blinkPending is true while an agentBlinkMsg tick is scheduled. The
 	// tick self-perpetuates only while some agent is working.
 	blinkPending bool
-
-	// Panel drag-to-reorder state
-	drag panelDrag
 
 	// mouseFwdDown is true while a left-button press has been forwarded to
 	// a mouse-enabled app in the big panel, so the matching drag/release
@@ -179,14 +164,13 @@ func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tui
 		listCursorTab:     -1,
 		width:             120,
 		height:            40,
-		inputFocus:        -1,
 		floatingIdx:       -1,
 		hidden:            make(map[string]bool),
 		pendingReloadTabs: make(map[string][]config.ResolvedTab),
 		focusTarget:       focusTarget,
-		autoCreate:  autoCreate,
-		prefixKey:   tea.KeyCtrlA,
-		prefixLabel: "Ctrl+A",
+		autoCreate:        autoCreate,
+		prefixKey:         tea.KeyCtrlA,
+		prefixLabel:       "Ctrl+A",
 	}
 }
 
@@ -283,7 +267,6 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessions = nil
 		m.order = nil
 		m.selected = 0
-		m.inputFocus = -1
 		m.floatingIdx = -1
 		m.listFocus = false
 		m.listCursor = 0
@@ -308,7 +291,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleKey(msg)
 
 	case tea.MouseMsg:
-		if m.renaming || m.creating || m.createChooser || m.tmuxPicker.active || m.confirmKill || m.sessMgr.active {
+		if m.renaming || m.creating || m.confirmKill || m.sessMgr.active {
 			return m, nil
 		}
 		if m.switcher.active {
@@ -351,7 +334,7 @@ func (m *tuiModel) View() string {
 			hint = "No sessions. Press " + m.prefixLabel + " c to create one."
 		}
 		// Only show the status bar when in an interactive overlay state.
-		hasOverlay := m.renaming || m.creating || m.createChooser || m.prefix
+		hasOverlay := m.renaming || m.creating || m.prefix
 		centerH := m.height
 		var status string
 		if hasOverlay {
@@ -367,9 +350,6 @@ func (m *tuiModel) View() string {
 		if hasOverlay {
 			base += "\n" + status
 		}
-		if m.tmuxPicker.active {
-			base = m.renderTmuxPicker(base)
-		}
 		return base
 	}
 
@@ -377,22 +357,13 @@ func (m *tuiModel) View() string {
 	switch m.mode {
 	case modeFullscreen:
 		base = m.fullscreenView()
-	case modeGrid:
-		base = m.gridView()
-	case modeList:
-		base = m.listView()
 	default:
-		base = m.focusBigView()
+		base = m.listView()
 	}
 
 	// Overlay floating window if active
 	if m.floatingIdx >= 0 && m.floatingIdx < len(m.orderedSessions()) {
 		base = m.overlayFloating(base)
-	}
-
-	// Overlay tmux picker if active
-	if m.tmuxPicker.active {
-		base = m.renderTmuxPicker(base)
 	}
 
 	// Overlay session manager if active
@@ -435,7 +406,6 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 			}
 			sess = newTUISession(evt.Session, evt.Info.Command, cols, rows)
 			sess.CreatedAt = evt.Info.CreatedAt
-			sess.Type = evt.Info.Type
 			m.sessions = append(m.sessions, sess)
 			m.order = append(m.order, evt.Session)
 		}
@@ -550,18 +520,14 @@ func agentDoneAfterUpdate(old, new tuiTab) bool {
 	return old.Done
 }
 
-// attentionTarget returns the session name and active tab index of the
-// panel the user's input is directed at: the input-focused session, or
-// the selected panel when input focus is unset.
+// attentionTarget returns the session name and active tab index the user's
+// input is directed at.
 func (m *tuiModel) attentionTarget() (string, int) {
 	visible := m.visibleSessions()
 	if len(visible) == 0 {
 		return "", -1
 	}
-	idx := m.inputFocus
-	if idx < 0 || idx >= len(visible) {
-		idx = m.selected
-	}
+	idx := m.selected
 	if idx < 0 || idx >= len(visible) {
 		return "", -1
 	}
@@ -658,7 +624,7 @@ func (m *tuiModel) removeSession(name string) {
 	if m.mode == modeFullscreen {
 		// After removal, if selected is out of bounds, fall back
 		if m.selected >= visibleLen {
-			m.mode = modeFocusBig
+			m.mode = modeList
 			m.modeStack = nil
 		}
 	}
@@ -671,9 +637,6 @@ func (m *tuiModel) removeSession(name string) {
 		m.listCursor = max(0, visibleLen-1)
 		m.listCursorTab = -1
 	}
-
-	// Reset inputFocus
-	m.inputFocus = -1
 }
 
 func (m *tuiModel) orderedSessions() []*tuiSession {
@@ -722,7 +685,6 @@ func (m *tuiModel) hideSession(name string) {
 	if m.selected >= len(visible) {
 		m.selected = max(0, len(visible)-1)
 	}
-	m.inputFocus = -1
 }
 
 // showSession un-hides a previously hidden session.
@@ -739,7 +701,6 @@ func (m *tuiModel) selectedSession() *tuiSession {
 }
 
 // focusedSession returns the session that should receive keyboard input.
-// This may differ from selectedSession() when a side panel is clicked.
 func (m *tuiModel) focusedSession() *tuiSession {
 	visible := m.visibleSessions()
 	if len(visible) == 0 {
@@ -839,7 +800,6 @@ func (m *tuiModel) openFloating(visIdx int) {
 	}
 	m.pushMode()
 	m.floatingIdx = orderIdx
-	m.inputFocus = -1
 	// Resize the floating session to match the floating window content area
 	if m.conn != nil && orderIdx >= 0 && orderIdx < len(m.orderedSessions()) {
 		_, _, cw, ch := m.floatingContentRect()
@@ -856,7 +816,7 @@ func (m *tuiModel) closeFloating() {
 	if m.floatingIdx >= 0 && m.floatingIdx < len(m.orderedSessions()) {
 		sess := m.orderedSessions()[m.floatingIdx]
 		if sess.Temporary && m.conn != nil {
-			m.conn.KillSession(sess.Name, true)
+			m.conn.KillSession(sess.Name)
 		}
 	}
 	if !m.popMode() {
@@ -866,7 +826,7 @@ func (m *tuiModel) closeFloating() {
 }
 
 // closeFloatingFocusNext closes the floating window and moves focus to the
-// small session after the one that was floating (Shift+Tab in floating mode).
+// session after the one that was floating (Shift+Tab in floating mode).
 func (m *tuiModel) closeFloatingFocusNext() {
 	// Locate the floating session's visible position before closing.
 	prevVis := -1
@@ -887,17 +847,7 @@ func (m *tuiModel) closeFloatingFocusNext() {
 	if prevVis < 0 {
 		prevVis = m.selected
 	}
-	next := (prevVis + 1) % n
-	if m.mode == modeFocusBig {
-		if next == m.selected {
-			m.inputFocus = -1 // big panel highlighted
-		} else {
-			m.inputFocus = next
-		}
-	} else {
-		m.selected = next
-		m.inputFocus = -1
-	}
+	m.selected = (prevVis + 1) % n
 }
 
 // focusedContentSize returns the inner content dimensions for the focused session.
@@ -926,69 +876,7 @@ func (m *tuiModel) focusedContentSize() (int, int) {
 		}
 		return contentW, contentH
 	}
-
-	if m.mode == modeGrid {
-		cols := gridCols(n, m.width)
-		rows := (n + cols - 1) / cols
-		panelW := m.width / cols
-		panelH := availH / rows
-		if panelH < tuiMinPanelH {
-			panelH = tuiMinPanelH
-		}
-		// Content inside panel: -2 for borders, -1 for title line
-		contentW := panelW - 2
-		contentH := panelH - 3
-		if contentW < 1 {
-			contentW = 1
-		}
-		if contentH < 1 {
-			contentH = 1
-		}
-		return contentW, contentH
-	}
-
-	// Focus-big mode
-	if n == 1 {
-		contentW := m.width - 2
-		contentH := availH - 3
-		if contentW < 1 {
-			contentW = 1
-		}
-		if contentH < 1 {
-			contentH = 1
-		}
-		return contentW, contentH
-	}
-
-	if m.width >= 120 {
-		mainW := m.width * 7 / 10
-		sideW := m.width - mainW
-		if sideW < tuiMinPanelW {
-			sideW = tuiMinPanelW
-			mainW = m.width - sideW
-		}
-		contentW := mainW - 2
-		contentH := availH - 3
-		if contentW < 1 {
-			contentW = 1
-		}
-		if contentH < 1 {
-			contentH = 1
-		}
-		return contentW, contentH
-	}
-
-	// Narrow focus-big
-	mainH := availH * 7 / 10
-	contentW := m.width - 2
-	contentH := mainH - 3
-	if contentW < 1 {
-		contentW = 1
-	}
-	if contentH < 1 {
-		contentH = 1
-	}
-	return contentW, contentH
+	return m.width, m.height
 }
 
 // switchTab switches the active tab in a session by delta (-1 or +1).

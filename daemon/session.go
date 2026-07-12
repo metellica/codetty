@@ -14,7 +14,6 @@ import (
 // SessionType identifies the kind of session.
 const (
 	SessionTypeNative = "native"
-	SessionTypeTmux   = "tmux"
 )
 
 // SessionTab represents a single tab (PTY) within a DaemonSession.
@@ -43,12 +42,11 @@ type SessionTab struct {
 // DaemonSession represents a managed session within the daemon.
 // A session contains one or more tabs, each with its own PTY.
 type DaemonSession struct {
-	Name       string
-	Command    []string // command of the first/default tab
-	Type       string   // SessionTypeNative or SessionTypeTmux
-	TmuxTarget string   // original tmux session name (only when Type==SessionTypeTmux)
+	Name    string
+	Command []string // command of the first/default tab
+	Type    string
 
-	// Legacy single-tab fields (used for tmux sessions or single-tab native sessions)
+	// Legacy single-tab fields kept in sync with the active tab.
 	Terminal terminal.Session
 	Screen   *terminal.ScreenMirror
 
@@ -110,10 +108,6 @@ func newDaemonSession(name string, command []string, cols, rows uint16, dir stri
 func (s *DaemonSession) AddTab(name string, command []string, cols, rows uint16, dir string, env []string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if s.Type == SessionTypeTmux {
-		return -1, fmt.Errorf("tabs are not supported for tmux sessions")
-	}
 
 	term, err := terminal.Start(command, cols, rows, dir, env)
 	if err != nil {
@@ -228,10 +222,6 @@ func (s *DaemonSession) TabInfos() []TabInfo {
 // It returns true when any tab's published agent or state changed.
 // Called periodically by the server's agent poll loop.
 func (s *DaemonSession) PollAgentStates(now time.Time) bool {
-	if s.Type != SessionTypeNative {
-		return false
-	}
-
 	s.mu.Lock()
 	tabs := append([]*SessionTab(nil), s.Tabs...)
 	s.mu.Unlock()
@@ -315,10 +305,10 @@ func (s *DaemonSession) waitLoopForTab(tab *SessionTab, term terminal.Session) {
 	if err != nil {
 		tab.exitCode = 1
 	}
-	// Deliberate kills (session kill, tab close, daemon shutdown) and tmux
-	// sessions keep the plain exit semantics; only native-session tabs get
-	// respawn/auto-close treatment.
-	suppress := s.killed || tab.closing || s.Type != SessionTypeNative
+	// Deliberate kills (session kill, tab close, daemon shutdown) keep the
+	// plain exit semantics; only normal tab exits get respawn/auto-close
+	// treatment.
+	suppress := s.killed || tab.closing
 	s.mu.Unlock()
 	close(tab.doneCh)
 
@@ -476,7 +466,7 @@ func (s *DaemonSession) autoCloseTab(tab *SessionTab) bool {
 	return true
 }
 
-// readLoop is kept for backward compatibility (tmux sessions use single-tab path).
+// readLoop is kept for the legacy single-tab path.
 func (s *DaemonSession) readLoop() {
 	buf := make([]byte, 4096)
 	for {
@@ -578,14 +568,6 @@ func (s *DaemonSession) Kill() {
 	}
 }
 
-// KillWithTmux kills the session and, if it wraps a tmux session, kills that too.
-func (s *DaemonSession) KillWithTmux() {
-	if s.Type == SessionTypeTmux && s.TmuxTarget != "" {
-		KillTmuxSession(s.TmuxTarget)
-	}
-	s.Kill()
-}
-
 // Info returns a SessionInfo snapshot for listing.
 func (s *DaemonSession) Info() SessionInfo {
 	cmd := ""
@@ -593,14 +575,13 @@ func (s *DaemonSession) Info() SessionInfo {
 		cmd = s.Command[0]
 	}
 	info := SessionInfo{
-		Name:       s.Name,
-		Command:    cmd,
-		Type:       s.Type,
-		TmuxTarget: s.TmuxTarget,
-		Attached:   s.clientCount(),
-		CreatedAt:  s.CreatedAt.Format(time.RFC3339),
+		Name:      s.Name,
+		Command:   cmd,
+		Type:      s.Type,
+		Attached:  s.clientCount(),
+		CreatedAt: s.CreatedAt.Format(time.RFC3339),
 	}
-	if s.Type == SessionTypeNative && len(s.Tabs) >= 1 {
+	if len(s.Tabs) >= 1 {
 		info.Tabs = s.TabInfos()
 		info.ActiveTab = s.GetActiveTab()
 	}

@@ -80,9 +80,6 @@ func TestSwitcher_CycleAndEnterSwitches(t *testing.T) {
 	if m.mode != modeFullscreen {
 		t.Fatalf("mode = %v, want fullscreen", m.mode)
 	}
-	if m.inputFocus != -1 {
-		t.Fatalf("inputFocus = %d, want -1", m.inputFocus)
-	}
 }
 
 func TestSwitcher_EscClosesWithoutSwitching(t *testing.T) {

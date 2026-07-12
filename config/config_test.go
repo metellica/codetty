@@ -6,17 +6,9 @@ import (
 	"testing"
 )
 
-func TestNormalizeTmuxKey(t *testing.T) {
-	cases := map[string]string{
-		"C-a":   "ctrl+a",
-		"c-b":   "ctrl+b",
-		" C-A ": "ctrl+a",
-		"c-Z":   "ctrl+z",
-	}
-	for in, want := range cases {
-		if got := normalizeTmuxKey(in); got != want {
-			t.Errorf("normalizeTmuxKey(%q) = %q, want %q", in, got, want)
-		}
+func TestDetectDefaultPrefix(t *testing.T) {
+	if got := detectDefaultPrefix(); got != DefaultPrefixCtrlA {
+		t.Fatalf("detectDefaultPrefix() = %q, want %q", got, DefaultPrefixCtrlA)
 	}
 }
 
@@ -28,8 +20,8 @@ func TestLoad_NoFile_UsesDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.Keybindings.Prefix != DefaultPrefixCtrlA && cfg.Keybindings.Prefix != DefaultPrefixCtrlB {
-		t.Fatalf("Keybindings.Prefix = %q, want ctrl+a or ctrl+b", cfg.Keybindings.Prefix)
+	if cfg.Keybindings.Prefix != DefaultPrefixCtrlA {
+		t.Fatalf("Keybindings.Prefix = %q, want %q", cfg.Keybindings.Prefix, DefaultPrefixCtrlA)
 	}
 }
 

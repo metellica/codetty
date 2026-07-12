@@ -17,7 +17,6 @@ type sessionManager struct {
 // sessionManagerItem represents one session row in the manager.
 type sessionManagerItem struct {
 	Name    string
-	Type    string // "native" or "tmux"
 	Hidden  bool
 	Running bool // true if not exited
 }
@@ -40,7 +39,6 @@ func (m *tuiModel) sessionManagerItems() []sessionManagerItem {
 		}
 		items = append(items, sessionManagerItem{
 			Name:    name,
-			Type:    sess.Type,
 			Hidden:  m.hidden[name],
 			Running: !sess.Exited,
 		})
@@ -69,7 +67,6 @@ func (m *tuiModel) handleSessionManagerKey(msg tea.KeyMsg) tea.Cmd {
 			m.sessMgr.cursor++
 		}
 	case tea.KeySpace, tea.KeyEnter:
-		// Toggle visibility
 		if m.sessMgr.cursor < len(items) {
 			item := items[m.sessMgr.cursor]
 			if item.Hidden {
@@ -91,7 +88,6 @@ func (m *tuiModel) handleSessionManagerKey(msg tea.KeyMsg) tea.Cmd {
 					m.sessMgr.cursor--
 				}
 			case 'x', 'X':
-				// Kill with confirmation
 				if m.sessMgr.cursor < len(items) {
 					item := items[m.sessMgr.cursor]
 					m.sessMgr.active = false
@@ -100,7 +96,6 @@ func (m *tuiModel) handleSessionManagerKey(msg tea.KeyMsg) tea.Cmd {
 				}
 				return nil
 			case 'h':
-				// Hide current item
 				if m.sessMgr.cursor < len(items) {
 					item := items[m.sessMgr.cursor]
 					if !item.Hidden {
@@ -109,7 +104,6 @@ func (m *tuiModel) handleSessionManagerKey(msg tea.KeyMsg) tea.Cmd {
 				}
 				return tea.ClearScreen
 			case 's':
-				// Show current item
 				if m.sessMgr.cursor < len(items) {
 					item := items[m.sessMgr.cursor]
 					if item.Hidden {
@@ -159,7 +153,6 @@ func (m *tuiModel) renderSessionManager(base string) string {
 	helpDescStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245"))
 
-	// Calculate width
 	longestName := 0
 	for _, item := range items {
 		if len(item.Name) > longestName {
@@ -178,7 +171,6 @@ func (m *tuiModel) renderSessionManager(base string) string {
 		innerW = maxW
 	}
 
-	// Build content
 	var lines []string
 	lines = append(lines, titleStyle.Render("⬡ Session Manager"))
 
@@ -194,16 +186,9 @@ func (m *tuiModel) renderSessionManager(base string) string {
 	lines = append(lines, separatorStyle.Render(strings.Repeat("─", innerW)))
 
 	for i, item := range items {
-		var status string
+		status := visibleStyle.Render("visible")
 		if item.Hidden {
 			status = hiddenStyle.Render("hidden ")
-		} else {
-			status = visibleStyle.Render("visible")
-		}
-
-		typeTag := ""
-		if item.Type == "tmux" {
-			typeTag = " [tmux]"
 		}
 
 		name := item.Name
@@ -215,9 +200,9 @@ func (m *tuiModel) renderSessionManager(base string) string {
 			name = name[:maxName-1] + "…"
 		}
 
-		row := fmt.Sprintf("  %s  %s%s", status, name, typeTag)
+		row := fmt.Sprintf("  %s  %s", status, name)
 		if i == m.sessMgr.cursor {
-			row = fmt.Sprintf("▸ %s  %s%s", status, name, typeTag)
+			row = fmt.Sprintf("▸ %s  %s", status, name)
 			lines = append(lines, cursorItemStyle.Width(innerW).Render(row))
 		} else {
 			lines = append(lines, itemStyle.Render(row))

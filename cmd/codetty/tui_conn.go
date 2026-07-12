@@ -186,26 +186,10 @@ func (dc *daemonConn) CreateSession(name string, command []string, cols, rows ui
 	}))
 }
 
-// CreateTmuxSession requests the daemon to create a new tmux session.
-func (dc *daemonConn) CreateTmuxSession(name string, cols, rows uint16) {
-	daemon.WriteFrame(dc.conn, daemon.FrameCreateSession, daemon.MarshalJSON(daemon.CreateSessionRequest{
-		Name: name, Cols: cols, Rows: rows, Tmux: true,
-	}))
-}
-
-// AttachTmuxSession requests the daemon to attach an existing tmux session.
-func (dc *daemonConn) AttachTmuxSession(tmuxTarget string, cols, rows uint16) {
-	daemon.WriteFrame(dc.conn, daemon.FrameCreateSession, daemon.MarshalJSON(daemon.CreateSessionRequest{
-		Name: tmuxTarget, Cols: cols, Rows: rows, TmuxAttach: true,
-	}))
-}
-
 // KillSession requests the daemon to kill a session.
-// If killTmux is true, also kills the underlying tmux session (if any).
-func (dc *daemonConn) KillSession(name string, killTmux bool) {
+func (dc *daemonConn) KillSession(name string) {
 	daemon.WriteFrame(dc.conn, daemon.FrameKillSession, daemon.MarshalJSON(daemon.KillSessionRequest{
-		Name:     name,
-		KillTmux: killTmux,
+		Name: name,
 	}))
 }
 
@@ -221,11 +205,6 @@ func (dc *daemonConn) RenameSession(oldName, newName string) {
 func (dc *daemonConn) Detach() {
 	daemon.WriteFrame(dc.conn, daemon.FrameDetach, nil)
 	dc.conn.Close()
-}
-
-// RefreshTmux requests the daemon to discover and attach new tmux sessions.
-func (dc *daemonConn) RefreshTmux() {
-	daemon.WriteFrame(dc.conn, daemon.FrameRefreshTmux, nil)
 }
 
 // CreateTab requests the daemon to create a new tab within a session.

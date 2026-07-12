@@ -1,7 +1,6 @@
 package main
 
 import (
-	"codetty/daemon"
 	"codetty/terminal"
 	"fmt"
 
@@ -20,7 +19,7 @@ func (m *tuiModel) handleConfirmKillKey(msg tea.KeyMsg) tea.Cmd {
 			switch msg.Runes[0] {
 			case 'y', 'Y':
 				if m.conn != nil && m.confirmKillName != "" {
-					m.conn.KillSession(m.confirmKillName, true)
+					m.conn.KillSession(m.confirmKillName)
 				}
 				m.confirmKill = false
 				m.confirmKillName = ""
@@ -33,7 +32,7 @@ func (m *tuiModel) handleConfirmKillKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case tea.KeyEnter:
 		if m.conn != nil && m.confirmKillName != "" {
-			m.conn.KillSession(m.confirmKillName, true)
+			m.conn.KillSession(m.confirmKillName)
 		}
 		m.confirmKill = false
 		m.confirmKillName = ""
@@ -43,10 +42,6 @@ func (m *tuiModel) handleConfirmKillKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
-	// Tmux picker overlay: capture all input
-	if m.tmuxPicker.active {
-		return m.handleTmuxPickerKey(msg)
-	}
 	// Session switcher overlay: capture all input
 	if m.switcher.active {
 		return m.handleSwitcherKey(msg)
@@ -54,10 +49,6 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	// Rename mode: capture text input
 	if m.renaming {
 		return m.handleRenameKey(msg)
-	}
-	// Create type chooser mode
-	if m.createChooser {
-		return m.handleCreateChooserKey(msg)
 	}
 	// Create session mode: capture name input
 	if m.creating {
@@ -108,8 +99,6 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 
 	if msg.Type == tea.KeyShiftTab {
 		switch m.mode {
-		case modeFocusBig:
-			m.cycleSideHighlight()
 		case modeList:
 			// Cycle the sidebar: agents needing attention first (blocked,
 			// then done), then the session entries; after the last one,
@@ -139,22 +128,8 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 			// Open the session switcher with live previews instead of
 			// blindly cycling — fullscreen hides all other sessions.
 			m.openSwitcher()
-		default:
-			m.selectDelta(1)
 		}
 		return nil
-	}
-
-	// Enter on a highlighted panel opens floating window
-	if msg.Type == tea.KeyEnter && m.floatingIdx < 0 {
-		if m.mode == modeGrid {
-			m.openFloating(m.selected)
-			return nil
-		}
-		if m.mode == modeFocusBig && m.inputFocus >= 0 && m.inputFocus != m.selected {
-			m.openFloating(m.inputFocus)
-			return nil
-		}
 	}
 
 	// Tab switching: Shift+Left/Right when focused session has multiple tabs
@@ -185,16 +160,12 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handlePrefixKey(msg)
 	}
 
-	if m.mode == modeGrid {
-		return m.handleGridKey(msg)
-	}
-
 	// List mode with sidebar focus: navigate the session list.
 	if m.mode == modeList && m.listFocus {
 		return m.handleListKey(msg)
 	}
 
-	// Focus-big/list mode: always forward to big panel
+	// List mode: always forward to the selected panel.
 	m.forwardKey(msg)
 	return nil
 }
@@ -225,28 +196,6 @@ func (m *tuiModel) handleRenameKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *tuiModel) handleCreateChooserKey(msg tea.KeyMsg) tea.Cmd {
-	if msg.Type == tea.KeyEscape {
-		m.createChooser = false
-		return nil
-	}
-	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
-		switch msg.Runes[0] {
-		case 'c':
-			m.createChooser = false
-			m.creating = true
-			m.createText = ""
-			m.createTmux = false
-		case 't':
-			m.createChooser = false
-			m.creating = true
-			m.createText = ""
-			m.createTmux = true
-		}
-	}
-	return nil
-}
-
 func (m *tuiModel) handleCreateKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.Type {
 	case tea.KeyEnter:
@@ -255,17 +204,11 @@ func (m *tuiModel) handleCreateKey(msg tea.KeyMsg) tea.Cmd {
 		m.createText = ""
 		if m.conn != nil {
 			cols, rows := m.focusedContentSize()
-			if m.createTmux {
-				m.conn.CreateTmuxSession(name, uint16(cols), uint16(rows))
-			} else {
-				m.conn.CreateSession(name, []string{terminal.DefaultShell()}, uint16(cols), uint16(rows))
-			}
+			m.conn.CreateSession(name, []string{terminal.DefaultShell()}, uint16(cols), uint16(rows))
 		}
-		m.createTmux = false
 	case tea.KeyEscape:
 		m.creating = false
 		m.createText = ""
-		m.createTmux = false
 	case tea.KeyBackspace:
 		if len(m.createText) > 0 {
 			m.createText = m.createText[:len(m.createText)-1]
@@ -288,7 +231,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			return tea.Quit
 		case 'x':
 			if sess := m.selectedSession(); sess != nil && m.conn != nil {
-				m.conn.KillSession(sess.Name, true)
+				m.conn.KillSession(sess.Name)
 			}
 			return nil
 		case 'X':
@@ -298,13 +241,8 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return nil
 		case 'c':
-			if daemon.IsTmuxAvailable() {
-				m.createChooser = true
-			} else {
-				m.creating = true
-				m.createText = ""
-				m.createTmux = false
-			}
+			m.creating = true
+			m.createText = ""
 			return nil
 		case 'n':
 			m.selectDelta(1)
@@ -344,40 +282,18 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 						}
 					}
 					if !popped || m.floatingIdx >= 0 {
-						m.mode = modeFocusBig
+						m.mode = modeList
 						m.floatingIdx = -1
 					}
 				}
 				m.resizeSessionPTYs()
-			} else if m.mode == modeFocusBig || m.mode == modeList {
-				// Big panel → fullscreen
+			} else if m.mode == modeList {
+				// List → fullscreen
 				m.pushMode()
 				m.mode = modeFullscreen
 				m.listFocus = false
 				m.resizeSessionPTYs()
-			} else if m.mode == modeGrid {
-				// Grid mode → open floating for selected (openFloating pushes)
-				m.openFloating(m.selected)
 			}
-			return nil
-		case 'g':
-			if m.mode == modeGrid {
-				m.mode = modeFocusBig
-			} else {
-				m.mode = modeGrid
-			}
-			m.listFocus = false
-			m.resizeSessionPTYs()
-			return nil
-		case 'b':
-			m.mode = modeFocusBig
-			m.listFocus = false
-			m.resizeSessionPTYs()
-			return nil
-		case 'a':
-			m.mode = modeGrid
-			m.listFocus = false
-			m.resizeSessionPTYs()
 			return nil
 		case 's':
 			m.mode = modeList
@@ -399,12 +315,9 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 		case 'R':
 			m.reloadConfig()
 			return nil
-		case 't':
-			m.openTmuxPicker()
-			return nil
 		case 'T':
 			// Create a new tab in the focused session
-			if sess := m.focusedSession(); sess != nil && sess.Type == "native" && m.conn != nil {
+			if sess := m.focusedSession(); sess != nil && m.conn != nil {
 				m.conn.CreateTab(sess.Name, "", nil, "", nil)
 			}
 			return nil
@@ -412,7 +325,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			m.openSessionManager()
 			return nil
 		case 'm':
-			// Create a temporary floating shell (only in grid/focus-big modes)
+			// Create a temporary floating shell outside fullscreen.
 			if m.floatingIdx < 0 && m.mode != modeFullscreen && m.conn != nil {
 				_, _, cw, ch := m.floatingContentRect()
 				name := fmt.Sprintf("tmp-%d", len(m.sessions)+1)
@@ -424,38 +337,10 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			idx := int(msg.Runes[0]-'0') - 1
 			if idx < len(m.visibleSessions()) {
 				m.selected = idx
-				m.inputFocus = -1
 				m.listCursor = idx
 				m.listCursorTab = -1
-				if m.mode != modeList {
-					m.mode = modeFocusBig
-				}
 			}
 			return nil
-		}
-	}
-	return nil
-}
-
-func (m *tuiModel) handleGridKey(msg tea.KeyMsg) tea.Cmd {
-	n := len(m.visibleSessions())
-	cols := gridCols(n, m.width)
-	switch msg.Type {
-	case tea.KeyLeft:
-		if m.selected%cols > 0 {
-			m.selected--
-		}
-	case tea.KeyRight:
-		if m.selected%cols < cols-1 && m.selected+1 < n {
-			m.selected++
-		}
-	case tea.KeyUp:
-		if m.selected-cols >= 0 {
-			m.selected -= cols
-		}
-	case tea.KeyDown:
-		if m.selected+cols < n {
-			m.selected += cols
 		}
 	}
 	return nil
@@ -495,26 +380,6 @@ func (m *tuiModel) selectDelta(delta int) {
 		return
 	}
 	m.selected = ((m.selected+delta)%len(visible) + len(visible)) % len(visible)
-	m.inputFocus = -1
-}
-
-// cycleSideHighlight cycles inputFocus among all panels in focus-big mode.
-// When inputFocus lands on m.selected, it means the big panel is highlighted.
-func (m *tuiModel) cycleSideHighlight() {
-	n := len(m.visibleSessions())
-	if n <= 1 {
-		return
-	}
-	cur := m.inputFocus
-	if cur < 0 {
-		cur = m.selected
-	}
-	next := (cur + 1) % n
-	if next == m.selected {
-		m.inputFocus = -1 // big panel highlighted
-	} else {
-		m.inputFocus = next
-	}
 }
 
 // moveOrder swaps the selected session's position in the display order.
@@ -524,7 +389,7 @@ func (m *tuiModel) moveOrder(delta int) {
 	if n < 2 || m.selected < 0 || m.selected >= n {
 		return
 	}
-	target := ((m.selected + delta) % n + n) % n
+	target := ((m.selected+delta)%n + n) % n
 	// Use reorderByVisibleIdx to swap positions in m.order
 	m.reorderByVisibleIdx(m.selected, target)
 }
@@ -571,7 +436,6 @@ func (m *tuiModel) reorderByVisibleIdx(fromVisible, toVisible int) {
 	} else if fromVisible > m.selected && toVisible <= m.selected {
 		m.selected++
 	}
-	m.inputFocus = -1
 }
 
 // tuiKeyToBytes converts a tea.KeyMsg to raw terminal bytes.

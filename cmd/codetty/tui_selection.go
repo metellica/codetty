@@ -24,15 +24,6 @@ type textSelection struct {
 	screenX, screenY int
 }
 
-// panelDrag tracks drag-to-reorder state for side panel titles.
-type panelDrag struct {
-	active     bool
-	sourceIdx  int // visible index of panel being dragged
-	sourceName string
-	startY     int // screen Y where drag started
-	targetIdx  int // current drop target visible index
-}
-
 // panelRegion describes where a session's content is rendered on screen.
 type panelRegion struct {
 	sessionIdx int
@@ -89,7 +80,6 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 						m.selected = idx
 						m.listCursor = idx
 						m.listCursorTab = -1
-						m.inputFocus = -1
 						sessions := m.visibleSessions()
 						if idx < len(sessions) {
 							sess := sessions[idx]
@@ -108,7 +98,6 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			if msg.Ctrl {
 				if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
 					m.selected = idx
-					m.inputFocus = -1
 				}
 				m.sel = textSelection{}
 				return nil
@@ -118,15 +107,12 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			regions := m.panelRegions()
 			sessions := m.visibleSessions()
 
-			// Check for tab bar clicks first. Small panels (side panels
-			// and grid cells) are read-only monitors: only the big
-			// panel's tab bar is interactive here; small panels are
-			// operated through their floating window.
+			// Check for tab bar clicks first.
 			for _, r := range regions {
 				if r.sessionIdx >= len(sessions) {
 					continue
 				}
-				if (m.mode != modeFocusBig && m.mode != modeList) || r.sessionIdx != m.selected {
+				if r.sessionIdx != m.selected {
 					continue
 				}
 				sess := sessions[r.sessionIdx]
@@ -151,14 +137,8 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
 				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
-					if m.mode == modeGrid || r.sessionIdx != m.selected {
-						// Grid mode or side panel: open floating window
-						m.openFloating(r.sessionIdx)
-						m.sel = textSelection{}
-						return nil
-					}
-					// Clicking the big panel. If the app handles its own
-					// mouse (tmux, vim, copilot, ...), forward the real
+					// Clicking the selected panel. If the app handles its own
+					// mouse (vim, copilot, ...), forward the real
 					// press so in-app clicks and drags work; otherwise
 					// start a text selection.
 					sess := sessions[r.sessionIdx]
@@ -182,50 +162,11 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				}
 			}
 
-			// Check for button clicks on side panel title bars
-			if idx, action := m.hitTestTitleButton(msg.X, msg.Y); idx >= 0 && action != "" {
-				visible := m.visibleSessions()
-				if idx < len(visible) {
-					sess := visible[idx]
-					switch action {
-					case "hide":
-						m.hideSession(sess.Name)
-						return tea.ClearScreen
-					case "kill":
-						m.confirmKill = true
-						m.confirmKillName = sess.Name
-						return nil
-					}
-				}
-			}
-
-			// Check for title bar drag initiation (not on buttons)
-			if idx := m.hitTestTitleBar(msg.X, msg.Y); idx >= 0 {
-				visible := m.visibleSessions()
-				if idx < len(visible) && (m.mode == modeGrid || idx != m.selected) {
-					m.drag = panelDrag{
-						active:     true,
-						sourceIdx:  idx,
-						sourceName: visible[idx].Name,
-						startY:     msg.Y,
-						targetIdx:  idx,
-					}
-					m.sel = textSelection{}
-					return nil
-				}
-			}
-
 			// Click on border/title area (fallback: open floating)
-			if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
-				if m.mode == modeGrid || idx != m.selected {
-					m.openFloating(idx)
-				}
-			}
 			m.sel = textSelection{}
 		}
 		// Forward scroll wheel to PTY (with local coordinate translation).
-		// Only the big panel receives wheel input; small panels (side
-		// panels, grid cells) are read-only monitors.
+		// Only the selected panel receives wheel input.
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 			// List mode sidebar: scroll the session list.
 			if m.mode == modeList {
@@ -247,7 +188,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
 				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
-					if (m.mode == modeFocusBig || m.mode == modeList) && r.sessionIdx == m.selected {
+					if r.sessionIdx == m.selected {
 						sess := sessions[r.sessionIdx]
 						if sess.MouseEnabled() {
 							m.forwardMouseToSession(sess.Name, msg, localX, localY)
@@ -259,16 +200,6 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 
 	case tea.MouseActionMotion:
-		// Panel drag-to-reorder
-		if m.drag.active {
-			if idx := m.hitTestTitleBar(msg.X, msg.Y); idx >= 0 {
-				m.drag.targetIdx = idx
-			} else if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
-				m.drag.targetIdx = idx
-			}
-			return nil
-		}
-
 		if m.sel.pending {
 			// First motion after press: start real selection
 			regions := m.panelRegions()
@@ -325,7 +256,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				m.sel.endY = localY
 				return m.selMotionCmd()
 			}
-		} else if m.mode == modeFocusBig || m.mode == modeList {
+		} else if m.mode == modeList {
 			// Forward motion to big panel only if mouse reporting is enabled.
 			if sess := m.selectedSession(); sess != nil && sess.MouseEnabled() {
 				regions := m.panelRegions()
@@ -344,17 +275,6 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 
 	case tea.MouseActionRelease:
-		// Panel drag-to-reorder release
-		if m.drag.active {
-			source := m.drag.sourceIdx
-			target := m.drag.targetIdx
-			m.drag = panelDrag{}
-			if source != target {
-				m.reorderByVisibleIdx(source, target)
-			}
-			return tea.ClearScreen
-		}
-
 		if m.sel.active {
 			m.sel.active = false
 			if m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY {
@@ -366,15 +286,15 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			m.sel = textSelection{}
 		} else if m.sel.pending {
 			// Click without drag on big panel: forward to PTY only if the
-			// session has mouse reporting enabled (tmux, vim, etc.).
+			// session has mouse reporting enabled (vim, etc.).
 			m.sel.pending = false
-			if m.mode == modeFocusBig || m.mode == modeList {
+			if m.mode == modeList {
 				if sess := m.selectedSession(); sess != nil && sess.MouseEnabled() {
 					m.forwardClickToPTY(m.sel.startX, m.sel.startY)
 				}
 			}
 			m.sel = textSelection{}
-		} else if m.mouseFwdDown && (m.mode == modeFocusBig || m.mode == modeList) {
+		} else if m.mouseFwdDown && m.mode == modeList {
 			// The press was forwarded directly to a mouse-enabled app, so
 			// forward the matching release too.
 			m.mouseFwdDown = false
@@ -712,88 +632,18 @@ func (m *tuiModel) forwardMouseToSession(name string, msg tea.MouseMsg, localX, 
 	m.ackAgentDoneSession(name)
 }
 
-// titleBarRegion describes a side panel's title bar location.
-type titleBarRegion struct {
-	sessionIdx int // visible index
-	x, y       int // top-left screen coords of title bar
-	w          int // width of title bar
-}
-
-// sidePanelTitleRegions returns screen regions for all side panel title bars.
-func (m *tuiModel) sidePanelTitleRegions() []titleBarRegion {
-	regions := m.panelRegions()
-	var titles []titleBarRegion
-	for _, r := range regions {
-		if r.sessionIdx == m.selected && m.mode != modeGrid {
-			continue // skip big panel
-		}
-		// Title bar is one row above content area
-		titles = append(titles, titleBarRegion{
-			sessionIdx: r.sessionIdx,
-			x:          r.contentX,
-			y:          r.contentY - 1,
-			w:          r.contentW,
-		})
-	}
-	return titles
-}
-
-// hitTestTitleButton checks if (x,y) hits a [-] or [x] button on a title bar.
-// Returns: sessionIdx, "hide"|"kill"|""
-func (m *tuiModel) hitTestTitleButton(x, y int) (int, string) {
-	for _, tb := range m.sidePanelTitleRegions() {
-		if y != tb.y {
-			continue
-		}
-		localX := x - tb.x
-		if localX < 0 || localX >= tb.w {
-			continue
-		}
-		// Buttons are right-aligned: " [-][x]" = 7 chars
-		// [x] occupies rightmost positions: w-3, w-2, w-1
-		// [-] occupies: w-6, w-5, w-4
-		btnOffset := tb.w - 1 - localX // 0 = rightmost char
-		if btnOffset >= 0 && btnOffset <= 2 {
-			// [x] button region
-			return tb.sessionIdx, "kill"
-		}
-		if btnOffset >= 3 && btnOffset <= 5 {
-			// [-] button region
-			return tb.sessionIdx, "hide"
-		}
-		return tb.sessionIdx, ""
-	}
-	return -1, ""
-}
-
-// hitTestTitleBar checks if (x,y) is on any side panel title bar (not on buttons).
-func (m *tuiModel) hitTestTitleBar(x, y int) int {
-	for _, tb := range m.sidePanelTitleRegions() {
-		if y == tb.y && x >= tb.x && x < tb.x+tb.w {
-			return tb.sessionIdx
-		}
-	}
-	return -1
-}
-
 // panelRegions computes the on-screen content rectangles for all visible sessions.
 func (m *tuiModel) panelRegions() []panelRegion {
-	sessions := m.visibleSessions()
-	n := len(sessions)
-	if n == 0 {
+	if len(m.visibleSessions()) == 0 {
 		return nil
 	}
 
 	statusH := 1
 	availH := m.height - statusH
-
-	if m.mode == modeGrid {
-		return m.gridPanelRegions(n, availH)
-	}
 	if m.mode == modeList {
 		return m.listPanelRegions(availH)
 	}
-	return m.focusBigPanelRegions(sessions, n, availH)
+	return m.listPanelRegions(availH)
 }
 
 // listPanelRegions returns the single big-panel region in list mode; the
@@ -815,185 +665,6 @@ func (m *tuiModel) listPanelRegions(availH int) []panelRegion {
 		contentW:   contentW,
 		contentH:   contentH,
 	}}
-}
-
-func (m *tuiModel) gridPanelRegions(n, availH int) []panelRegion {
-	cols := gridCols(n, m.width)
-	rows := (n + cols - 1) / cols
-	panelW := m.width / cols
-	panelH := availH / rows
-	if panelH < tuiMinPanelH {
-		panelH = tuiMinPanelH
-	}
-
-	// Panel content: border=1 each side, title line=1
-	contentW := panelW - 2
-	contentH := panelH - 3
-	if contentW < 1 {
-		contentW = 1
-	}
-	if contentH < 1 {
-		contentH = 1
-	}
-
-	regions := make([]panelRegion, 0, n)
-	for r := 0; r < rows; r++ {
-		for c := 0; c < cols; c++ {
-			idx := r*cols + c
-			if idx >= n {
-				break
-			}
-			regions = append(regions, panelRegion{
-				sessionIdx: idx,
-				contentX:   c*panelW + 1,
-				contentY:   r*panelH + 2, // border top + title
-				contentW:   contentW,
-				contentH:   contentH,
-			})
-		}
-	}
-	return regions
-}
-
-func (m *tuiModel) focusBigPanelRegions(sessions []*tuiSession, n, availH int) []panelRegion {
-	if n == 1 {
-		contentW := m.width - 2
-		contentH := availH - 3
-		if contentW < 1 {
-			contentW = 1
-		}
-		if contentH < 1 {
-			contentH = 1
-		}
-		return []panelRegion{{
-			sessionIdx: m.selected,
-			contentX:   1,
-			contentY:   2,
-			contentW:   contentW,
-			contentH:   contentH,
-		}}
-	}
-
-	if m.width >= 120 {
-		return m.focusBigWidePanelRegions(n, availH)
-	}
-	return m.focusBigNarrowPanelRegions(n, availH)
-}
-
-func (m *tuiModel) focusBigWidePanelRegions(n, availH int) []panelRegion {
-	mainW := m.width * 7 / 10
-	sideW := m.width - mainW
-	if sideW < tuiMinPanelW {
-		sideW = tuiMinPanelW
-		mainW = m.width - sideW
-	}
-
-	mainContentW := mainW - 2
-	mainContentH := availH - 3
-	if mainContentW < 1 {
-		mainContentW = 1
-	}
-	if mainContentH < 1 {
-		mainContentH = 1
-	}
-
-	regions := []panelRegion{{
-		sessionIdx: m.selected,
-		contentX:   1,
-		contentY:   2,
-		contentW:   mainContentW,
-		contentH:   mainContentH,
-	}}
-
-	secondaryCount := n - 1
-	if secondaryCount == 0 {
-		return regions
-	}
-	slotH := availH / secondaryCount
-	if slotH < tuiMinPanelH {
-		slotH = tuiMinPanelH
-	}
-	visible := availH / slotH
-	if visible > secondaryCount {
-		visible = secondaryCount
-	}
-
-	sideContentW := sideW - 2
-	if sideContentW < 1 {
-		sideContentW = 1
-	}
-
-	idx := 0
-	for i := 0; i < n; i++ {
-		if i == m.selected {
-			continue
-		}
-		if idx >= visible {
-			break
-		}
-		h := slotH
-		if idx == visible-1 {
-			h = availH - slotH*idx
-		}
-		contentH := h - 3
-		if contentH < 1 {
-			contentH = 1
-		}
-		regions = append(regions, panelRegion{
-			sessionIdx: i,
-			contentX:   mainW + 1,
-			contentY:   idx*slotH + 2,
-			contentW:   sideContentW,
-			contentH:   contentH,
-		})
-		idx++
-	}
-	return regions
-}
-
-func (m *tuiModel) focusBigNarrowPanelRegions(n, availH int) []panelRegion {
-	mainH := availH * 7 / 10
-	sideH := availH - mainH
-
-	mainContentW := m.width - 2
-	mainContentH := mainH - 3
-	if mainContentW < 1 {
-		mainContentW = 1
-	}
-	if mainContentH < 1 {
-		mainContentH = 1
-	}
-
-	regions := []panelRegion{{
-		sessionIdx: m.selected,
-		contentX:   1,
-		contentY:   2,
-		contentW:   mainContentW,
-		contentH:   mainContentH,
-	}}
-
-	sideContentW := m.width - 2
-	sideContentH := sideH - 3
-	if sideContentW < 1 {
-		sideContentW = 1
-	}
-	if sideContentH < 1 {
-		sideContentH = 1
-	}
-
-	for i := 0; i < n; i++ {
-		if i != m.selected {
-			regions = append(regions, panelRegion{
-				sessionIdx: i,
-				contentX:   1,
-				contentY:   mainH + 2,
-				contentW:   sideContentW,
-				contentH:   sideContentH,
-			})
-			break
-		}
-	}
-	return regions
 }
 
 // extractSelectedText reads the selected text from the vt10x terminal buffer.

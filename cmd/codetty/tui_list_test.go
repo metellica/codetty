@@ -319,7 +319,7 @@ func TestListMode_PrefixDigitKeepsListMode(t *testing.T) {
 
 func TestListMode_PrefixSSwitchesToListMode(t *testing.T) {
 	m := newListTestModel()
-	m.mode = modeGrid
+	m.mode = modeFullscreen
 	m.prefix = true
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'s'}})
 	if m.mode != modeList {
@@ -506,7 +506,7 @@ func TestListMode_BigPanelPressForwardedToMouseApp(t *testing.T) {
 	m := newListTestModel()
 	m.conn = &daemonConn{conn: client}
 	_, sideW := m.listLayoutWidths()
-	// Enable mouse reporting on the big-panel session (like tmux/copilot).
+	// Enable mouse reporting on the big-panel session (like a multiplexer/copilot).
 	m.sessions[0].WriteOutput([]byte("\x1b[?1003h\x1b[?1006h"))
 
 	press := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: sideW + 5, Y: 4}

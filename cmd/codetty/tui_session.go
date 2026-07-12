@@ -23,7 +23,6 @@ const (
 type tuiSession struct {
 	Name      string
 	Command   string
-	Type      string // "native" or "tmux"
 	Cols      uint16
 	Rows      uint16
 	Exited    bool

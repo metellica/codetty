@@ -17,29 +17,28 @@ import (
 
 // UpgradeState holds the serialized daemon state for hot restart.
 type UpgradeState struct {
-	SocketPath string              `json:"socket_path"`
-	Sessions   []UpgradeSession    `json:"sessions"`
+	SocketPath string           `json:"socket_path"`
+	Sessions   []UpgradeSession `json:"sessions"`
 }
 
 // UpgradeSession holds the state of a single session for hot restart.
 type UpgradeSession struct {
-	Name       string            `json:"name"`
-	Command    []string          `json:"command"`
-	Type       string            `json:"type"`
-	TmuxTarget string            `json:"tmux_target,omitempty"`
-	CreatedAt  string            `json:"created_at"`
-	Tabs       []UpgradeTab      `json:"tabs"`
-	ActiveTab  int               `json:"active_tab"`
+	Name      string       `json:"name"`
+	Command   []string     `json:"command"`
+	Type      string       `json:"type"`
+	CreatedAt string       `json:"created_at"`
+	Tabs      []UpgradeTab `json:"tabs"`
+	ActiveTab int          `json:"active_tab"`
 }
 
 // UpgradeTab holds the state of a single tab for hot restart.
 type UpgradeTab struct {
-	Name    string `json:"name"`
+	Name    string   `json:"name"`
 	Command []string `json:"command"`
-	Fd      int    `json:"fd"`
-	Pid     int    `json:"pid"`
-	Cols    uint16 `json:"cols"`
-	Rows    uint16 `json:"rows"`
+	Fd      int      `json:"fd"`
+	Pid     int      `json:"pid"`
+	Cols    uint16   `json:"cols"`
+	Rows    uint16   `json:"rows"`
 	// Snapshot is the ANSI sequence reconstructing the tab's screen at
 	// upgrade time, replayed into the new daemon's ScreenMirror. Without
 	// it, recovered tabs look blank until the program outputs again
@@ -59,12 +58,11 @@ func (s *Server) PrepareUpgrade() (string, error) {
 
 	for _, sess := range s.sessions {
 		us := UpgradeSession{
-			Name:       sess.Name,
-			Command:    sess.Command,
-			Type:       sess.Type,
-			TmuxTarget: sess.TmuxTarget,
-			CreatedAt:  sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			ActiveTab:  sess.ActiveTab,
+			Name:      sess.Name,
+			Command:   sess.Command,
+			Type:      sess.Type,
+			CreatedAt: sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			ActiveTab: sess.ActiveTab,
 		}
 
 		for _, tab := range sess.Tabs {
@@ -159,13 +157,12 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 
 	for _, us := range state.Sessions {
 		sess := &DaemonSession{
-			Name:       us.Name,
-			Command:    us.Command,
-			Type:       us.Type,
-			TmuxTarget: us.TmuxTarget,
-			ActiveTab:  us.ActiveTab,
-			onOutput:   srv.broadcastToSubscribers,
-			doneCh:     make(chan struct{}),
+			Name:      us.Name,
+			Command:   us.Command,
+			Type:      us.Type,
+			ActiveTab: us.ActiveTab,
+			onOutput:  srv.broadcastToSubscribers,
+			doneCh:    make(chan struct{}),
 		}
 
 		// Parse creation time
