@@ -463,10 +463,15 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 			// Clear mouse mode so stale flags from the previous tab
 			// (e.g. lazygit) don't forward SGR sequences to a plain shell.
 			// Also clear mouseFwdDown so a dangling release from the tab
-			// bar click isn't forwarded to the new tab.
+			// bar click isn't forwarded to the new tab — but only when the
+			// switch happened in the session receiving forwarded mouse
+			// input; tab switches in other sessions (e.g. from another
+			// attached client) must not drop an in-flight release.
 			if evt.Type == "tab_switched" {
 				sess.ResetMouseMode()
-				m.mouseFwdDown = false
+				if sel := m.selectedSession(); sel != nil && sel.Name == evt.Session {
+					m.mouseFwdDown = false
+				}
 			}
 			// A tab switch this client requested means the user navigated
 			// to the now-active tab: acknowledge its done marker.

@@ -7,94 +7,81 @@
 #
 # codetty up 采用增量创建：已有同名 session 不会重复创建。
 
-# 初始布局模式：focus-big（默认）、grid、fullscreen
-layout = "focus-big"
+# 初始布局模式：list（默认）、fullscreen
+layout = "list"
 
 # 初始聚焦的 session 名称（省略则聚焦第一个 session）
 focus = "editor"
 
-# ── 模板（可复用的 tmux window 配置）──────────────────────────
+# ── 模板（可复用的 tab 配置）────────────────────────────────
 
 [template.dev]
 
-  [[template.dev.window]]
+  [[template.dev.tab]]
   name = "copilot"
-  command = "copilot --allow-all"
+  command = ["copilot", "--allow-all"]
 
-  [[template.dev.window]]
+  [[template.dev.tab]]
   name = "git"
-  command = "lazygit"
+  command = ["lazygit"]
 
-  [[template.dev.window]]
+  [[template.dev.tab]]
   name = "code"
-  command = "nvim ."
+  command = ["nvim", "."]
 
-  [[template.dev.window]]
+  # 省略 command 则使用默认 shell
+  [[template.dev.tab]]
   name = "shell"
 
 # ── Session 定义 ────────────────────────────────────────────
 
-# 原生 session：直接在 CodeTTY 中运行命令
+# 单 tab session：直接运行命令
 [[session]]
 name = "editor"
 command = ["nvim", "."]
 
-# 原生 session：指定工作目录（相对于本文件所在目录）
+# 指定工作目录（相对于本文件所在目录）
 # [[session]]
 # name = "server"
 # command = ["npm", "run", "dev"]
 # dir = "./backend"
 
-# 原生 session：省略 command 则使用默认 shell
+# 省略 command 则使用默认 shell
 [[session]]
 name = "shell"
 
-# 原生 session：启动时隐藏（可通过 Ctrl+A w 显示）
+# 启动时隐藏（可通过 Ctrl+A w 显示）
 # [[session]]
 # name = "logs"
 # hidden = true
 
-# tmux session 使用模板
+# 使用模板创建多 tab session
 # [[session]]
 # name = "frontend"
-# type = "tmux"
-# tmux_session = "fe"
 # template = "dev"
 # dir = "./frontend"
 
-# tmux session 继承模板并定制
+# 继承模板并定制：同名 tab 覆盖模板配置，新名字追加为新 tab
 # [[session]]
 # name = "fullstack"
-# type = "tmux"
-# tmux_session = "full"
 # template = "dev"
-# remove_windows = ["git"]       # 删除模板中的 window
 #
-#   [[session.window]]
+#   [[session.tab]]
 #   name = "code"
-#   command = "nvim ~/projects"        # 覆盖同名 window
+#   command = ["nvim", "~/projects"]   # 覆盖模板中的同名 tab
 #
-#   [[session.window]]
-#   name = "db"                        # 追加新 window
-#   command = "docker compose up db"
+#   [[session.tab]]
+#   name = "db"                        # 追加新 tab
+#   command = ["docker", "compose", "up", "db"]
 
-# tmux session 内联定义 window（不使用模板）
+# 内联定义多 tab session（不使用模板）
 # [[session]]
 # name = "monitoring"
-# type = "tmux"
-# tmux_session = "mon"
 #
-#   [[session.window]]
+#   [[session.tab]]
 #   name = "logs"
-#   command = "tail -f /var/log/app.log"
+#   command = ["tail", "-f", "/var/log/app.log"]
 #
-#   [[session.window]]
+#   [[session.tab]]
 #   name = "htop"
-#   command = "htop"
-
-# 仅 attach 已有 tmux session（不创建 window）
-# [[session]]
-# name = "remote"
-# type = "tmux"
-# tmux_session = "remote-server"
-# tmux_attach_only = true
+#   command = ["htop"]

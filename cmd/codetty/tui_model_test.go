@@ -617,3 +617,59 @@ func TestHandleKey_ShiftTabClosesFloatingAndFocusesNext(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleSessionEvent_TabSwitchScopesMouseFwdDownClear(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 100
+	m.height = 30
+
+	m.handleSessionEvent(daemon.SessionEvent{Type: "created", Session: "alpha", Info: daemon.SessionInfo{Command: "bash"}})
+	m.handleSessionEvent(daemon.SessionEvent{Type: "created", Session: "beta", Info: daemon.SessionInfo{Command: "bash"}})
+
+	// Focus alpha; a press has been forwarded to its mouse-enabled app.
+	for i, sess := range m.visibleSessions() {
+		if sess.Name == "alpha" {
+			m.selected = i
+		}
+	}
+	m.mouseFwdDown = true
+
+	// A tab switch in another session (e.g. from another attached client)
+	// must not drop the in-flight release.
+	m.handleSessionEvent(daemon.SessionEvent{Type: "tab_switched", Session: "beta"})
+	if !m.mouseFwdDown {
+		t.Fatal("tab switch in another session must not clear mouseFwdDown")
+	}
+
+	// A tab switch in the focused session does clear it.
+	m.handleSessionEvent(daemon.SessionEvent{Type: "tab_switched", Session: "alpha"})
+	if m.mouseFwdDown {
+		t.Fatal("tab switch in the focused session should clear mouseFwdDown")
+	}
+}
+
+func TestPromptBackspace_TrimsWholeRune(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+
+	m.creatingTab = true
+	m.createTabText = "日志"
+	m.handleCreateTabKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.createTabText != "日" {
+		t.Fatalf("createTabText = %q, want %q", m.createTabText, "日")
+	}
+
+	m.renaming = true
+	m.renameText = "标签x"
+	m.handleRenameKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	m.handleRenameKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.renameText != "标" {
+		t.Fatalf("renameText = %q, want %q", m.renameText, "标")
+	}
+
+	m.creating = true
+	m.createText = "会"
+	m.handleCreateKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.createText != "" {
+		t.Fatalf("createText = %q, want empty", m.createText)
+	}
+}

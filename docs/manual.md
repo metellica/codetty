@@ -190,7 +190,7 @@ codetty up -f myconfig.toml     # 指定配置文件
 ### 基本示例
 
 ```toml
-layout = "focus-big"          # 初始布局：list / focus-big / grid / fullscreen
+layout = "list"               # 初始布局：list / fullscreen
 focus = "editor"              # 初始聚焦的 session 名称
 
 # 原生 session（直接运行命令）
@@ -307,7 +307,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `layout` | string | `"list"` | 初始布局模式（list / focus-big / grid / fullscreen） |
+| `layout` | string | `"list"` | 初始布局模式（list / fullscreen） |
 | `focus` | string | 第一个 session | 初始聚焦 session |
 
 **template.\<name\>：**
@@ -361,7 +361,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 底部状态栏显示：
 
 - 当前焦点 session 名称和位置（如 `[bash] 1/3`）
-- 当前布局模式（list / focus / grid / fullscreen）
+- 当前布局模式（list / fullscreen）
 - 操作提示
 - 按下 `Ctrl+A` 前缀键后显示完整快捷键列表
 

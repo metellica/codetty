@@ -174,6 +174,17 @@ func TestValidate_Valid(t *testing.T) {
 	}
 }
 
+func TestValidate_LegacyLayoutsAccepted(t *testing.T) {
+	// Removed layouts from old configs must not fail validation; the TUI
+	// falls back to list mode.
+	for _, layout := range []string{"focus-big", "grid"} {
+		cfg := &SessionsConfig{Layout: layout}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("layout %q: unexpected error: %v", layout, err)
+		}
+	}
+}
+
 func TestValidate_Errors(t *testing.T) {
 	tests := []struct {
 		name string

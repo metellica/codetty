@@ -3,9 +3,17 @@ package main
 import (
 	"codetty/terminal"
 	"fmt"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// trimLastRune removes the last rune (not byte) from s, keeping multibyte
+// input (e.g. CJK) valid UTF-8 after a backspace.
+func trimLastRune(s string) string {
+	_, size := utf8.DecodeLastRuneInString(s)
+	return s[:len(s)-size]
+}
 
 // handleConfirmKillKey processes input during kill confirmation.
 func (m *tuiModel) handleConfirmKillKey(msg tea.KeyMsg) tea.Cmd {
@@ -190,7 +198,7 @@ func (m *tuiModel) handleRenameKey(msg tea.KeyMsg) tea.Cmd {
 		m.renameText = ""
 	case tea.KeyBackspace:
 		if len(m.renameText) > 0 {
-			m.renameText = m.renameText[:len(m.renameText)-1]
+			m.renameText = trimLastRune(m.renameText)
 		}
 	case tea.KeyRunes:
 		m.renameText += string(msg.Runes)
@@ -215,7 +223,7 @@ func (m *tuiModel) handleCreateKey(msg tea.KeyMsg) tea.Cmd {
 		m.createText = ""
 	case tea.KeyBackspace:
 		if len(m.createText) > 0 {
-			m.createText = m.createText[:len(m.createText)-1]
+			m.createText = trimLastRune(m.createText)
 		}
 	case tea.KeyRunes:
 		m.createText += string(msg.Runes)
@@ -239,7 +247,7 @@ func (m *tuiModel) handleCreateTabKey(msg tea.KeyMsg) tea.Cmd {
 		m.createTabText = ""
 	case tea.KeyBackspace:
 		if len(m.createTabText) > 0 {
-			m.createTabText = m.createTabText[:len(m.createTabText)-1]
+			m.createTabText = trimLastRune(m.createTabText)
 		}
 	case tea.KeyRunes:
 		m.createTabText += string(msg.Runes)

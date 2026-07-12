@@ -99,7 +99,12 @@ func loadSessionsFile(path string) (*SessionsConfig, error) {
 
 // Validate checks the config for structural errors.
 func (cfg *SessionsConfig) Validate() error {
-	if cfg.Layout != "" && cfg.Layout != "list" && cfg.Layout != "fullscreen" {
+	switch cfg.Layout {
+	case "", "list", "fullscreen":
+	case "focus-big", "grid":
+		// Removed layouts, accepted for backwards compatibility with old
+		// configs; the TUI falls back to list mode.
+	default:
 		return fmt.Errorf("invalid layout %q (valid: list, fullscreen)", cfg.Layout)
 	}
 
