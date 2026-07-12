@@ -21,6 +21,7 @@ const (
 type SessionTab struct {
 	Name     string
 	Command  []string
+	Dir      string // workspace directory; respawned shells start here
 	Terminal terminal.Session
 	Screen   *terminal.ScreenMirror
 
@@ -80,6 +81,7 @@ func newDaemonSession(name string, command []string, cols, rows uint16, dir stri
 	tab := &SessionTab{
 		Name:     "default",
 		Command:  command,
+		Dir:      dir,
 		Terminal: term,
 		Screen:   screen,
 		doneCh:   make(chan struct{}),
@@ -122,6 +124,7 @@ func (s *DaemonSession) AddTab(name string, command []string, cols, rows uint16,
 	tab := &SessionTab{
 		Name:     name,
 		Command:  command,
+		Dir:      dir,
 		Terminal: term,
 		Screen:   screen,
 		doneCh:   make(chan struct{}),
@@ -326,6 +329,12 @@ func (s *DaemonSession) waitLoopForTab(tab *SessionTab, term terminal.Session) {
 			if s.respawnTabShell(tab) {
 				return
 			}
+		} else if tab.Dir != "" {
+			// A shell tab with a workspace dir exited: respawn the shell
+			// in the workspace directory instead of auto-closing.
+			if s.respawnTabShell(tab) {
+				return
+			}
 		} else if s.autoCloseTab(tab) {
 			// A shell tab exited (user typed "exit"): close the tab and
 			// fall back to the remaining tabs.
@@ -380,7 +389,7 @@ func isShellCommand(command []string) bool {
 func (s *DaemonSession) respawnTabShell(tab *SessionTab) bool {
 	cols, rows := tab.Screen.Size()
 	shell := terminal.DefaultShell()
-	term, err := terminal.Start([]string{shell}, cols, rows, "", nil)
+	term, err := terminal.Start([]string{shell}, cols, rows, tab.Dir, nil)
 	if err != nil {
 		return false
 	}

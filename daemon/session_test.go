@@ -208,3 +208,39 @@ func TestCloseTab_DoesNotRespawn(t *testing.T) {
 		t.Errorf("no auto tab events expected after CloseTab, got %v", rec.events)
 	}
 }
+
+// TestTabExit_ShellWithDirRespawns verifies that a shell tab with a workspace
+// dir respawns in that directory instead of auto-closing.
+func TestTabExit_ShellWithDirRespawns(t *testing.T) {
+	rec := newTabEventRecorder()
+	sess, err := newDaemonSession("shell-dir", []string{"cat"}, 80, 24, "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Kill()
+	sess.setTabsChangedCallback(rec.callback)
+
+	// Add a shell tab with a workspace directory.
+	if _, err := sess.AddTab("work", []string{"sh", "-c", "exit 0"}, 80, 24, "/tmp", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// The shell exits immediately; because it has a Dir, it should respawn.
+	rec.wait(t, "tab_created")
+
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if len(sess.Tabs) != 2 {
+		t.Fatalf("expected 2 tabs (original + respawned), got %d", len(sess.Tabs))
+	}
+	tab := sess.Tabs[1]
+	if tab.exited {
+		t.Error("respawned tab should not be marked exited")
+	}
+	if !isShellCommand(tab.Command) {
+		t.Errorf("respawned tab command = %v, want a shell", tab.Command)
+	}
+	if tab.Dir != "/tmp" {
+		t.Errorf("respawned tab Dir = %q, want /tmp", tab.Dir)
+	}
+}
