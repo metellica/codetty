@@ -251,7 +251,7 @@ func (s *DaemonSession) pollTabAgentState(tab *SessionTab, now time.Time) bool {
 		if name, argv, ok := agentdetect.ForegroundCommand(tab.Terminal.Fd()); ok {
 			if spec := agentdetect.Identify(name, argv); spec != nil {
 				agentName = spec.Name
-				raw = spec.Evaluate(tab.Screen.ActiveText())
+				raw = spec.Evaluate(tab.Screen.TailText(0))
 			}
 		}
 	}
