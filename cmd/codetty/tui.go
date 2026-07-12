@@ -861,7 +861,7 @@ func (m *tuiModel) closeFloatingFocusNext() {
 // focusedContentSize returns the inner content dimensions for the focused session.
 func (m *tuiModel) focusedContentSize() (int, int) {
 	if m.mode == modeFullscreen {
-		return m.width, m.height
+		return m.width, m.height - 1 // reserve bottom info line
 	}
 
 	statusH := 1

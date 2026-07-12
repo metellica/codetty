@@ -35,11 +35,8 @@ func (m *tuiModel) fullscreenView() string {
 		return m.listView()
 	}
 
-	hasTabBar := len(sess.Tabs) > 1
-	contentH := m.height
-	if hasTabBar {
-		contentH--
-	}
+	// Always reserve the last line for session info (and tab bar if multi-tab).
+	contentH := m.height - 1
 
 	var content string
 	if m.sel.session == sess.Name && (m.sel.active || m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY) {
@@ -53,11 +50,29 @@ func (m *tuiModel) fullscreenView() string {
 		content = strings.Join(lines, "\n")
 	}
 
+	// Build bottom line: tab bar on left (if multi-tab), session info right-aligned.
+	sessInfo := fmt.Sprintf("[%d] %s", m.selected+1, sess.Name)
+	infoStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+
+	hasTabBar := len(sess.Tabs) > 1
 	if hasTabBar {
 		tabBar := renderTabBar(sess.Tabs, sess.ActiveTab, m.width, false)
+		tabBarW := lipgloss.Width(tabBar)
+		infoW := lipgloss.Width(sessInfo)
+		pad := m.width - tabBarW - infoW
+		if pad > 0 {
+			return content + "\n" + tabBar + strings.Repeat(" ", pad) + infoStyle.Render(sessInfo)
+		}
 		return content + "\n" + tabBar
 	}
-	return content
+
+	infoRendered := infoStyle.Render(sessInfo)
+	infoW := lipgloss.Width(infoRendered)
+	pad := m.width - infoW
+	if pad < 0 {
+		pad = 0
+	}
+	return content + "\n" + strings.Repeat(" ", pad) + infoRendered
 }
 
 func (m *tuiModel) renderPanel(sess *tuiSession, title string, w, h int, focused bool) string {
@@ -694,7 +709,7 @@ func (m *tuiModel) imeCursorSeq() string {
 
 	switch m.mode {
 	case modeFullscreen:
-		_, curX, curY := sess.RenderANSI(m.width, m.height)
+		_, curX, curY := sess.RenderANSI(m.width, m.height-1)
 		if curX < 0 || curY < 0 {
 			return ""
 		}

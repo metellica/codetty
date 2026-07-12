@@ -325,13 +325,15 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {
-			// Check tab bar click in fullscreen (tab bar is on the last line)
-			if len(sess.Tabs) > 1 && msg.Y == m.height-1 {
-				if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, m.width, msg.X); tabIdx >= 0 {
-					m.requestTabSwitch(sess.Name, tabIdx)
-					m.sel = textSelection{}
-					return nil
+			// Bottom info line (tab bar + session info) — not forwarded to PTY.
+			if msg.Y == m.height-1 {
+				if len(sess.Tabs) > 1 {
+					if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, m.width, msg.X); tabIdx >= 0 {
+						m.requestTabSwitch(sess.Name, tabIdx)
+					}
 				}
+				m.sel = textSelection{}
+				return nil
 			}
 
 			// Mouse-enabled app: forward the real press so drags and
@@ -399,8 +401,8 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			m.sel = textSelection{}
 		} else if m.sel.pending {
 			m.sel.pending = false
-			// Don't forward clicks on the tab bar to PTY
-			if mouseOn && !(len(sess.Tabs) > 1 && m.sel.startY == m.height-1) {
+			// Don't forward clicks on the bottom info line to PTY
+			if mouseOn && m.sel.startY != m.height-1 {
 				m.forwardClickToPTY(m.sel.startX, m.sel.startY)
 			}
 			m.sel = textSelection{}
@@ -409,7 +411,7 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			// Only forward the release if the current tab still has mouse
 			// reporting enabled; after a tab switch the new session may be
 			// a plain shell that would echo the SGR sequence as garbage.
-			if mouseOn && !(len(sess.Tabs) > 1 && msg.Y == m.height-1) {
+			if mouseOn && msg.Y != m.height-1 {
 				m.forwardMouseToPTY(msg)
 			}
 		}
