@@ -54,6 +54,10 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if m.creating {
 		return m.handleCreateKey(msg)
 	}
+	// Create tab mode: capture name input
+	if m.creatingTab {
+		return m.handleCreateTabKey(msg)
+	}
 
 	// Floating window mode: <prefix> q closes, <prefix> still works, all else forwards
 	if m.floatingIdx >= 0 {
@@ -221,6 +225,30 @@ func (m *tuiModel) handleCreateKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+func (m *tuiModel) handleCreateTabKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.Type {
+	case tea.KeyEnter:
+		name := m.createTabText
+		m.creatingTab = false
+		m.createTabText = ""
+		if sess := m.focusedSession(); sess != nil && m.conn != nil {
+			m.conn.CreateTab(sess.Name, name, nil, "", nil)
+		}
+	case tea.KeyEscape:
+		m.creatingTab = false
+		m.createTabText = ""
+	case tea.KeyBackspace:
+		if len(m.createTabText) > 0 {
+			m.createTabText = m.createTabText[:len(m.createTabText)-1]
+		}
+	case tea.KeyRunes:
+		m.createTabText += string(msg.Runes)
+	case tea.KeySpace:
+		m.createTabText += " "
+	}
+	return nil
+}
+
 func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
 		switch msg.Runes[0] {
@@ -315,10 +343,11 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 		case 'R':
 			m.reloadConfig()
 			return nil
-		case 'T':
-			// Create a new tab in the focused session
+		case 't':
+			// Create a new tab in the focused session (prompt for name)
 			if sess := m.focusedSession(); sess != nil && m.conn != nil {
-				m.conn.CreateTab(sess.Name, "", nil, "", nil)
+				m.creatingTab = true
+				m.createTabText = fmt.Sprintf("tab-%d", len(sess.Tabs))
 			}
 			return nil
 		case 'w':

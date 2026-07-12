@@ -76,6 +76,10 @@ type tuiModel struct {
 	creating   bool
 	createText string
 
+	// Create tab mode
+	creatingTab   bool
+	createTabText string
+
 	// Text selection
 	sel textSelection
 
@@ -291,7 +295,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleKey(msg)
 
 	case tea.MouseMsg:
-		if m.renaming || m.creating || m.confirmKill || m.sessMgr.active {
+		if m.renaming || m.creating || m.creatingTab || m.confirmKill || m.sessMgr.active {
 			return m, nil
 		}
 		if m.switcher.active {
@@ -334,7 +338,7 @@ func (m *tuiModel) View() string {
 			hint = "No sessions. Press " + m.prefixLabel + " c to create one."
 		}
 		// Only show the status bar when in an interactive overlay state.
-		hasOverlay := m.renaming || m.creating || m.prefix
+		hasOverlay := m.renaming || m.creating || m.creatingTab || m.prefix
 		centerH := m.height
 		var status string
 		if hasOverlay {

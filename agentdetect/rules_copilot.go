@@ -2,6 +2,7 @@ package agentdetect
 
 // copilotSpec detects the GitHub Copilot CLI. The heuristics mirror the
 // hint strings Copilot renders at the bottom of its TUI:
+//   - idle/done state shows "/ commands" help bar
 //   - approval/selection prompts show both an "esc …" and an "enter …" hint
 //   - plain working states show only the "esc …" interrupt hint
 func copilotSpec() *AgentSpec {
@@ -24,6 +25,15 @@ func copilotSpec() *AgentSpec {
 						Contains("enter to submit"),
 						Contains("enter accept"),
 					),
+				),
+			},
+			{
+				ID:       "idle_prompt",
+				State:    StateIdle,
+				Priority: 200,
+				Match: Any(
+					Contains("/ commands"),
+					Contains("? help"),
 				),
 			},
 			{

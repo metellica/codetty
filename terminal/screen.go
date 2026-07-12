@@ -81,9 +81,43 @@ func (s *ScreenMirror) TailText(n int) string {
 		start = rows - n
 	}
 
+	return s.extractText(start, rows, cols)
+}
+
+// ActiveText returns the bottom portion of the screen that contains the
+// agent's current render. Agent status hints ("esc interrupt", "/ commands")
+// are typically near the bottom of the screen. We return the last tailRows
+// rows to capture them while excluding older scrolled content further up.
+func (s *ScreenMirror) ActiveText() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.written {
+		return ""
+	}
+
+	s.term.Lock()
+	defer s.term.Unlock()
+
+	cols, rows := s.term.Size()
+
+	// Scan the last tailRows rows of the screen. Agent prompts and
+	// status bars are always rendered near the bottom.
+	const tailRows = 10
+	start := rows - tailRows
+	if start < 0 {
+		start = 0
+	}
+
+	return s.extractText(start, rows, cols)
+}
+
+// extractText reads screen rows [start, end) into a newline-joined string.
+// Caller must hold both s.mu and s.term lock.
+func (s *ScreenMirror) extractText(start, end, cols int) string {
 	var lines []string
 	var line strings.Builder
-	for y := start; y < rows; y++ {
+	for y := start; y < end; y++ {
 		line.Reset()
 		line.Grow(cols)
 		for x := 0; x < cols; x++ {

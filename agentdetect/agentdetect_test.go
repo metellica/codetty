@@ -48,6 +48,21 @@ func TestCopilotIdleWithoutSignals(t *testing.T) {
 	}
 }
 
+func TestCopilotIdlePromptOverridesStaleWorking(t *testing.T) {
+	// After copilot finishes, "esc interrupt" may linger on screen
+	// above the idle prompt. The idle rule (higher priority) should win.
+	screens := []string{
+		"esc interrupt\n\n/ commands · ? help · → next tab",
+		"Esc interrupt\nResult: done\n/ commands",
+		"some output\nesc interrupt\n? help",
+	}
+	for _, screen := range screens {
+		if got := copilot().Evaluate(screen); got != StateIdle {
+			t.Errorf("Evaluate(%q) = %q, want idle", screen, got)
+		}
+	}
+}
+
 func TestBlockedOutranksWorking(t *testing.T) {
 	// Both hints on screen: blocker rule has higher priority.
 	screen := "Esc to cancel · Enter to confirm"

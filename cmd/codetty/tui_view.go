@@ -551,6 +551,10 @@ func (m *tuiModel) statusBar() string {
 		prompt := fmt.Sprintf(" New session name: %s█  (Enter confirm, Esc cancel)", m.createText)
 		return tuiStatusStyle.Width(m.width).Render(prompt)
 	}
+	if m.creatingTab {
+		prompt := fmt.Sprintf(" New tab name: %s█  (Enter confirm, Esc cancel)", m.createTabText)
+		return tuiStatusStyle.Width(m.width).Render(prompt)
+	}
 
 	sess := m.focusedSession()
 	var name string
@@ -559,7 +563,7 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	if m.prefix {
-		help := m.prefixLabel + ": d detach  c new  T tab  x kill  X close-tab  r rename  n/p nav  f fullscreen  w manager  Shift+←→ tabs"
+		help := m.prefixLabel + ": d detach  c new  t tab  x kill  X close-tab  r rename  n/p nav  f fullscreen  w manager  Shift+←→ tabs"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 
@@ -658,7 +662,7 @@ func (m *tuiModel) imeCursorSeq() string {
 	// Overlays and text-input prompts capture keyboard for non-PTY input —
 	// no meaningful session cursor position to anchor the IME window to.
 	if m.sessMgr.active || m.switcher.active ||
-		m.confirmKill || m.renaming || m.creating {
+		m.confirmKill || m.renaming || m.creating || m.creatingTab {
 		return ""
 	}
 
