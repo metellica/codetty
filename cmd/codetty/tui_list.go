@@ -13,25 +13,20 @@ import (
 const tuiListSidebarW = 28
 
 var (
+	// listActiveStyle is used for the selected session (blue background).
+	listActiveStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("254")).
+			Background(lipgloss.Color("#264f78"))
+	// listCursorStyle is used for the keyboard-browsing cursor (Shift+Tab)
+	// before Enter confirms — a distinct gray background.
 	listCursorStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(lipgloss.Color("231")).
 			Background(lipgloss.Color("238"))
-	// Selected session: a low-contrast selection highlight (VS Code Dark+
-	// selection blue), visibly distinct from the gray cursor bar.
-	listSelectedStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("254")).
-				Background(lipgloss.Color("#264f78"))
 	listExitedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
 	listIdleStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	// listAccentStyle colors the left accent border for the active session,
-	// similar to VS Code's focus indicator.
-	listAccentStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#007fd4"))
 )
-
-// listAccentChar is the left accent indicator for the active session.
-const listAccentChar = "▎"
 
 // listLayoutWidths returns the big panel and sidebar widths for list mode.
 func (m *tuiModel) listLayoutWidths() (mainW, sideW int) {
@@ -59,55 +54,28 @@ type listLine struct {
 	header  bool // true for the session name row (vs. an agent detail row)
 }
 
-// buildListLines renders sidebar rows as a tree: one header per session
-// (with expand/collapse indicator) followed by tab rows when expanded.
-// Agent tabs get a special ◆ indicator.
+// buildListLines renders sidebar rows: one header per session followed by
+// agent tab rows.
 func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine {
 	var lines []listLine
 	for i, sess := range sessions {
 		isSelected := i == m.selected
-		contentW := innerW
-		if isSelected {
-			contentW = innerW - 1 // reserve 1 column for accent bar
-			if contentW < 1 {
-				contentW = 1
-			}
-		}
+		isCursor := m.listFocus && i == m.listCursor && i != m.selected
 
-		collapsed := m.listCollapsed[sess.Name]
-		// Determine if session has agents to show in tree.
-		hasAgent := false
-		for _, tab := range sess.Tabs {
-			if tab.Agent != "" {
-				hasAgent = true
-				break
-			}
-		}
-		arrow := " "
-		if hasAgent {
-			arrow = "▾"
-			if collapsed {
-				arrow = "▸"
-			}
-		}
-
-		label := fmt.Sprintf("%s %d %s", arrow, i+1, sess.Name)
-		if isSelected {
-			label = fmt.Sprintf("%s%d %s", arrow, i+1, sess.Name)
-		}
+		label := fmt.Sprintf("  %d %s", i+1, sess.Name)
 		if sess.Exited {
 			label += " (exited)"
 		}
-		if lipgloss.Width(label) > contentW {
-			label = ansi.Truncate(label, contentW, "…")
+		if lipgloss.Width(label) > innerW {
+			label = ansi.Truncate(label, innerW, "…")
 		}
-		pad := strings.Repeat(" ", max(0, contentW-lipgloss.Width(label)))
+		pad := strings.Repeat(" ", max(0, innerW-lipgloss.Width(label)))
 		var text string
 		switch {
-		case m.listFocus && i == m.listCursor && m.listCursorTab < 0:
+		case isCursor:
 			text = listCursorStyle.Render(label + pad)
 		case isSelected:
-			style := listSelectedStyle
+			style := listActiveStyle
 			if sess.Exited {
 				style = style.Foreground(lipgloss.Color("243"))
 			}
@@ -117,15 +85,9 @@ func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine
 		default:
 			text = label
 		}
-		if isSelected {
-			text = listAccentStyle.Render(listAccentChar) + text
-		}
 		lines = append(lines, listLine{text: text, sessIdx: i, tabIdx: -1, header: true})
 
-		// Show agent children when expanded.
-		if collapsed || !hasAgent {
-			continue
-		}
+		// Show agent children.
 		for ti, tab := range sess.Tabs {
 			if tab.Agent == "" {
 				continue
@@ -136,17 +98,24 @@ func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine
 				word = "idle"
 			}
 
-			indent := "    "
-			if isSelected {
-				indent = "   " // 1 char less for accent bar
+			var badge string
+			switch state {
+			case "working":
+				badge = agentBadge(state)
+			case "blocked":
+				badge = "■"
+			case "done":
+				badge = "●"
+			default:
+				badge = "○"
 			}
-			tabLabel := fmt.Sprintf("%s◆ %s %s", indent, tab.Agent, word)
-
-			if lipgloss.Width(tabLabel) > contentW {
-				tabLabel = ansi.Truncate(tabLabel, contentW, "…")
+			tabLabel := fmt.Sprintf("    %s %s %s", badge, tab.Agent, word)
+			if lipgloss.Width(tabLabel) > innerW {
+				tabLabel = ansi.Truncate(tabLabel, innerW, "…")
 			}
 
-			// Style based on agent state
+			tabPad := strings.Repeat(" ", max(0, innerW-lipgloss.Width(tabLabel)))
+
 			var style lipgloss.Style
 			switch state {
 			case "blocked":
@@ -159,9 +128,14 @@ func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine
 				style = listIdleStyle
 			}
 
-			text := style.Render(tabLabel)
-			if isSelected {
-				text = listAccentStyle.Render(listAccentChar) + text
+			if isCursor {
+				style = style.Background(listCursorStyle.GetBackground())
+				text = style.Render(tabLabel + tabPad)
+			} else if isSelected {
+				style = style.Background(listActiveStyle.GetBackground())
+				text = style.Render(tabLabel + tabPad)
+			} else {
+				text = style.Render(tabLabel)
 			}
 			lines = append(lines, listLine{text: text, sessIdx: i, tabIdx: ti})
 		}
@@ -213,7 +187,7 @@ func (m *tuiModel) renderSessionList(sessions []*tuiSession, w, h int) string {
 
 	title := " Sessions"
 	if m.listFocus {
-		title += " ↑↓←→"
+		title += " ↑↓"
 	}
 	if lipgloss.Width(title) > innerW {
 		title = ansi.Truncate(title, innerW, "…")
@@ -346,16 +320,6 @@ func (m *tuiModel) handleListKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		m.listCursor = positions[pi].sessIdx
 		m.listCursorTab = -1
-	case tea.KeyLeft:
-		// Collapse agent tree for current session
-		if m.listCursor < n {
-			m.listCollapsed[sessions[m.listCursor].Name] = true
-		}
-	case tea.KeyRight:
-		// Expand agent tree for current session
-		if m.listCursor < n {
-			m.listCollapsed[sessions[m.listCursor].Name] = false
-		}
 	case tea.KeyEnter:
 		m.selected = m.listCursor
 		m.inputFocus = -1
