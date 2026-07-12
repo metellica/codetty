@@ -164,8 +164,7 @@ func (m *tuiModel) listView() string {
 
 	mainW, sideW := m.listLayoutWidths()
 	primary := sessions[m.selected]
-	mainTitle := fmt.Sprintf("▶ [%d] %s", m.selected+1, primary.Name)
-	mainPanel := m.renderPanel(primary, mainTitle, mainW, availH, !m.listFocus)
+	mainPanel := m.renderBigPanelNoTitle(primary, mainW, availH, !m.listFocus)
 	sidebar := m.renderSessionList(sessions, sideW, availH)
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, mainPanel)

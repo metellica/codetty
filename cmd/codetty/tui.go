@@ -875,7 +875,7 @@ func (m *tuiModel) focusedContentSize() (int, int) {
 	if m.mode == modeList {
 		mainW, _ := m.listLayoutWidths()
 		contentW := mainW - 2
-		contentH := availH - 3
+		contentH := availH - 3 // borders + bottom info line
 		if contentW < 1 {
 			contentW = 1
 		}

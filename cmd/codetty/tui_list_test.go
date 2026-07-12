@@ -518,8 +518,8 @@ func TestListMode_BigPanelPressForwardedToMouseApp(t *testing.T) {
 	if !m.mouseFwdDown {
 		t.Fatal("mouseFwdDown should be set after forwarding the press")
 	}
-	// contentX=sideW+1, contentY=2 → local (4,2) → SGR 1-based (5,3), press = 'M'.
-	cap.waitFor(t, "\x1b[<0;5;3M")
+	// contentX=sideW+1, contentY=1 → local (4,3) → SGR 1-based (5,4), press = 'M'.
+	cap.waitFor(t, "\x1b[<0;5;4M")
 
 	release := tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: sideW + 5, Y: 4}
 	m.handleMouse(release)
@@ -527,7 +527,7 @@ func TestListMode_BigPanelPressForwardedToMouseApp(t *testing.T) {
 	if m.mouseFwdDown {
 		t.Fatal("mouseFwdDown should be cleared after the release")
 	}
-	cap.waitFor(t, "\x1b[<0;5;3m")
+	cap.waitFor(t, "\x1b[<0;5;4m")
 }
 
 func TestListMode_BigPanelPressStartsSelectionWithoutMouseApp(t *testing.T) {

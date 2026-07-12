@@ -653,7 +653,7 @@ func (m *tuiModel) panelRegions() []panelRegion {
 func (m *tuiModel) listPanelRegions(availH int) []panelRegion {
 	mainW, sideW := m.listLayoutWidths()
 	contentW := mainW - 2
-	contentH := availH - 3
+	contentH := availH - 3 // borders + bottom info line
 	if contentW < 1 {
 		contentW = 1
 	}
@@ -663,7 +663,7 @@ func (m *tuiModel) listPanelRegions(availH int) []panelRegion {
 	return []panelRegion{{
 		sessionIdx: m.selected,
 		contentX:   sideW + 1, // sidebar on left + main panel left border
-		contentY:   2,
+		contentY:   1,         // top border only (no title row)
 		contentW:   contentW,
 		contentH:   contentH,
 	}}

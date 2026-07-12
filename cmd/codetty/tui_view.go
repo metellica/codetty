@@ -64,6 +64,83 @@ func (m *tuiModel) renderPanel(sess *tuiSession, title string, w, h int, focused
 	return m.renderPanelWithColor(sess, title, w, h, focused, -1, true)
 }
 
+// renderBigPanelNoTitle renders the big panel without a title header line,
+// giving one extra row of terminal content. A bottom info line shows the
+// tab bar (if multiple tabs) with session info right-aligned.
+func (m *tuiModel) renderBigPanelNoTitle(sess *tuiSession, w, h int, focused bool) string {
+	agentState := sessionAgentState(sess)
+
+	style := tuiNormalBorder.Width(w - 2).Height(h - 2)
+	if focused {
+		style = tuiFocusBorder.Width(w - 2).Height(h - 2)
+	}
+	switch agentState {
+	case "blocked":
+		style = style.BorderForeground(agentBlockedColor)
+	case "working":
+		if !focused {
+			style = style.BorderForeground(agentWorkingColor)
+		}
+	case "done":
+		if !focused {
+			style = style.BorderForeground(agentDoneColor)
+		}
+	}
+
+	innerW := w - 2
+	innerH := h - 2 // no title row
+	if innerW < 1 || innerH < 1 {
+		return style.Render("")
+	}
+
+	// Always reserve one line for the bottom info bar.
+	contentH := innerH - 1
+	if contentH < 1 {
+		contentH = 1
+	}
+
+	var lines []string
+	if m.sel.session == sess.Name && (m.sel.active || m.sel.startX != m.sel.endX || m.sel.startY != m.sel.endY) {
+		selFn := func(col, row int) bool {
+			return m.selectionCovers(sess.Name, col, row)
+		}
+		lines = sess.RenderANSIWithSelection(innerW, contentH, selFn)
+	} else {
+		lines, _, _ = sess.RenderANSI(innerW, contentH)
+	}
+
+	content := strings.Join(lines, "\n")
+
+	// Build the bottom info line: tab bar on left, session info on right.
+	sessInfo := fmt.Sprintf("[%d] %s", m.selected+1, sess.Name)
+	infoStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245"))
+
+	hasTabBar := len(sess.Tabs) > 1
+	if hasTabBar {
+		tabBar := renderTabBar(sess.Tabs, sess.ActiveTab, innerW, false)
+		tabBarW := lipgloss.Width(tabBar)
+		infoW := lipgloss.Width(sessInfo)
+		pad := innerW - tabBarW - infoW
+		if pad > 0 {
+			bottomLine := tabBar + strings.Repeat(" ", pad) + infoStyle.Render(sessInfo)
+			return style.Render(content + "\n" + bottomLine)
+		}
+		// Not enough space for info, just show tab bar
+		return style.Render(content + "\n" + tabBar)
+	}
+
+	// No tab bar: right-align session info
+	infoRendered := infoStyle.Render(sessInfo)
+	infoW := lipgloss.Width(infoRendered)
+	pad := innerW - infoW
+	if pad < 0 {
+		pad = 0
+	}
+	bottomLine := strings.Repeat(" ", pad) + infoRendered
+	return style.Render(content + "\n" + bottomLine)
+}
+
 // renderPanelWithColor renders a panel with a highlighted title bar for side panels.
 // If colorIdx >= 0, the title gets a light green background and content is dimmed.
 // If showContent is false, only the title is rendered (useful for very small side panels).
@@ -467,7 +544,7 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	if m.prefix {
-		help := m.prefixLabel + ": d detach  c new  T tab  x kill  X close-tab  r rename  n/p nav  s list  f full  Shift+←→ tabs"
+		help := m.prefixLabel + ": d detach  c new  T tab  x kill  X close-tab  r rename  n/p nav  f fullscreen  w manager  Shift+←→ tabs"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 
@@ -615,23 +692,6 @@ func (m *tuiModel) imeCursorSeq() string {
 		return ""
 	}
 
-	// absPos computes absolute (row, col) given content-space cursor and panel top-left.
-	// Panels rendered by renderPanelWithColor have: 1 col left border, 1 row top border +
-	// 1 row title header = 2 rows before the first content line.
-	mkSeq := func(panelTopRow, panelLeftCol, innerW, innerH int) string {
-		if innerW < 1 || innerH < 1 {
-			return ""
-		}
-		_, curX, curY := sess.RenderANSI(innerW, innerH)
-		if curX < 0 || curY < 0 {
-			return ""
-		}
-		absRow := panelTopRow + 2 + curY
-		absCol := panelLeftCol + 1 + curX
-		// ANSI CUP is 1-indexed.
-		return fmt.Sprintf("\x1b[%d;%dH", absRow+1, absCol+1)
-	}
-
 	switch m.mode {
 	case modeFullscreen:
 		_, curX, curY := sess.RenderANSI(m.width, m.height)
@@ -641,8 +701,20 @@ func (m *tuiModel) imeCursorSeq() string {
 		return fmt.Sprintf("\x1b[%d;%dH", curY+1, curX+1)
 
 	case modeList:
-		mainW, _ := m.listLayoutWidths()
-		return mkSeq(0, 0, mainW-2, availH-3)
+		mainW, sideW := m.listLayoutWidths()
+		innerW := mainW - 2
+		innerH := availH - 3 // borders + bottom info line
+		if innerW < 1 || innerH < 1 {
+			return ""
+		}
+		_, curX, curY := sess.RenderANSI(innerW, innerH)
+		if curX < 0 || curY < 0 {
+			return ""
+		}
+		// top border only (no title row): +1 for border
+		absRow := 1 + curY
+		absCol := sideW + 1 + curX
+		return fmt.Sprintf("\x1b[%d;%dH", absRow+1, absCol+1)
 	}
 	return ""
 }

@@ -30,7 +30,6 @@ TUI Keys (%s prefix):
   w       Session manager (hide/show/kill)
   n/p     Next/previous session
   f       Toggle fullscreen (no borders/status)
-  s       Session-list mode (big panel + sidebar, default)
   h/l     Move session order left/right
   1-9     Jump to session by number
 
