@@ -404,10 +404,12 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 				m.forwardClickToPTY(m.sel.startX, m.sel.startY)
 			}
 			m.sel = textSelection{}
-		} else {
+		} else if m.mouseFwdDown {
 			m.mouseFwdDown = false
-			// Don't forward release events on the tab bar line
-			if !(len(sess.Tabs) > 1 && msg.Y == m.height-1) {
+			// Only forward the release if the current tab still has mouse
+			// reporting enabled; after a tab switch the new session may be
+			// a plain shell that would echo the SGR sequence as garbage.
+			if mouseOn && !(len(sess.Tabs) > 1 && msg.Y == m.height-1) {
 				m.forwardMouseToPTY(msg)
 			}
 		}

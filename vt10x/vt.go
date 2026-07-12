@@ -34,6 +34,9 @@ type View interface {
 	// Mode returns the current terminal mode.//
 	Mode() ModeFlag
 
+	// ClearMode clears the given mode flag bits.
+	ClearMode(bits ModeFlag)
+
 	// Title represents the title of the console window.
 	Title() string
 

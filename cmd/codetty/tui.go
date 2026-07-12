@@ -456,6 +456,14 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 			m.syncTabInfo(sess, evt.Info)
 			// On tab switch, invalidate the render cache so new tab content shows
 			sess.invalidateCache()
+			// Clear mouse mode so stale flags from the previous tab
+			// (e.g. lazygit) don't forward SGR sequences to a plain shell.
+			// Also clear mouseFwdDown so a dangling release from the tab
+			// bar click isn't forwarded to the new tab.
+			if evt.Type == "tab_switched" {
+				sess.ResetMouseMode()
+				m.mouseFwdDown = false
+			}
 			// A tab switch this client requested means the user navigated
 			// to the now-active tab: acknowledge its done marker.
 			if evt.Type == "tab_switched" && m.pendingTabAck[evt.Session] {

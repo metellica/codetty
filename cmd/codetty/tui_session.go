@@ -212,6 +212,17 @@ func (s *tuiSession) MouseEnabled() bool {
 	return s.term.Mode()&vt10x.ModeMouseMask != 0
 }
 
+// ResetMouseMode clears mouse reporting mode flags from the terminal.
+// Called on tab switch so stale flags from a previous tab (e.g. lazygit)
+// don't cause SGR sequences to be forwarded to a plain shell.
+func (s *tuiSession) ResetMouseMode() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.term.Lock()
+	defer s.term.Unlock()
+	s.term.ClearMode(vt10x.ModeMouseMask | vt10x.ModeMouseSgr)
+}
+
 // RenderDimmed renders terminal content in uniform dim gray, skipping per-cell color processing.
 // The result is cached until new output arrives or the size changes, since
 // side panels are re-rendered on every View() call.

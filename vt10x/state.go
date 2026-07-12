@@ -171,6 +171,11 @@ func (t *State) Mode() ModeFlag {
 	return t.mode
 }
 
+// ClearMode clears the given mode flag bits.
+func (t *State) ClearMode(bits ModeFlag) {
+	t.mode &^= bits
+}
+
 // Title returns the current title set via the tty.
 func (t *State) Title() string {
 	return t.title
