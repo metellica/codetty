@@ -46,30 +46,63 @@ func (m *tuiModel) listLayoutWidths() (mainW, sideW int) {
 
 // listLine is one rendered sidebar row, tagged with the session (and tab,
 // for agent rows) it belongs to so rendering and mouse hit-testing stay in
-// sync.
+// sync. Box border rows carry the session index with tabIdx -1 so clicking
+// a border still selects the session.
 type listLine struct {
 	text    string
 	sessIdx int
-	tabIdx  int  // tab index for agent detail rows, -1 for header rows
-	header  bool // true for the session name row (vs. an agent detail row)
+	tabIdx  int  // tab index for agent detail rows, -1 for header/border rows
+	header  bool // true for the session name row (vs. agent/border rows)
 }
 
-// buildListLines renders sidebar rows: one header per session followed by
-// agent tab rows.
+// listSessionBorderColor picks the box border color for one session entry,
+// mirroring the big-panel convention: blocked always wins, then selection,
+// then cursor, then agent activity, then exited/normal.
+func listSessionBorderColor(sess *tuiSession, isSelected, isCursor bool) lipgloss.Color {
+	state := sessionAgentState(sess)
+	switch {
+	case state == "blocked":
+		return agentBlockedColor
+	case isSelected:
+		return lipgloss.Color("86")
+	case isCursor:
+		return lipgloss.Color("250")
+	case state == "working":
+		return agentWorkingColor
+	case state == "done":
+		return agentDoneColor
+	case sess.Exited:
+		return lipgloss.Color("238")
+	}
+	return lipgloss.Color("240")
+}
+
+// buildListLines renders sidebar rows: one rounded box per session framing
+// the session header row and its agent tab rows.
 func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine {
 	var lines []listLine
+	boxW := max(1, innerW-2) // content width between the │ borders
 	for i, sess := range sessions {
 		isSelected := i == m.selected
 		isCursor := m.listFocus && i == m.listCursor && i != m.selected
 
-		label := fmt.Sprintf("  %d %s", i+1, sess.Name)
+		border := lipgloss.NewStyle().
+			Foreground(listSessionBorderColor(sess, isSelected, isCursor))
+		edge := strings.Repeat("─", boxW)
+		side := border.Render("│")
+		wrap := func(content string) string { return side + content + side }
+
+		lines = append(lines, listLine{
+			text: border.Render("╭" + edge + "╮"), sessIdx: i, tabIdx: -1})
+
+		label := fmt.Sprintf(" %d %s", i+1, sess.Name)
 		if sess.Exited {
 			label += " (exited)"
 		}
-		if lipgloss.Width(label) > innerW {
-			label = ansi.Truncate(label, innerW, "…")
+		if lipgloss.Width(label) > boxW {
+			label = ansi.Truncate(label, boxW, "…")
 		}
-		pad := strings.Repeat(" ", max(0, innerW-lipgloss.Width(label)))
+		pad := strings.Repeat(" ", max(0, boxW-lipgloss.Width(label)))
 		var text string
 		switch {
 		case isCursor:
@@ -81,11 +114,11 @@ func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine
 			}
 			text = style.Render(label + pad)
 		case sess.Exited:
-			text = listExitedStyle.Render(label)
+			text = listExitedStyle.Render(label) + pad
 		default:
-			text = label
+			text = label + pad
 		}
-		lines = append(lines, listLine{text: text, sessIdx: i, tabIdx: -1, header: true})
+		lines = append(lines, listLine{text: wrap(text), sessIdx: i, tabIdx: -1, header: true})
 
 		// Show agent children.
 		for ti, tab := range sess.Tabs {
@@ -109,12 +142,12 @@ func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine
 			default:
 				badge = "○"
 			}
-			tabLabel := fmt.Sprintf("    %s %s %s", badge, tab.Agent, word)
-			if lipgloss.Width(tabLabel) > innerW {
-				tabLabel = ansi.Truncate(tabLabel, innerW, "…")
+			tabLabel := fmt.Sprintf("   %s %s %s", badge, tab.Agent, word)
+			if lipgloss.Width(tabLabel) > boxW {
+				tabLabel = ansi.Truncate(tabLabel, boxW, "…")
 			}
 
-			tabPad := strings.Repeat(" ", max(0, innerW-lipgloss.Width(tabLabel)))
+			tabPad := strings.Repeat(" ", max(0, boxW-lipgloss.Width(tabLabel)))
 
 			var style lipgloss.Style
 			switch state {
@@ -135,10 +168,13 @@ func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine
 				style = style.Background(listActiveStyle.GetBackground())
 				text = style.Render(tabLabel + tabPad)
 			} else {
-				text = style.Render(tabLabel)
+				text = style.Render(tabLabel) + tabPad
 			}
-			lines = append(lines, listLine{text: text, sessIdx: i, tabIdx: ti})
+			lines = append(lines, listLine{text: wrap(text), sessIdx: i, tabIdx: ti})
 		}
+
+		lines = append(lines, listLine{
+			text: border.Render("╰" + edge + "╯"), sessIdx: i, tabIdx: -1})
 	}
 	return lines
 }
@@ -204,22 +240,27 @@ func (m *tuiModel) renderSessionList(sessions []*tuiSession, w, h int) string {
 
 	lines := m.buildListLines(sessions, innerW)
 
-	// Clamp scroll, then keep the cursor's row visible while the sidebar
-	// has keyboard focus.
+	// Clamp scroll, then keep the cursor session's whole box visible while
+	// the sidebar has keyboard focus (top edge wins when it doesn't fit).
 	maxScroll := max(0, len(lines)-innerH)
 	m.listScroll = min(max(m.listScroll, 0), maxScroll)
 	if m.listFocus {
-		cursorLine := 0
+		first, last := -1, -1
 		for li, ln := range lines {
-			if ln.sessIdx == m.listCursor && ln.tabIdx == m.listCursorTab {
-				cursorLine = li
-				break
+			if ln.sessIdx == m.listCursor {
+				if first == -1 {
+					first = li
+				}
+				last = li
 			}
 		}
-		if cursorLine < m.listScroll {
-			m.listScroll = cursorLine
-		} else if cursorLine >= m.listScroll+innerH {
-			m.listScroll = cursorLine - innerH + 1
+		if first >= 0 {
+			if last >= m.listScroll+innerH {
+				m.listScroll = last - innerH + 1
+			}
+			if first < m.listScroll {
+				m.listScroll = first
+			}
 		}
 	}
 

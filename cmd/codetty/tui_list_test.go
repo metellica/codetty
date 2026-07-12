@@ -274,13 +274,14 @@ func TestListView_DoneMarkerShown(t *testing.T) {
 func TestListMode_MouseClickSidebarSwitches(t *testing.T) {
 	m := newListTestModel()
 
-	// Click the third session's header row: sidebar is on the left,
-	// rows start at y=2 (border + title), one line per session.
+	// Click the third session's header row: sidebar is on the left, rows
+	// start at y=2 (border + title), each session is boxed (top border,
+	// header, bottom border): gamma's header is at y=9.
 	m.handleMouse(tea.MouseMsg{
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 		X:      2,
-		Y:      2 + 2,
+		Y:      9,
 	})
 	if m.selected != 2 {
 		t.Fatalf("selected = %d, want 2 after sidebar click", m.selected)
@@ -343,11 +344,12 @@ func TestListMode_PrefixFEntersAndExitsFullscreen(t *testing.T) {
 
 func TestListHitTest_ScrolledList(t *testing.T) {
 	m := newListTestModel()
-	m.listScroll = 1
+	m.listScroll = 4
 	_, sideW := m.listLayoutWidths()
 
-	// Row y=2 is the first visible line; with scroll offset 1 it maps to
-	// the second session. Sidebar is on the left.
+	// Row y=2 is the first visible line; with scroll offset 4 it maps to
+	// beta's header row (each session box is 3 lines: border, header,
+	// border). Sidebar is on the left.
 	if idx, tabIdx := m.listHitTest(2, 2); idx != 1 || tabIdx != -1 {
 		t.Fatalf("listHitTest = (%d, %d), want (1, -1)", idx, tabIdx)
 	}
@@ -365,15 +367,16 @@ func TestListHitTest_AgentRowReturnsTabIndex(t *testing.T) {
 		{Name: "cl", Agent: "claude", AgentState: "blocked"},
 	}
 
-	// Sidebar is on left. Only agent tabs shown. Rows: y=2 alpha(sess 0),
-	// y=3 beta(sess 1), y=4 copilot(tab 1), y=5 claude(tab 2), y=6 gamma(sess 2).
-	if idx, tabIdx := m.listHitTest(2, 3); idx != 1 || tabIdx != -1 {
+	// Sidebar is on left; each session is boxed. Rows: y=2..4 alpha box,
+	// y=5 beta top border, y=6 beta header, y=7 copilot(tab 1),
+	// y=8 claude(tab 2), y=9 beta bottom border, y=10..12 gamma box.
+	if idx, tabIdx := m.listHitTest(2, 6); idx != 1 || tabIdx != -1 {
 		t.Fatalf("header row = (%d, %d), want (1, -1)", idx, tabIdx)
 	}
-	if idx, tabIdx := m.listHitTest(2, 4); idx != 1 || tabIdx != 1 {
+	if idx, tabIdx := m.listHitTest(2, 7); idx != 1 || tabIdx != 1 {
 		t.Fatalf("copilot row = (%d, %d), want (1, 1)", idx, tabIdx)
 	}
-	if idx, tabIdx := m.listHitTest(2, 5); idx != 1 || tabIdx != 2 {
+	if idx, tabIdx := m.listHitTest(2, 8); idx != 1 || tabIdx != 2 {
 		t.Fatalf("claude row = (%d, %d), want (1, 2)", idx, tabIdx)
 	}
 }
@@ -400,13 +403,14 @@ func TestListMode_MouseClickAgentRowSelectsSession(t *testing.T) {
 	}
 	m.sessions[1].ActiveTab = 0
 
-	// Click the copilot agent row. Only agents shown: y=2 alpha, y=3 beta,
-	// y=4 copilot(tab 1), y=5 gamma.
+	// Click the copilot agent row. Boxed sessions: y=2..4 alpha box,
+	// y=5 beta top border, y=6 beta header, y=7 copilot(tab 1),
+	// y=8 beta bottom border, y=9..11 gamma box.
 	m.handleMouse(tea.MouseMsg{
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 		X:      2,
-		Y:      4,
+		Y:      7,
 	})
 
 	if m.selected != 1 {
@@ -442,12 +446,13 @@ func TestListMode_MouseClickHeaderDoesNotSwitchTab(t *testing.T) {
 		{Name: "cp", Agent: "copilot", AgentState: "working"},
 	}
 
-	// Click beta's header row (y=3). Sidebar on left.
+	// Click beta's header row (y=6: after alpha's 3-line box and beta's
+	// top border). Sidebar on left.
 	m.handleMouse(tea.MouseMsg{
 		Action: tea.MouseActionPress,
 		Button: tea.MouseButtonLeft,
 		X:      2,
-		Y:      3,
+		Y:      6,
 	})
 
 	if m.selected != 1 {
