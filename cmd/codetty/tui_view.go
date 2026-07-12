@@ -108,7 +108,7 @@ func (m *tuiModel) renderBigPanelNoTitle(sess *tuiSession, w, h int, focused boo
 		return style.Render("")
 	}
 
-	// Always reserve one line for the bottom info bar.
+	// Reserve one line for the bottom info bar (which includes tab bar if present).
 	contentH := innerH - 1
 	if contentH < 1 {
 		contentH = 1

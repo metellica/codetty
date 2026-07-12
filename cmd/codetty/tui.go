@@ -508,7 +508,9 @@ func (m *tuiModel) syncTabInfo(sess *tuiSession, info daemon.SessionInfo) {
 					m.resizeSessionPTY(sess, cw, ch)
 				}
 			} else if cols, rows := m.focusedContentSize(); cols > 0 && rows > 0 {
-				m.resizeSessionPTY(sess, cols, rows)
+				// Main panel: info line already accounts for tab bar
+				sess.Resize(uint16(cols), uint16(rows))
+				m.conn.SendResizeSession(sess.Name, uint16(cols), uint16(rows))
 			}
 		}
 	}
@@ -771,8 +773,8 @@ func (m *tuiModel) applyDesiredOrder() {
 }
 
 // resizeSessionPTYs sends the effective content size of the focused panel to the daemon,
-// and resizes local vt10x terminals to match. Sessions showing a tab bar
-// get one row less, so the PTY matches the rows actually displayed.
+// and resizes local vt10x terminals to match. In list/fullscreen mode the
+// bottom info line already includes the tab bar, so no extra deduction is needed.
 func (m *tuiModel) resizeSessionPTYs() {
 	if m.conn == nil {
 		return
@@ -782,12 +784,18 @@ func (m *tuiModel) resizeSessionPTYs() {
 		return
 	}
 	for _, sess := range m.sessions {
-		m.resizeSessionPTY(sess, cols, rows)
+		r := rows
+		if r < 1 {
+			r = 1
+		}
+		sess.Resize(uint16(cols), uint16(r))
+		m.conn.SendResizeSession(sess.Name, uint16(cols), uint16(r))
 	}
 }
 
 // resizeSessionPTY resizes one session's local terminal and daemon PTY to
 // the given content size, reserving one row for the tab bar if shown.
+// Used by floating windows where the tab bar is rendered inside the content area.
 func (m *tuiModel) resizeSessionPTY(sess *tuiSession, cols, rows int) {
 	if len(sess.Tabs) > 1 {
 		rows--

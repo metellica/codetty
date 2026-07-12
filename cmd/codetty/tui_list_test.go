@@ -589,8 +589,10 @@ func TestResizeSessionPTYs_ReservesTabBarRow(t *testing.T) {
 	if got := m.sessions[0].Rows; int(got) != rows {
 		t.Fatalf("single-tab session rows = %d, want %d", got, rows)
 	}
-	if got := m.sessions[1].Rows; int(got) != rows-1 {
-		t.Fatalf("tab-bar session rows = %d, want %d (one row reserved for tab bar)", got, rows-1)
+	// In list mode the tab bar is part of the bottom info line (already
+	// accounted for by focusedContentSize), so no extra row is deducted.
+	if got := m.sessions[1].Rows; int(got) != rows {
+		t.Fatalf("tab-bar session rows = %d, want %d (info line includes tab bar)", got, rows)
 	}
 	if got := m.sessions[0].Cols; int(got) != cols {
 		t.Fatalf("cols = %d, want %d", got, cols)
@@ -616,16 +618,17 @@ func TestSyncTabInfo_RefitsPTYWhenTabBarAppears(t *testing.T) {
 	cols, rows := m.focusedContentSize()
 	_ = cols
 
-	// Second tab appears: PTY must shrink by one row for the tab bar.
+	// Second tab appears: in list mode the tab bar is on the info line,
+	// so PTY size doesn't change.
 	m.syncTabInfo(m.sessions[0], daemon.SessionInfo{
 		Tabs:      []daemon.TabInfo{{Name: "sh"}, {Name: "cp"}},
 		ActiveTab: 1,
 	})
-	if got := m.sessions[0].Rows; int(got) != rows-1 {
-		t.Fatalf("rows after tab bar appears = %d, want %d", got, rows-1)
+	if got := m.sessions[0].Rows; int(got) != rows {
+		t.Fatalf("rows after tab bar appears = %d, want %d", got, rows)
 	}
 
-	// Back to one tab: full height again.
+	// Back to one tab: same size.
 	m.syncTabInfo(m.sessions[0], daemon.SessionInfo{
 		Tabs:      []daemon.TabInfo{{Name: "sh"}},
 		ActiveTab: 0,
