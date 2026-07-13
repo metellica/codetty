@@ -37,6 +37,9 @@ type tuiSession struct {
 	term vt10x.Terminal
 	mu   sync.Mutex
 
+	// Scrollback view offset: 0 = live view, >0 = scrolled back into history.
+	scrollOffset int
+
 	// Per-source-row line cache for incremental rendering. lineCache is
 	// indexed by terminal row; lineValid marks entries that are up to date.
 	// The cache consumes the terminal's dirty-line flags (via ResetDirty),
@@ -87,6 +90,54 @@ func (s *tuiSession) WriteOutput(data []byte) {
 	s.dimStale = true
 }
 
+// ScrollUp moves the scrollback view offset up (further into history).
+// Returns true if the offset changed (i.e. there is more scrollback to show).
+func (s *tuiSession) ScrollUp(n int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.term.Lock()
+	sbLen := s.term.ScrollbackLen()
+	s.term.Unlock()
+	if sbLen == 0 {
+		return false
+	}
+	old := s.scrollOffset
+	s.scrollOffset += n
+	if s.scrollOffset > sbLen {
+		s.scrollOffset = sbLen
+	}
+	return s.scrollOffset != old
+}
+
+// ScrollDown moves the scrollback view offset down (toward live view).
+// Returns true if the offset changed.
+func (s *tuiSession) ScrollDown(n int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	old := s.scrollOffset
+	s.scrollOffset -= n
+	if s.scrollOffset < 0 {
+		s.scrollOffset = 0
+	}
+	return s.scrollOffset != old
+}
+
+// IsScrolledBack returns true if the session is showing scrollback content.
+func (s *tuiSession) IsScrolledBack() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.scrollOffset > 0
+}
+
+// HasScrollback returns true if there are lines in the scrollback buffer.
+func (s *tuiSession) HasScrollback() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.term.Lock()
+	defer s.term.Unlock()
+	return s.term.ScrollbackLen() > 0
+}
+
 // invalidateCache forces a full re-render on the next frame.
 func (s *tuiSession) invalidateCache() {
 	s.mu.Lock()
@@ -116,6 +167,11 @@ func (s *tuiSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 	defer s.mu.Unlock()
 	s.term.Lock()
 	defer s.term.Unlock()
+
+	// When scrolled back into the scrollback buffer, use a dedicated path.
+	if s.scrollOffset > 0 {
+		return s.renderScrollback(w, h)
+	}
 
 	cols, rows := s.term.Size()
 
@@ -183,6 +239,49 @@ func (s *tuiSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 	return lines, curX, curY
 }
 
+// renderScrollback renders the combined scrollback + visible buffer at the
+// current scrollOffset. Called with both mu and term locks held.
+// No cursor is shown while scrolled back.
+func (s *tuiSession) renderScrollback(w, h int) ([]string, int, int) {
+	_, rows := s.term.Size()
+	sbLen := s.term.ScrollbackLen()
+
+	// Clamp scrollOffset so it doesn't exceed the scrollback size.
+	if s.scrollOffset > sbLen {
+		s.scrollOffset = sbLen
+	}
+
+	// Combined buffer: scrollback (0..sbLen-1) + visible (0..rows-1).
+	// We want to show h rows ending at position (sbLen + rows - scrollOffset - 1).
+	totalLines := sbLen + rows
+	endIdx := totalLines - s.scrollOffset // one past the last line to show
+	startIdx := endIdx - h
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	// Consume dirty flags so they don't accumulate.
+	s.term.ResetDirty()
+
+	lines := make([]string, h)
+	for displayRow := 0; displayRow < h; displayRow++ {
+		idx := startIdx + displayRow
+		if idx < 0 || idx >= totalLines {
+			lines[displayRow] = strings.Repeat(" ", w)
+			continue
+		}
+		var row []vt10x.Glyph
+		if idx < sbLen {
+			row = s.term.ScrollbackRow(idx)
+		} else {
+			row = s.term.Row(idx - sbLen)
+		}
+		rendered, _ := renderRowANSI(row, w, -1) // no cursor while scrolled
+		lines[displayRow] = rendered
+	}
+	return lines, -1, -1
+}
+
 // SnapshotANSI returns a snapshot for panel rendering.
 func (s *tuiSession) SnapshotANSI(w, h int) terminalSnap {
 	s.mu.Lock()
@@ -223,6 +322,16 @@ func (s *tuiSession) MouseEnabled() bool {
 	s.term.Lock()
 	defer s.term.Unlock()
 	return s.term.Mode()&vt10x.ModeMouseMask != 0
+}
+
+// AltScreenActive returns true if the session is in the alternate screen buffer
+// (e.g. less, vim, man, htop).
+func (s *tuiSession) AltScreenActive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.term.Lock()
+	defer s.term.Unlock()
+	return s.term.Mode()&vt10x.ModeAltScreen != 0
 }
 
 // ResetMouseMode clears mouse reporting mode flags from the terminal.

@@ -411,6 +411,8 @@ func (m *tuiModel) forwardKey(msg tea.KeyMsg) {
 	}
 	// Clear any active selection when typing
 	m.sel = textSelection{}
+	// Snap back to live view on any keypress.
+	sess.ScrollDown(999999)
 	raw := tuiKeyToBytes(msg)
 	if len(raw) > 0 {
 		m.conn.SendInput(sess.Name, raw)

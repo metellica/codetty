@@ -207,6 +207,8 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 						sess := sessions[r.sessionIdx]
 						if sess.MouseEnabled() {
 							m.forwardMouseToSession(sess.Name, msg, localX, localY)
+						} else {
+							m.handleSessionScroll(sess, msg.Button == tea.MouseButtonWheelUp)
 						}
 					}
 					break
@@ -375,6 +377,8 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 		// Forward scroll and other buttons directly
 		if mouseOn {
 			m.forwardMouseToPTY(msg)
+		} else if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
+			m.handleSessionScroll(sess, msg.Button == tea.MouseButtonWheelUp)
 		}
 	case tea.MouseActionMotion:
 		if m.sel.pending {
@@ -533,8 +537,12 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
-			if inside && mouseOn {
-				m.forwardMouseToSession(sess.Name, msg, localX, localY)
+			if inside {
+				if mouseOn {
+					m.forwardMouseToSession(sess.Name, msg, localX, localY)
+				} else {
+					m.handleSessionScroll(sess, msg.Button == tea.MouseButtonWheelUp)
+				}
 			}
 			return nil
 		}
@@ -651,6 +659,48 @@ func (m *tuiModel) forwardMouseToSession(name string, msg tea.MouseMsg, localX, 
 	seq := fmt.Sprintf("\x1b[<%d;%d;%d%c", btn, x, y, suffix)
 	m.conn.SendInput(name, []byte(seq))
 	m.ackAgentDoneSession(name)
+}
+
+// scrollLinesPerTick is the number of lines to scroll per wheel tick.
+const scrollLinesPerTick = 3
+
+// sendScrollAsArrows converts a scroll wheel event into repeated up/down arrow
+// key sequences for the given session. Only called when the session is in the
+// alternate screen buffer without mouse reporting (xterm alternateScroll behavior).
+func (m *tuiModel) sendScrollAsArrows(sessionName string, up bool) {
+	if m.conn == nil {
+		return
+	}
+	var seq string
+	if up {
+		seq = "\x1b[A"
+	} else {
+		seq = "\x1b[B"
+	}
+	m.conn.SendInput(sessionName, []byte(strings.Repeat(seq, scrollLinesPerTick)))
+}
+
+// handleSessionScroll handles a scroll wheel event for a session that does NOT
+// have mouse reporting enabled. If there is scrollback content, navigates it;
+// otherwise (in alt-screen apps like less/vim without mouse), sends arrow keys.
+func (m *tuiModel) handleSessionScroll(sess *tuiSession, up bool) {
+	// If we're already scrolled back, or there's scrollback available and
+	// we're scrolling up, navigate the scrollback buffer.
+	if sess.IsScrolledBack() || (up && sess.HasScrollback()) {
+		if up {
+			sess.ScrollUp(scrollLinesPerTick)
+		} else {
+			sess.ScrollDown(scrollLinesPerTick)
+		}
+		return
+	}
+	// No scrollback content (or scrolling down past live): try arrow keys
+	// for alt-screen apps like less/man.
+	if up {
+		m.sendScrollAsArrows(sess.Name, true)
+	} else {
+		m.sendScrollAsArrows(sess.Name, false)
+	}
 }
 
 // panelRegions computes the on-screen content rectangles for all visible sessions.

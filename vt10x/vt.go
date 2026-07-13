@@ -62,6 +62,13 @@ type View interface {
 	// must not be modified by the caller.
 	Row(y int) []Glyph
 
+	// ScrollbackLen returns the number of lines in the scrollback buffer.
+	ScrollbackLen() int
+
+	// ScrollbackRow returns the glyphs of scrollback line y (0 = oldest).
+	// Returns nil if y is out of range. Only valid while the lock is held.
+	ScrollbackRow(y int) []Glyph
+
 	// Lock locks the state object's mutex.
 	Lock()
 

@@ -19,8 +19,8 @@ func TestNewTUIModel_Defaults(t *testing.T) {
 	if m.conn != nil {
 		t.Fatalf("conn = %#v, want nil", m.conn)
 	}
-	if m.mode != modeList {
-		t.Fatalf("mode = %v, want %v", m.mode, modeList)
+	if m.mode != modeFocusBig {
+		t.Fatalf("mode = %v, want %v", m.mode, modeFocusBig)
 	}
 	if m.width != 120 || m.height != 40 {
 		t.Fatalf("size = %dx%d, want 120x40", m.width, m.height)

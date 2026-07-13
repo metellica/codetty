@@ -80,6 +80,9 @@ type parseState func(c rune)
 
 // State represents the terminal emulation state. Use Lock/Unlock
 // methods to synchronize data access with VT.
+// maxScrollback is the default maximum number of lines kept in the scrollback buffer.
+const maxScrollback = 10000
+
 type State struct {
 	DebugLogger *log.Logger
 
@@ -101,6 +104,11 @@ type State struct {
 	tabs          []bool
 	title         string
 	colorOverride map[Color]Color
+
+	// Scrollback buffer: lines that scrolled off the top of the primary screen.
+	// Not used in alternate screen mode.
+	scrollback    []line
+	scrollbackMax int // 0 means use maxScrollback
 }
 
 func newState(w io.Writer) *State {
@@ -520,6 +528,26 @@ func (t *State) scrollDown(orig, n int) {
 
 func (t *State) scrollUp(orig, n int) {
 	n = clamp(n, 0, t.bottom-orig+1)
+
+	// Save lines scrolled off the top to the scrollback buffer,
+	// but only when scrolling the full primary screen (not alt screen,
+	// not a custom sub-region).
+	if orig == 0 && t.top == 0 && t.mode&ModeAltScreen == 0 {
+		sbMax := t.scrollbackMax
+		if sbMax == 0 {
+			sbMax = maxScrollback
+		}
+		for i := 0; i < n; i++ {
+			saved := make(line, len(t.lines[i]))
+			copy(saved, t.lines[i])
+			t.scrollback = append(t.scrollback, saved)
+		}
+		// Trim scrollback to max.
+		if len(t.scrollback) > sbMax {
+			t.scrollback = t.scrollback[len(t.scrollback)-sbMax:]
+		}
+	}
+
 	t.clear(0, orig, t.cols-1, orig+n-1)
 	t.changed |= ChangedScreen
 	for i := orig; i <= t.bottom-n; i++ {
@@ -803,4 +831,18 @@ func (t *State) String() string {
 	}
 
 	return string(view)
+}
+
+// ScrollbackLen returns the number of lines in the scrollback buffer.
+func (t *State) ScrollbackLen() int {
+	return len(t.scrollback)
+}
+
+// ScrollbackRow returns the glyphs of scrollback line y (0 = oldest).
+// Returns nil if y is out of range. Only valid while the lock is held.
+func (t *State) ScrollbackRow(y int) []Glyph {
+	if y < 0 || y >= len(t.scrollback) {
+		return nil
+	}
+	return []Glyph(t.scrollback[y])
 }
