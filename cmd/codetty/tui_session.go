@@ -96,6 +96,19 @@ func (s *tuiSession) invalidateCache() {
 	s.dimStale = true
 }
 
+// resetTerminal clears all content from the vt10x terminal so stale output
+// from a previous tab does not bleed through before the new tab's snapshot
+// arrives.
+func (s *tuiSession) resetTerminal() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// ESC[2J clears the entire screen; ESC[H moves cursor to (0,0).
+	s.term.Write([]byte("\x1b[2J\x1b[H"))
+	s.lineValid = nil
+	s.lineCache = nil
+	s.dimStale = true
+}
+
 // RenderANSI renders the terminal screen at the given dimensions, reusing
 // cached per-row strings for rows the terminal has not modified.
 func (s *tuiSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
