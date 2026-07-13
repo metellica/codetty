@@ -171,7 +171,7 @@ func (m *tuiModel) popMode() bool {
 func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tuiModel {
 	return &tuiModel{
 		conn:              conn,
-		mode:              modeList,
+		mode:              modeFocusBig,
 		listCursorTab:     -1,
 		focusCursor:       -1,
 		width:             120,
