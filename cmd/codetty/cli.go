@@ -134,14 +134,14 @@ func startTUI(sockPath string, sc startupConfig) {
 
 	model := newTUIModel(conn, sc.focusTarget, sc.autoCreate)
 
-	// Apply startup layout mode (default is modeList).
+	// Apply startup layout mode (default is modeFocusBig).
 	switch sc.layout {
 	case "fullscreen":
 		model.mode = modeFullscreen
-	case "focus-big":
-		model.mode = modeFocusBig
-	default:
+	case "list":
 		model.mode = modeList
+	default:
+		model.mode = modeFocusBig
 	}
 
 	// Apply hidden sessions and desired order from config.
