@@ -77,21 +77,36 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			if m.mode == modeList {
 				if _, sideW := m.listLayoutWidths(); msg.X < sideW {
 					if idx, _ := m.listHitTest(msg.X, msg.Y); idx >= 0 {
-						m.selected = idx
+						m.promoteToBig(idx)
 						m.listCursor = idx
 						m.listCursorTab = -1
-						sessions := m.visibleSessions()
-						if idx < len(sessions) {
-							sess := sessions[idx]
-							targetTab := sessionPriorityTab(sess)
-							if targetTab >= 0 && targetTab != sess.ActiveTab {
-								m.requestTabSwitch(sess.Name, targetTab)
-							}
-						}
 					}
 					m.sel = textSelection{}
 					return nil
 				}
+			}
+
+			// Focus-big side panels never receive session input: a plain
+			// click opens the session in a floating window for quick,
+			// temporary work; Ctrl+click promotes it to the big panel.
+			if m.mode == modeFocusBig {
+				sessions := m.visibleSessions()
+				if len(sessions) > 1 {
+					if mainW, _ := m.focusBigLayoutWidths(); msg.X >= mainW {
+						if idx := m.hitTest(msg.X, msg.Y); idx >= 0 && idx != m.selected {
+							m.focusCursor = -1
+							if msg.Ctrl {
+								m.promoteToBig(idx)
+							} else {
+								m.openFloating(idx)
+							}
+						}
+						m.sel = textSelection{}
+						return nil
+					}
+				}
+				// Click landed on the big panel: focus returns there.
+				m.focusCursor = -1
 			}
 
 			// Ctrl+Click: promote panel to big (switch m.selected)
@@ -256,7 +271,7 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				m.sel.endY = localY
 				return m.selMotionCmd()
 			}
-		} else if m.mode == modeList {
+		} else if m.mode == modeList || m.mode == modeFocusBig {
 			// Forward motion to big panel only if mouse reporting is enabled.
 			if sess := m.selectedSession(); sess != nil && sess.MouseEnabled() {
 				regions := m.panelRegions()
@@ -288,13 +303,13 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			// Click without drag on big panel: forward to PTY only if the
 			// session has mouse reporting enabled (vim, etc.).
 			m.sel.pending = false
-			if m.mode == modeList {
+			if m.mode == modeList || m.mode == modeFocusBig {
 				if sess := m.selectedSession(); sess != nil && sess.MouseEnabled() {
 					m.forwardClickToPTY(m.sel.startX, m.sel.startY)
 				}
 			}
 			m.sel = textSelection{}
-		} else if m.mouseFwdDown && m.mode == modeList {
+		} else if m.mouseFwdDown && (m.mode == modeList || m.mode == modeFocusBig) {
 			// The press was forwarded directly to a mouse-enabled app, so
 			// forward the matching release too.
 			m.mouseFwdDown = false
@@ -488,12 +503,13 @@ func (m *tuiModel) floatingContentRect() (int, int, int, int) {
 	if fh < 10 {
 		fh = min(10, m.height)
 	}
-	// Panel has 1-cell border on each side, 1 title line at top
+	// Panel has a 1-cell border on each side; the bottom info line (tab
+	// bar + session info) sits between the content and the bottom border.
 	contentW := fw - 2
 	contentH := fh - 3
 	// Centered: offset = (total - panel) / 2, then +1 for border
 	x := (m.width-fw)/2 + 1
-	y := (m.height-fh)/2 + 2 // +1 border + 1 title
+	y := (m.height-fh)/2 + 1
 	return x, y, contentW, contentH
 }
 
@@ -523,15 +539,16 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 			return nil
 		}
 		if msg.Button == tea.MouseButtonLeft {
-			if inside {
-				// Check for tab bar click in floating window (last line of content)
-				if len(sess.Tabs) > 1 && localY == ch-1 {
-					if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, cw, localX); tabIdx >= 0 {
-						m.requestTabSwitch(sess.Name, tabIdx)
-						m.sel = textSelection{}
-						return nil
-					}
+			// Tab bar lives on the info line below the content area
+			// (same as the big panel); consume clicks on that row.
+			if len(sess.Tabs) > 1 && localY == ch && localX >= 0 && localX < cw {
+				if tabIdx := hitTestTabBar(sess.Tabs, sess.ActiveTab, cw, localX); tabIdx >= 0 {
+					m.requestTabSwitch(sess.Name, tabIdx)
 				}
+				m.sel = textSelection{}
+				return nil
+			}
+			if inside {
 				// Always start pending selection; on release we decide
 				// whether to copy text or forward click to PTY.
 				m.sel = textSelection{
@@ -644,10 +661,34 @@ func (m *tuiModel) panelRegions() []panelRegion {
 
 	statusH := 1
 	availH := m.height - statusH
-	if m.mode == modeList {
-		return m.listPanelRegions(availH)
+	if m.mode == modeFocusBig {
+		return m.focusBigPanelRegions(availH)
 	}
 	return m.listPanelRegions(availH)
+}
+
+// focusBigPanelRegions returns the single big-panel region in focus-big
+// mode; side panels are switch-only and never forward mouse events.
+func (m *tuiModel) focusBigPanelRegions(availH int) []panelRegion {
+	mainW := m.width
+	if len(m.visibleSessions()) > 1 {
+		mainW, _ = m.focusBigLayoutWidths()
+	}
+	contentW := mainW - 2
+	contentH := availH - 3 // borders + bottom info line
+	if contentW < 1 {
+		contentW = 1
+	}
+	if contentH < 1 {
+		contentH = 1
+	}
+	return []panelRegion{{
+		sessionIdx: m.selected,
+		contentX:   1, // big panel on the left; skip left border
+		contentY:   1, // top border only (no title row)
+		contentW:   contentW,
+		contentH:   contentH,
+	}}
 }
 
 // listPanelRegions returns the single big-panel region in list mode; the

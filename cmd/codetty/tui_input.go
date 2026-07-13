@@ -140,6 +140,11 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 			// Open the session switcher with live previews instead of
 			// blindly cycling — fullscreen hides all other sessions.
 			m.openSwitcher()
+		case modeFocusBig:
+			// Cycle the side-panel highlight; after the last panel focus
+			// returns to the big panel. Enter opens the highlighted
+			// session in a floating window, Space promotes it to big.
+			m.focusSideCycle()
 		}
 		return nil
 	}
@@ -175,6 +180,11 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	// List mode with sidebar focus: navigate the session list.
 	if m.mode == modeList && m.listFocus {
 		return m.handleListKey(msg)
+	}
+
+	// Focus-big mode with a highlighted side panel: navigation only.
+	if m.mode == modeFocusBig && m.focusCursor >= 0 {
+		return m.handleFocusSideKey(msg)
 	}
 
 	// List mode: always forward to the selected panel.
@@ -282,9 +292,11 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		case 'n':
 			m.selectDelta(1)
+			m.focusCursor = -1
 			return nil
 		case 'p':
 			m.selectDelta(-1)
+			m.focusCursor = -1
 			return nil
 		case 'f':
 			if m.floatingIdx >= 0 {
@@ -323,17 +335,25 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 					}
 				}
 				m.resizeSessionPTYs()
-			} else if m.mode == modeList {
-				// List → fullscreen
+			} else if m.mode == modeList || m.mode == modeFocusBig {
+				// List/focus-big → fullscreen
 				m.pushMode()
 				m.mode = modeFullscreen
 				m.listFocus = false
+				m.focusCursor = -1
 				m.resizeSessionPTYs()
 			}
 			return nil
 		case 's':
 			m.mode = modeList
 			m.listFocus = false
+			m.focusCursor = -1
+			m.resizeSessionPTYs()
+			return nil
+		case 'b':
+			m.mode = modeFocusBig
+			m.listFocus = false
+			m.focusCursor = -1
 			m.resizeSessionPTYs()
 			return nil
 		case 'h':
@@ -376,6 +396,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 				m.selected = idx
 				m.listCursor = idx
 				m.listCursorTab = -1
+				m.focusCursor = -1
 			}
 			return nil
 		}
@@ -417,6 +438,21 @@ func (m *tuiModel) selectDelta(delta int) {
 		return
 	}
 	m.selected = ((m.selected+delta)%len(visible) + len(visible)) % len(visible)
+}
+
+// promoteToBig makes the given visible session the big panel and activates
+// its priority tab (blocked > done > active tab), mirroring list-mode
+// selection semantics.
+func (m *tuiModel) promoteToBig(idx int) {
+	sessions := m.visibleSessions()
+	if idx < 0 || idx >= len(sessions) {
+		return
+	}
+	m.selected = idx
+	sess := sessions[idx]
+	if targetTab := sessionPriorityTab(sess); targetTab >= 0 && targetTab != sess.ActiveTab {
+		m.requestTabSwitch(sess.Name, targetTab)
+	}
 }
 
 // moveOrder swaps the selected session's position in the display order.

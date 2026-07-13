@@ -33,6 +33,7 @@ type layoutMode int
 const (
 	modeList       layoutMode = iota
 	modeFullscreen            // no borders, no status bar, just terminal
+	modeFocusBig              // list-style big panel + switch-only side panels
 )
 
 // tuiModel is the Bubble Tea model for the unified codetty TUI.
@@ -61,6 +62,12 @@ type tuiModel struct {
 	listCursor    int
 	listCursorTab int
 	listScroll    int
+
+	// Focus-big mode side-panel highlight (Shift+Tab): the highlighted
+	// visible-session index, -1 when the big panel has keyboard focus.
+	// Enter opens the highlighted session in a floating window, Space
+	// promotes it to the big panel.
+	focusCursor int
 
 	// floatingIdx: index of session shown in floating overlay, -1 means none.
 	floatingIdx int
@@ -166,6 +173,7 @@ func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tui
 		conn:              conn,
 		mode:              modeList,
 		listCursorTab:     -1,
+		focusCursor:       -1,
 		width:             120,
 		height:            40,
 		floatingIdx:       -1,
@@ -276,6 +284,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.listCursor = 0
 		m.listCursorTab = -1
 		m.listScroll = 0
+		m.focusCursor = -1
 		m.sel = textSelection{}
 		if prog == nil || m.conn.Subscribe(prog) != nil {
 			return m, tea.Quit
@@ -361,6 +370,8 @@ func (m *tuiModel) View() string {
 	switch m.mode {
 	case modeFullscreen:
 		base = m.fullscreenView()
+	case modeFocusBig:
+		base = m.focusBigView()
 	default:
 		base = m.listView()
 	}
@@ -656,6 +667,9 @@ func (m *tuiModel) removeSession(name string) {
 		m.listCursor = max(0, visibleLen-1)
 		m.listCursorTab = -1
 	}
+	if m.focusCursor >= visibleLen {
+		m.focusCursor = -1
+	}
 }
 
 func (m *tuiModel) orderedSessions() []*tuiSession {
@@ -803,12 +817,9 @@ func (m *tuiModel) resizeSessionPTYs() {
 }
 
 // resizeSessionPTY resizes one session's local terminal and daemon PTY to
-// the given content size, reserving one row for the tab bar if shown.
-// Used by floating windows where the tab bar is rendered inside the content area.
+// the given content size. Used by floating windows, whose content area (like
+// the big panel's) already excludes the bottom info line.
 func (m *tuiModel) resizeSessionPTY(sess *tuiSession, cols, rows int) {
-	if len(sess.Tabs) > 1 {
-		rows--
-	}
 	if rows < 1 {
 		rows = 1
 	}
@@ -891,6 +902,22 @@ func (m *tuiModel) focusedContentSize() (int, int) {
 
 	if m.mode == modeList {
 		mainW, _ := m.listLayoutWidths()
+		contentW := mainW - 2
+		contentH := availH - 3 // borders + bottom info line
+		if contentW < 1 {
+			contentW = 1
+		}
+		if contentH < 1 {
+			contentH = 1
+		}
+		return contentW, contentH
+	}
+
+	if m.mode == modeFocusBig {
+		mainW := m.width
+		if n > 1 {
+			mainW, _ = m.focusBigLayoutWidths()
+		}
 		contentW := mainW - 2
 		contentH := availH - 3 // borders + bottom info line
 		if contentW < 1 {

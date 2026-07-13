@@ -190,7 +190,7 @@ codetty up -f myconfig.toml     # 指定配置文件
 ### 基本示例
 
 ```toml
-layout = "list"               # 初始布局：list / fullscreen
+layout = "list"               # 初始布局：list / focus-big / fullscreen
 focus = "editor"              # 初始聚焦的 session 名称
 
 # 原生 session（直接运行命令）
@@ -307,7 +307,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `layout` | string | `"list"` | 初始布局模式（list / fullscreen） |
+| `layout` | string | `"list"` | 初始布局模式（list / focus-big / fullscreen） |
 | `focus` | string | 第一个 session | 初始聚焦 session |
 
 **template.\<name\>：**
@@ -401,7 +401,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 | `Ctrl+A n` | 切换到下一个 session |
 | `Ctrl+A p` | 切换到上一个 session |
 | `Ctrl+A 1`-`9` | 跳转到指定编号的 session |
-| `Shift+Tab` | 列表模式下在侧栏项间连续跳转（优先跳到需处理的 agent，越过最后一项回到大面板）；焦点放大模式下循环切换面板高亮；浮动窗口中关闭浮动并高亮下一面板；全屏模式打开 session 切换器（实时预览）；其他模式切换到下一 session |
+| `Shift+Tab` | 列表模式下在侧栏项间连续跳转（优先跳到需处理的 agent，越过最后一项回到大面板）；焦点放大模式下在侧面板间循环高亮（Enter 浮动 / Space 提升为大面板）；浮动窗口中关闭浮动并高亮下一面板；全屏模式打开 session 切换器（实时预览） |
 | `Enter` | 在高亮面板上打开浮动窗口（网格模式或焦点放大的侧面板） |
 
 ### 布局控制
@@ -410,10 +410,8 @@ remove_windows = ["git"]         # 删除模板中的 window
 |------|------|
 | `Ctrl+A f` | 切换布局：浮动→全屏→上级模式；焦点放大/列表→全屏；全屏→返回 |
 | `Ctrl+A q` | 关闭浮动窗口 |
-| `Ctrl+A g` | 网格模式 ↔ 焦点放大模式切换 |
 | `Ctrl+A s` | 切换到列表模式（默认） |
 | `Ctrl+A b` | 切换到焦点放大模式 |
-| `Ctrl+A a` | 切换到网格模式 |
 
 ### 面板重排
 
@@ -512,14 +510,22 @@ remove_windows = ["git"]         # 删除模板中的 window
 
 ### 焦点放大模式 (Focus-Big)
 
-一个 session 占据大部分屏幕（大面板），其余 session 显示在右侧的小面板列表中。
+一个 session 占据大部分屏幕（大面板，行为与列表模式的大面板完全一致），
+其余 session 显示在右侧的小面板列表中。`Ctrl+A b` 进入。
 
-- 大面板接收键盘输入和鼠标事件
-- 侧面板有标题栏操作按钮（`[-]`/`[x]`）、拖拽支持和 Shift+Tab 循环高亮
-- `Ctrl+A n/p` 或 `Ctrl+A 1-9` 切换大面板显示的 session
-- 宽度 ≥ 120 时采用水平布局（大面板在左，侧面板在右）
-- 宽度 < 120 时采用垂直布局（大面板在上，侧面板在下）
-- 在高亮侧面板上按 `Enter` 打开浮动窗口
+- 大面板接收键盘输入和鼠标事件（渲染、tab 栏、底部信息行与列表模式一致）
+- 侧面板不向 session 转发任何键盘/鼠标输入
+- 单击侧面板以该 session 打开浮动窗口（适合临时处理简单任务，主工作区
+  不变）；Ctrl+单击把它提升为大面板，并自动激活其优先 tab
+  （blocked > done > 当前活动 tab）
+- `Shift+Tab` 在侧面板间循环高亮（越过最后一项回到大面板，状态栏显示
+  `big*`）；高亮时 `↑`/`↓` 移动高亮，`Enter` 打开浮动窗口，`Space`
+  提升为大面板，其他键返回大面板（不会向 PTY 泄漏输入）
+- `Ctrl+A n/p`、`Ctrl+A 1-9` 直接切换大面板 session
+- 侧面板标题栏显示聚合 agent 状态徽标：session 内没有 agent 时不显示
+  任何圆点；有 agent 时显示 `■`（blocked）/ `●○` 闪烁（working）/
+  `●`（done）/ `○`（idle），标题栏与边框颜色跟列表模式侧栏一致
+  （blocked 红 / working 琥珀 / done 绿）
 
 ### 网格模式 (Grid)
 
@@ -692,6 +698,8 @@ remove_windows = ["git"]         # 删除模板中的 window
 ## 浮动窗口
 
 浮动窗口是覆盖在当前布局上的单个 session 显示窗口，尺寸为终端的 80%。
+外观与大面板一致：没有顶部标题栏，底部信息行左侧显示 tab 栏（多 tab 时），
+右侧显示 `[n] 名称  (^A q close)`；点击信息行上的 tab 可切换 tab。
 
 ### 打开浮动窗口
 

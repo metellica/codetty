@@ -97,7 +97,7 @@ codetty kill-server
 | `Ctrl+A n/p` | 下一个 / 上一个会话 |
 | `Ctrl+A f` | 全屏 / 浮动窗口切换 |
 | `Ctrl+A q` | 关闭浮动窗口 |
-| `Ctrl+A g` | 网格 / 焦点放大切换 |
+| `Ctrl+A s` / `Ctrl+A b` | 切换列表 / 焦点放大模式 |
 | `Ctrl+A m` | 打开临时浮动 shell |
 | `Ctrl+A 1-9` | 跳转到指定编号会话 |
 

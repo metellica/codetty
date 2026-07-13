@@ -361,16 +361,9 @@ func (m *tuiModel) handleListKey(msg tea.KeyMsg) tea.Cmd {
 		m.listCursor = positions[pi].sessIdx
 		m.listCursorTab = -1
 	case tea.KeyEnter:
-		m.selected = m.listCursor
-		m.listFocus = false
 		// Auto-switch to priority tab: noticed agent > active tab > first.
-		if m.listCursor < n {
-			sess := sessions[m.listCursor]
-			targetTab := sessionPriorityTab(sess)
-			if targetTab >= 0 && targetTab != sess.ActiveTab {
-				m.requestTabSwitch(sess.Name, targetTab)
-			}
-		}
+		m.promoteToBig(m.listCursor)
+		m.listFocus = false
 	case tea.KeyEscape:
 		m.listFocus = false
 	default:

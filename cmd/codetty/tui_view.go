@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -75,14 +76,268 @@ func (m *tuiModel) fullscreenView() string {
 	return content + "\n" + strings.Repeat(" ", pad) + infoRendered
 }
 
-func (m *tuiModel) renderPanel(sess *tuiSession, title string, w, h int, focused bool) string {
-	return m.renderPanelWithColor(sess, title, w, h, focused, -1, true)
+// focusBigLayoutWidths returns the big-panel and side-column widths for
+// focus-big mode. The big panel takes ~70% of the width; the side column
+// never shrinks below tuiMinPanelW.
+func (m *tuiModel) focusBigLayoutWidths() (mainW, sideW int) {
+	mainW = m.width * 7 / 10
+	sideW = m.width - mainW
+	if sideW < tuiMinPanelW {
+		sideW = tuiMinPanelW
+		mainW = m.width - sideW
+	}
+	if mainW < 1 {
+		mainW = 1
+	}
+	return mainW, sideW
+}
+
+// focusBigSideSlots computes the side-panel slot height and how many side
+// panels fit; shared by rendering and hit-testing so they stay in sync.
+func focusBigSideSlots(secondaryCount, availH int) (slotH, visible int) {
+	if secondaryCount < 1 {
+		return availH, 0
+	}
+	slotH = availH / secondaryCount
+	if slotH < tuiMinPanelH {
+		slotH = tuiMinPanelH
+	}
+	visible = availH / slotH
+	if visible > secondaryCount {
+		visible = secondaryCount
+	}
+	if visible < 1 {
+		visible = 1
+	}
+	return slotH, visible
+}
+
+// focusBigView renders focus-big mode: the same big panel as list mode on
+// the left, small switch-only session panels stacked on the right.
+func (m *tuiModel) focusBigView() string {
+	sessions := m.visibleSessions()
+	n := len(sessions)
+	if n == 0 {
+		return m.statusBar()
+	}
+	if m.selected >= n {
+		m.selected = n - 1
+	}
+
+	status := m.statusBar()
+	statusH := lipgloss.Height(status)
+	availH := m.height - statusH
+	if availH < 1 {
+		return status
+	}
+
+	primary := sessions[m.selected]
+	if n == 1 {
+		panel := m.renderBigPanelNoTitle(primary, m.width, availH, true)
+		return lipgloss.JoinVertical(lipgloss.Left, panel, status)
+	}
+
+	mainW, sideW := m.focusBigLayoutWidths()
+	mainPanel := m.renderBigPanelNoTitle(primary, mainW, availH, true)
+
+	slotH, visible := focusBigSideSlots(n-1, availH)
+	var sides []string
+	idx := 0
+	for i, sess := range sessions {
+		if i == m.selected {
+			continue
+		}
+		if idx >= visible {
+			break
+		}
+		h := slotH
+		if idx == visible-1 {
+			h = availH - slotH*idx
+		}
+		sides = append(sides, m.renderFocusSidePanel(sess, i+1, sideW, h, i == m.focusCursor))
+		idx++
+	}
+	side := lipgloss.JoinVertical(lipgloss.Left, sides...)
+	row := lipgloss.JoinHorizontal(lipgloss.Top, mainPanel, side)
+	return lipgloss.JoinVertical(lipgloss.Left, row, status)
+}
+
+// focusSidePositions returns the visible-session indices shown as side
+// panels in focus-big mode (display order, selected excluded).
+func (m *tuiModel) focusSidePositions() []int {
+	n := len(m.visibleSessions())
+	pos := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		if i != m.selected {
+			pos = append(pos, i)
+		}
+	}
+	return pos
+}
+
+// focusSideCycle advances the Shift+Tab side-panel highlight: big panel →
+// first side panel → … → last side panel → back to the big panel.
+func (m *tuiModel) focusSideCycle() {
+	pos := m.focusSidePositions()
+	if len(pos) == 0 {
+		m.focusCursor = -1
+		return
+	}
+	if m.focusCursor < 0 {
+		m.focusCursor = pos[0]
+		return
+	}
+	for pi, p := range pos {
+		if p == m.focusCursor {
+			if pi+1 < len(pos) {
+				m.focusCursor = pos[pi+1]
+			} else {
+				m.focusCursor = -1
+			}
+			return
+		}
+	}
+	m.focusCursor = pos[0]
+}
+
+// handleFocusSideKey processes keyboard input while a focus-big side panel
+// is highlighted. Side panels never receive session input: Enter opens the
+// highlighted session in a floating window (for quick, temporary work),
+// Space promotes it to the big panel, ↑/↓ move the highlight, and any
+// other key returns focus to the big panel without leaking into the PTY.
+func (m *tuiModel) handleFocusSideKey(msg tea.KeyMsg) tea.Cmd {
+	pos := m.focusSidePositions()
+	if len(pos) == 0 {
+		m.focusCursor = -1
+		return nil
+	}
+	pi := 0
+	for i, p := range pos {
+		if p == m.focusCursor {
+			pi = i
+			break
+		}
+	}
+	switch msg.Type {
+	case tea.KeyUp:
+		m.focusCursor = pos[(pi-1+len(pos))%len(pos)]
+	case tea.KeyDown:
+		m.focusCursor = pos[(pi+1)%len(pos)]
+	case tea.KeyEnter:
+		idx := m.focusCursor
+		m.focusCursor = -1
+		m.openFloating(idx)
+	case tea.KeySpace:
+		idx := m.focusCursor
+		m.focusCursor = -1
+		m.promoteToBig(idx)
+	default:
+		m.focusCursor = -1
+	}
+	return nil
+}
+
+// sessionHasAgent reports whether any tab of the session hosts an agent.
+func sessionHasAgent(sess *tuiSession) bool {
+	for _, tab := range sess.Tabs {
+		if tab.Agent != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionAgentBadge returns the aggregate agent indicator for a session's
+// side-panel title: "" when no tab hosts an agent, otherwise the badge for
+// the most urgent state using the list-mode convention (■ blocked,
+// ●/○ blinking working, ● done, ○ idle).
+func sessionAgentBadge(sess *tuiSession) string {
+	if !sessionHasAgent(sess) {
+		return ""
+	}
+	switch sessionAgentState(sess) {
+	case "blocked":
+		return "■"
+	case "working":
+		return agentBadge("working")
+	case "done":
+		return "●"
+	}
+	return "○"
+}
+
+// focusSideTitleColors picks the side-panel title bar palette from the
+// aggregate agent state, mirroring the list-mode colors. States without an
+// agent event (idle / no agent) keep the default teal bar.
+func focusSideTitleColors(state string) (fg, bg lipgloss.Color) {
+	switch state {
+	case "blocked":
+		return lipgloss.Color("231"), agentBlockedColor
+	case "working":
+		return lipgloss.Color("232"), agentWorkingColor
+	case "done":
+		return lipgloss.Color("232"), agentDoneColor
+	}
+	return lipgloss.Color("232"), sidePanelTitleColor
+}
+
+// renderFocusSidePanel renders one small panel in focus-big mode: a title
+// bar carrying the aggregate agent badge plus a dimmed content preview.
+// Small panels never receive session input — click/Enter opens a floating
+// window, Ctrl+click/Space promotes to big — so no per-tab agent details,
+// tab bar, or window buttons are shown. highlighted marks the Shift+Tab
+// cursor with a ▶ marker and a list-cursor border.
+func (m *tuiModel) renderFocusSidePanel(sess *tuiSession, num, w, h int, highlighted bool) string {
+	state := sessionAgentState(sess)
+	style := tuiNormalBorder.Width(w - 2).Height(h - 2).
+		BorderForeground(listSessionBorderColor(sess, false, highlighted))
+
+	innerW := w - 2
+	if innerW < 1 {
+		innerW = 1
+	}
+
+	title := fmt.Sprintf(" [%d] %s", num, sess.Name)
+	if highlighted {
+		title = " ▶" + title
+	}
+	if sess.Exited {
+		title += " (exited)"
+	}
+	if badge := sessionAgentBadge(sess); badge != "" {
+		title += " " + badge
+	}
+	if lipgloss.Width(title) > innerW {
+		title = ansi.Truncate(title, innerW, "…")
+	}
+	fg, bg := focusSideTitleColors(state)
+	header := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(fg).
+		Background(bg).
+		Width(innerW).
+		Render(title)
+
+	innerH := h - 3 // borders + title line
+	if innerH < 1 || h < tuiSidePanelContentThreshold {
+		return style.Render(header)
+	}
+	lines := sess.RenderDimmed(innerW, innerH)
+	return style.Render(header + "\n" + strings.Join(lines, "\n"))
 }
 
 // renderBigPanelNoTitle renders the big panel without a title header line,
 // giving one extra row of terminal content. A bottom info line shows the
 // tab bar (if multiple tabs) with session info right-aligned.
 func (m *tuiModel) renderBigPanelNoTitle(sess *tuiSession, w, h int, focused bool) string {
+	sessInfo := fmt.Sprintf("[%d] %s", m.selected+1, sess.Name)
+	return m.renderBigPanelFrame(sess, w, h, focused, sessInfo)
+}
+
+// renderBigPanelFrame is the shared panel frame used by the big panel and
+// the floating window: bordered terminal content with a bottom info line
+// (tab bar on the left, sessInfo right-aligned).
+func (m *tuiModel) renderBigPanelFrame(sess *tuiSession, w, h int, focused bool, sessInfo string) string {
 	agentState := sessionAgentState(sess)
 
 	style := tuiNormalBorder.Width(w - 2).Height(h - 2)
@@ -127,7 +382,6 @@ func (m *tuiModel) renderBigPanelNoTitle(sess *tuiSession, w, h int, focused boo
 	content := strings.Join(lines, "\n")
 
 	// Build the bottom info line: tab bar on left, session info on right.
-	sessInfo := fmt.Sprintf("[%d] %s", m.selected+1, sess.Name)
 	infoStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("245"))
 
@@ -512,8 +766,10 @@ func (m *tuiModel) overlayFloating(base string) string {
 		fh = min(10, m.height)
 	}
 
-	title := fmt.Sprintf("▶ [%d] %s  (^A q close)", m.floatingIdx+1, sess.Name)
-	floatPanel := m.renderPanel(sess, title, fw, fh, true)
+	// Same frame as the big panel: no title bar, bottom info line with
+	// tab bar on the left and session info (plus close hint) on the right.
+	sessInfo := fmt.Sprintf("[%d] %s  (^A q close)", m.floatingIdx+1, sess.Name)
+	floatPanel := m.renderBigPanelFrame(sess, fw, fh, true, sessInfo)
 
 	// Center the floating panel over the base
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
@@ -563,7 +819,7 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	if m.prefix {
-		help := m.prefixLabel + ": d detach  c new  t tab  x kill  X close-tab  r rename  n/p nav  f fullscreen  w manager  Shift+←→ tabs"
+		help := m.prefixLabel + ": d detach  c new  t tab  x kill  X close-tab  r rename  n/p nav  s list  b big  f full  w manager  Shift+←→ tabs"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 
@@ -572,6 +828,11 @@ func (m *tuiModel) statusBar() string {
 	switch m.mode {
 	case modeFullscreen:
 		modeName = "fullscreen"
+	case modeFocusBig:
+		modeName = "big"
+		if m.focusCursor >= 0 {
+			modeName = "big*"
+		}
 	case modeList:
 		if m.listFocus {
 			modeName = "list*"
@@ -649,6 +910,37 @@ func (m *tuiModel) hitTest(x, y int) int {
 		idx, _ := m.listHitTest(x, y)
 		return idx
 	}
+
+	if m.mode == modeFocusBig {
+		if y >= availH {
+			return -1
+		}
+		n := len(sessions)
+		if n == 1 {
+			return 0
+		}
+		mainW, _ := m.focusBigLayoutWidths()
+		if x < mainW {
+			return m.selected
+		}
+		slotH, visible := focusBigSideSlots(n-1, availH)
+		slot := y / slotH
+		if slot >= visible {
+			// The last visible side panel absorbs the remaining height.
+			slot = visible - 1
+		}
+		idx := 0
+		for i := 0; i < n; i++ {
+			if i == m.selected {
+				continue
+			}
+			if idx == slot {
+				return i
+			}
+			idx++
+		}
+		return -1
+	}
 	return -1
 }
 
@@ -686,7 +978,7 @@ func (m *tuiModel) imeCursorSeq() string {
 		panelTopRow := (m.height - fh) / 2
 		panelLeftCol := (m.width - fw) / 2
 		innerW := fw - 2
-		innerH := fh - 3
+		innerH := fh - 3 // borders + bottom info line
 		if innerW < 1 || innerH < 1 {
 			return ""
 		}
@@ -694,7 +986,7 @@ func (m *tuiModel) imeCursorSeq() string {
 		if curX < 0 || curY < 0 {
 			return ""
 		}
-		return fmt.Sprintf("\x1b[%d;%dH", panelTopRow+2+curY+1, panelLeftCol+1+curX+1)
+		return fmt.Sprintf("\x1b[%d;%dH", panelTopRow+1+curY+1, panelLeftCol+1+curX+1)
 	}
 
 	sessions := m.visibleSessions()
@@ -733,6 +1025,25 @@ func (m *tuiModel) imeCursorSeq() string {
 		// top border only (no title row): +1 for border
 		absRow := 1 + curY
 		absCol := sideW + 1 + curX
+		return fmt.Sprintf("\x1b[%d;%dH", absRow+1, absCol+1)
+
+	case modeFocusBig:
+		mainW := m.width
+		if n > 1 {
+			mainW, _ = m.focusBigLayoutWidths()
+		}
+		innerW := mainW - 2
+		innerH := availH - 3 // borders + bottom info line
+		if innerW < 1 || innerH < 1 {
+			return ""
+		}
+		_, curX, curY := sess.RenderANSI(innerW, innerH)
+		if curX < 0 || curY < 0 {
+			return ""
+		}
+		// Big panel at the left edge, top border only (no title row).
+		absRow := 1 + curY
+		absCol := 1 + curX
 		return fmt.Sprintf("\x1b[%d;%dH", absRow+1, absCol+1)
 	}
 	return ""
