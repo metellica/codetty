@@ -20,12 +20,12 @@ const (
 var sidePanelTitleColor = lipgloss.Color("#7aa4a1") // muted teal
 
 // Agent state accent colors: blocked demands attention, working is a hint,
-// done marks a finished run awaiting review.
-// Using muted pastel tones for low-contrast modern aesthetics.
+// done marks a finished run awaiting review. Hues are kept far apart
+// (rose / orange / green) so the states read at a glance.
 var (
 	agentBlockedColor = lipgloss.Color("#e78284") // soft rose
-	agentWorkingColor = lipgloss.Color("#e5c890") // warm amber
-	agentDoneColor    = lipgloss.Color("#a6d189") // soft sage
+	agentWorkingColor = lipgloss.Color("#e5a84e") // amber orange
+	agentDoneColor    = lipgloss.Color("#7cc96e") // fresh green
 )
 
 // fullscreenView renders only the selected session filling the entire terminal.
@@ -654,10 +654,12 @@ func tabStyleKind(tab tuiTab, isActive, muted bool) string {
 // In muted mode (small side panels) the active tab keeps no highlight
 // color so agent state colors stand out as the only accent.
 func renderTabBar(tabs []tuiTab, activeIdx, maxW int, muted bool) string {
+	// Cool blue keeps the active highlight far from the warm agent
+	// state hues (orange working / green done).
 	activeStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("232")).
-		Background(lipgloss.Color("#b8a58c"))
+		Background(lipgloss.Color("#8caaee"))
 
 	inactiveStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("250")).
