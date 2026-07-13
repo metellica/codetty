@@ -25,9 +25,11 @@ type ScreenMirror struct {
 
 // NewScreenMirror creates a new ScreenMirror with the given dimensions.
 func NewScreenMirror(cols, rows uint16) *ScreenMirror {
-	return &ScreenMirror{
-		term: vt10x.New(vt10x.WithSize(int(cols), int(rows)), vt10x.WithWriter(io.Discard)),
-	}
+	term := vt10x.New(vt10x.WithSize(int(cols), int(rows)), vt10x.WithWriter(io.Discard))
+	// The mirror only needs the live screen for snapshot replay; the TUI
+	// keeps its own scrollback.
+	term.DisableScrollback()
+	return &ScreenMirror{term: term}
 }
 
 // Write feeds terminal data into the screen model.
@@ -197,47 +199,32 @@ func (s *ScreenMirror) Snapshot() []byte {
 func modeSequences(mode vt10x.ModeFlag) string {
 	var b strings.Builder
 
-	if mode&vt10x.ModeAltScreen != 0 {
-		b.WriteString("\033[?1049h")
+	// Emit explicit set/reset for every mode so a snapshot replayed into a
+	// terminal with stale flags (e.g. alt screen left over from a previous
+	// tab) always converges to the mirrored state.
+	onoff := func(on bool, set, reset string) {
+		if on {
+			b.WriteString(set)
+		} else {
+			b.WriteString(reset)
+		}
 	}
-	if mode&vt10x.ModeWrap != 0 {
-		b.WriteString("\033[?7h")
-	} else {
-		b.WriteString("\033[?7l")
-	}
-	if mode&vt10x.ModeAppCursor != 0 {
-		b.WriteString("\033[?1h")
-	}
-	if mode&vt10x.ModeMouseX10 != 0 {
-		b.WriteString("\033[?9h")
-	}
-	if mode&vt10x.ModeMouseButton != 0 {
-		b.WriteString("\033[?1000h")
-	}
-	if mode&vt10x.ModeMouseMotion != 0 {
-		b.WriteString("\033[?1002h")
-	}
-	if mode&vt10x.ModeMouseMany != 0 {
-		b.WriteString("\033[?1003h")
-	}
-	if mode&vt10x.ModeMouseSgr != 0 {
-		b.WriteString("\033[?1006h")
-	}
-	if mode&vt10x.ModeFocus != 0 {
-		b.WriteString("\033[?1004h")
-	}
+
+	onoff(mode&vt10x.ModeAltScreen != 0, "\033[?1049h", "\033[?1049l")
+	onoff(mode&vt10x.ModeWrap != 0, "\033[?7h", "\033[?7l")
+	onoff(mode&vt10x.ModeAppCursor != 0, "\033[?1h", "\033[?1l")
+	onoff(mode&vt10x.ModeMouseX10 != 0, "\033[?9h", "\033[?9l")
+	onoff(mode&vt10x.ModeMouseButton != 0, "\033[?1000h", "\033[?1000l")
+	onoff(mode&vt10x.ModeMouseMotion != 0, "\033[?1002h", "\033[?1002l")
+	onoff(mode&vt10x.ModeMouseMany != 0, "\033[?1003h", "\033[?1003l")
+	onoff(mode&vt10x.ModeMouseSgr != 0, "\033[?1006h", "\033[?1006l")
+	onoff(mode&vt10x.ModeFocus != 0, "\033[?1004h", "\033[?1004l")
 	if mode&vt10x.Mode8bit != 0 {
 		b.WriteString("\033[?1034h")
 	}
-	if mode&vt10x.ModeReverse != 0 {
-		b.WriteString("\033[?5h")
-	}
-	if mode&vt10x.ModeInsert != 0 {
-		b.WriteString("\033[4h")
-	}
-	if mode&vt10x.ModeCRLF != 0 {
-		b.WriteString("\033[20h")
-	}
+	onoff(mode&vt10x.ModeReverse != 0, "\033[?5h", "\033[?5l")
+	onoff(mode&vt10x.ModeInsert != 0, "\033[4h", "\033[4l")
+	onoff(mode&vt10x.ModeCRLF != 0, "\033[20h", "\033[20l")
 
 	return b.String()
 }

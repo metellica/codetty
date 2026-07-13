@@ -69,6 +69,18 @@ type View interface {
 	// Returns nil if y is out of range. Only valid while the lock is held.
 	ScrollbackRow(y int) []Glyph
 
+	// ClearScrollback discards all lines in the scrollback buffer.
+	ClearScrollback()
+
+	// TakeScrollback removes and returns the scrollback lines (newest last).
+	TakeScrollback() [][]Glyph
+
+	// RestoreScrollback replaces the scrollback with previously taken lines.
+	RestoreScrollback(lines [][]Glyph)
+
+	// DisableScrollback turns off scrollback capture entirely.
+	DisableScrollback()
+
 	// Lock locks the state object's mutex.
 	Lock()
 

@@ -681,25 +681,18 @@ func (m *tuiModel) sendScrollAsArrows(sessionName string, up bool) {
 }
 
 // handleSessionScroll handles a scroll wheel event for a session that does NOT
-// have mouse reporting enabled. If there is scrollback content, navigates it;
-// otherwise (in alt-screen apps like less/vim without mouse), sends arrow keys.
+// have mouse reporting enabled. Alt-screen apps (less/man/vim without mouse)
+// get arrow keys (xterm alternateScroll behavior); the primary screen scrolls
+// through the local scrollback buffer.
 func (m *tuiModel) handleSessionScroll(sess *tuiSession, up bool) {
-	// If we're already scrolled back, or there's scrollback available and
-	// we're scrolling up, navigate the scrollback buffer.
-	if sess.IsScrolledBack() || (up && sess.HasScrollback()) {
-		if up {
-			sess.ScrollUp(scrollLinesPerTick)
-		} else {
-			sess.ScrollDown(scrollLinesPerTick)
-		}
+	if sess.AltScreenActive() {
+		m.sendScrollAsArrows(sess.Name, up)
 		return
 	}
-	// No scrollback content (or scrolling down past live): try arrow keys
-	// for alt-screen apps like less/man.
 	if up {
-		m.sendScrollAsArrows(sess.Name, true)
+		sess.ScrollUp(scrollLinesPerTick)
 	} else {
-		m.sendScrollAsArrows(sess.Name, false)
+		sess.ScrollDown(scrollLinesPerTick)
 	}
 }
 

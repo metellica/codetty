@@ -468,10 +468,24 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 
 	case "tab_created", "tab_closed", "tab_switched":
 		if sess := m.sessionByName(evt.Session); sess != nil {
+			oldTab := sess.activeTabName()
 			m.syncTabInfo(sess, evt.Info)
+			newTab := sess.activeTabName()
+			// All tabs share one local vt10x: park the outgoing tab's
+			// scrollback so it survives the reset, and bring back the
+			// incoming tab's stash afterwards.
+			if oldTab != newTab {
+				sess.stashScrollback(oldTab)
+			}
 			// Clear the vt10x terminal so stale content from the previous
 			// tab doesn't render before the new tab's snapshot arrives.
 			sess.resetTerminal()
+			if oldTab != newTab {
+				sess.restoreScrollback(newTab)
+			}
+			if evt.Type == "tab_closed" {
+				sess.pruneScrollbackStash()
+			}
 			// Clear mouse mode so stale flags from the previous tab
 			// (e.g. lazygit) don't forward SGR sequences to a plain shell.
 			// Also clear mouseFwdDown so a dangling release from the tab

@@ -108,7 +108,14 @@ type State struct {
 	// Scrollback buffer: lines that scrolled off the top of the primary screen.
 	// Not used in alternate screen mode.
 	scrollback    []line
-	scrollbackMax int // 0 means use maxScrollback
+	scrollbackMax int // 0 means use maxScrollback; negative disables scrollback
+}
+
+// DisableScrollback turns off scrollback capture (e.g. for mirrors that only
+// need the live screen).
+func (t *State) DisableScrollback() {
+	t.scrollbackMax = -1
+	t.scrollback = nil
 }
 
 func newState(w io.Writer) *State {
@@ -532,7 +539,7 @@ func (t *State) scrollUp(orig, n int) {
 	// Save lines scrolled off the top to the scrollback buffer,
 	// but only when scrolling the full primary screen (not alt screen,
 	// not a custom sub-region).
-	if orig == 0 && t.top == 0 && t.mode&ModeAltScreen == 0 {
+	if orig == 0 && t.top == 0 && t.mode&ModeAltScreen == 0 && t.scrollbackMax >= 0 {
 		sbMax := t.scrollbackMax
 		if sbMax == 0 {
 			sbMax = maxScrollback
@@ -625,7 +632,11 @@ func (t *State) setMode(priv bool, set bool, args []int) {
 				if alt {
 					t.clear(0, 0, t.cols-1, t.rows-1)
 				}
-				if !set || !alt {
+				// Only swap when the state actually changes: set while on
+				// the primary screen, or reset while on the alt screen.
+				// (Previously `!set || !alt` would swap TO the alt screen
+				// on a redundant reset, corrupting the mode flag.)
+				if set != alt {
 					t.swapScreen()
 				}
 				if a != 1049 {
@@ -845,4 +856,28 @@ func (t *State) ScrollbackRow(y int) []Glyph {
 		return nil
 	}
 	return []Glyph(t.scrollback[y])
+}
+
+// ClearScrollback discards all lines in the scrollback buffer.
+func (t *State) ClearScrollback() {
+	t.scrollback = nil
+}
+
+// TakeScrollback removes and returns the scrollback lines (newest last).
+// The caller may later hand them back via RestoreScrollback.
+func (t *State) TakeScrollback() [][]Glyph {
+	sb := make([][]Glyph, len(t.scrollback))
+	for i, l := range t.scrollback {
+		sb[i] = []Glyph(l)
+	}
+	t.scrollback = nil
+	return sb
+}
+
+// RestoreScrollback replaces the scrollback buffer with previously taken lines.
+func (t *State) RestoreScrollback(lines [][]Glyph) {
+	t.scrollback = make([]line, len(lines))
+	for i, l := range lines {
+		t.scrollback[i] = line(l)
+	}
 }

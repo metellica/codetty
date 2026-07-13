@@ -40,6 +40,11 @@ type tuiSession struct {
 	// Scrollback view offset: 0 = live view, >0 = scrolled back into history.
 	scrollOffset int
 
+	// Per-tab scrollback stash: the session's tabs share one local vt10x,
+	// so on tab switch the current scrollback is parked here (keyed by tab
+	// name) and restored when the user switches back.
+	tabScrollback map[string][][]vt10x.Glyph
+
 	// Per-source-row line cache for incremental rendering. lineCache is
 	// indexed by terminal row; lineValid marks entries that are up to date.
 	// The cache consumes the terminal's dirty-line flags (via ResetDirty),
@@ -138,6 +143,63 @@ func (s *tuiSession) HasScrollback() bool {
 	return s.term.ScrollbackLen() > 0
 }
 
+// activeTabName returns the name of the currently active tab, or "".
+func (s *tuiSession) activeTabName() string {
+	if s.ActiveTab >= 0 && s.ActiveTab < len(s.Tabs) {
+		return s.Tabs[s.ActiveTab].Name
+	}
+	return ""
+}
+
+// stashScrollback parks the current scrollback under the given tab name so it
+// survives a tab switch (all tabs share one local vt10x terminal).
+func (s *tuiSession) stashScrollback(tab string) {
+	if tab == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.term.Lock()
+	sb := s.term.TakeScrollback()
+	s.term.Unlock()
+	if s.tabScrollback == nil {
+		s.tabScrollback = make(map[string][][]vt10x.Glyph)
+	}
+	s.tabScrollback[tab] = sb
+}
+
+// restoreScrollback loads a previously stashed scrollback for the given tab.
+func (s *tuiSession) restoreScrollback(tab string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sb, ok := s.tabScrollback[tab]
+	if !ok {
+		return
+	}
+	delete(s.tabScrollback, tab)
+	s.term.Lock()
+	s.term.RestoreScrollback(sb)
+	s.term.Unlock()
+}
+
+// pruneScrollbackStash drops stashed scrollback for tabs that no longer exist.
+func (s *tuiSession) pruneScrollbackStash() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for name := range s.tabScrollback {
+		found := false
+		for _, t := range s.Tabs {
+			if t.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			delete(s.tabScrollback, name)
+		}
+	}
+}
+
 // invalidateCache forces a full re-render on the next frame.
 func (s *tuiSession) invalidateCache() {
 	s.mu.Lock()
@@ -147,12 +209,21 @@ func (s *tuiSession) invalidateCache() {
 	s.dimStale = true
 }
 
-// resetTerminal clears all content from the vt10x terminal so stale output
-// from a previous tab does not bleed through before the new tab's snapshot
-// arrives.
+// resetTerminal clears all content and mode flags from the vt10x terminal so
+// stale state from a previous tab does not bleed through before the new tab's
+// snapshot arrives.
 func (s *tuiSession) resetTerminal() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Clear alt-screen, mouse, and all other mode flags so stale modes
+	// from the previous tab (e.g. ModeAltScreen from nvim) don't persist.
+	s.term.Lock()
+	s.term.ClearMode(vt10x.ModeAltScreen | vt10x.ModeMouseMask | vt10x.ModeMouseSgr | vt10x.ModeAppCursor)
+	// The scrollback belongs to the previous tab's content: discard it and
+	// snap back to the live view.
+	s.term.ClearScrollback()
+	s.term.Unlock()
+	s.scrollOffset = 0
 	// ESC[2J clears the entire screen; ESC[H moves cursor to (0,0).
 	s.term.Write([]byte("\x1b[2J\x1b[H"))
 	s.lineValid = nil
