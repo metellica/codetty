@@ -33,12 +33,14 @@ type UpgradeSession struct {
 
 // UpgradeTab holds the state of a single tab for hot restart.
 type UpgradeTab struct {
-	Name    string   `json:"name"`
-	Command []string `json:"command"`
-	Fd      int      `json:"fd"`
-	Pid     int      `json:"pid"`
-	Cols    uint16   `json:"cols"`
-	Rows    uint16   `json:"rows"`
+	Name      string   `json:"name"`
+	Command   []string `json:"command"`
+	Dir       string   `json:"dir,omitempty"`       // working directory; respawned shells start here
+	Workspace bool     `json:"workspace,omitempty"` // dir was explicitly requested (config workspace tab)
+	Fd        int      `json:"fd"`
+	Pid       int      `json:"pid"`
+	Cols      uint16   `json:"cols"`
+	Rows      uint16   `json:"rows"`
 	// Snapshot is the ANSI sequence reconstructing the tab's screen at
 	// upgrade time, replayed into the new daemon's ScreenMirror. Without
 	// it, recovered tabs look blank until the program outputs again
@@ -82,13 +84,15 @@ func (s *Server) PrepareUpgrade() (string, error) {
 			terminal.ClearCloseOnExec(fd)
 
 			us.Tabs = append(us.Tabs, UpgradeTab{
-				Name:     tab.Name,
-				Command:  tab.Command,
-				Fd:       fd,
-				Pid:      pid,
-				Cols:     cols,
-				Rows:     rows,
-				Snapshot: tab.Screen.Snapshot(),
+				Name:      tab.Name,
+				Command:   tab.Command,
+				Dir:       tab.Dir,
+				Workspace: tab.workspace,
+				Fd:        fd,
+				Pid:       pid,
+				Cols:      cols,
+				Rows:      rows,
+				Snapshot:  tab.Screen.Snapshot(),
 			})
 		}
 
@@ -178,11 +182,13 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 			}
 
 			tab := &SessionTab{
-				Name:     ut.Name,
-				Command:  ut.Command,
-				Terminal: term,
-				Screen:   screen,
-				doneCh:   make(chan struct{}),
+				Name:      ut.Name,
+				Command:   ut.Command,
+				Dir:       ut.Dir,
+				workspace: ut.Workspace,
+				Terminal:  term,
+				Screen:    screen,
+				doneCh:    make(chan struct{}),
 			}
 
 			sess.Tabs = append(sess.Tabs, tab)

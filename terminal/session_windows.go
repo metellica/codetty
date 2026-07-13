@@ -37,6 +37,10 @@ func startPlatform(args []string, cols, rows uint16, dir string, env []string) (
 	return &windowsSession{pty: cpty}, nil
 }
 
+// ProcessCwd is not supported on Windows; callers fall back to the
+// tab's recorded directory.
+func ProcessCwd(pid int) string { return "" }
+
 func windowsCommandLine(args []string) (string, error) {
 	for _, arg := range args {
 		if strings.ContainsRune(arg, '\x00') {

@@ -29,8 +29,11 @@ lifetime (like tmux). Uses Unix PTY on Linux/macOS and Windows ConPTY on Windows
 - `daemon/session.go` wraps a `terminal.Session` (PTY) with a `ScreenMirror`
   for snapshot replay. Output flows: PTY → ScreenMirror + broadcast to clients.
   When a native tab's process exits: non-shell commands respawn the default
-  shell in place; shell tabs auto-close (last one ends the session). Deliberate
-  kills (`killed`/`closing` flags) and tmux sessions skip this.
+  shell in place (in `tab.Dir`); shell tabs auto-close (last one ends the
+  session) unless pinned to an explicit workspace dir, which respawns instead.
+  Deliberate kills (`killed`/`closing` flags) and tmux sessions skip this.
+  Tabs created without a dir inherit the active tab's working directory
+  (live process cwd via `terminal.ProcessCwd`, falling back to `tab.Dir`).
 - `daemon/client.go` handles a single attached TUI client: input forwarding,
   output streaming, resize, detach, session switching.
 - `daemon/subscriber.go` provides an event subscription channel for the TUI

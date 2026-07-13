@@ -34,6 +34,22 @@ func startPlatform(args []string, cols, rows uint16, dir string, env []string) (
 	return &unixSession{file: file, cmd: cmd}, nil
 }
 
+// ProcessCwd returns the current working directory of a running process,
+// or "" when it cannot be determined (dead process, no /proc, e.g. macOS).
+func ProcessCwd(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+	if err != nil {
+		return ""
+	}
+	if fi, err := os.Stat(cwd); err != nil || !fi.IsDir() {
+		return ""
+	}
+	return cwd
+}
+
 func (t *unixSession) Read(p []byte) (int, error)  { return t.file.Read(p) }
 func (t *unixSession) Write(p []byte) (int, error) { return t.file.Write(p) }
 func (t *unixSession) Close() error                { return t.file.Close() }

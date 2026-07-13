@@ -366,7 +366,7 @@ func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRe
 	}
 	s.mu.Unlock()
 
-	sess, err := newDaemonSession(name, cmd, req.Cols, req.Rows, "", nil, s.broadcastToSubscribers)
+	sess, err := newDaemonSession(name, cmd, req.Cols, req.Rows, req.Dir, nil, s.broadcastToSubscribers)
 	if err != nil {
 		sub.SendSessionEvent(SessionEvent{Type: "error", Session: name})
 		return

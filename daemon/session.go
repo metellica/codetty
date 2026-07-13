@@ -20,13 +20,14 @@ const (
 type SessionTab struct {
 	Name     string
 	Command  []string
-	Dir      string // workspace directory; respawned shells start here
+	Dir      string // working directory; respawned shells start here
 	Terminal terminal.Session
 	Screen   *terminal.ScreenMirror
 
-	exited   bool
-	exitCode int
-	closing  bool // set when the tab is being closed deliberately (CloseTab)
+	exited    bool
+	exitCode  int
+	closing   bool // set when the tab is being closed deliberately (CloseTab)
+	workspace bool // Dir was explicitly requested (config workspace tab); shell exits respawn instead of auto-closing
 	doneCh   chan struct{}
 
 	// Agent detection state (owned by the server's agent poll loop).
@@ -77,12 +78,13 @@ func newDaemonSession(name string, command []string, cols, rows uint16, dir stri
 
 	screen := terminal.NewScreenMirror(cols, rows)
 	tab := &SessionTab{
-		Name:     "default",
-		Command:  command,
-		Dir:      dir,
-		Terminal: term,
-		Screen:   screen,
-		doneCh:   make(chan struct{}),
+		Name:      "default",
+		Command:   command,
+		Dir:       dir,
+		workspace: dir != "",
+		Terminal:  term,
+		Screen:    screen,
+		doneCh:    make(chan struct{}),
 	}
 
 	s := &DaemonSession{
@@ -105,23 +107,38 @@ func newDaemonSession(name string, command []string, cols, rows uint16, dir stri
 }
 
 // AddTab creates a new tab within this session and returns its index.
+// When dir is empty the tab inherits the working directory of the active
+// tab (its process's live cwd when readable, else its recorded Dir), so
+// new tabs and later shell respawns stay in the session's directory
+// instead of falling back to the daemon's cwd.
 func (s *DaemonSession) AddTab(name string, command []string, cols, rows uint16, dir string, env []string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	workspace := dir != ""
+	if dir == "" {
+		dir = s.inheritDirLocked()
+	}
+
 	term, err := terminal.Start(command, cols, rows, dir, env)
+	if err != nil && dir != "" && !workspace {
+		// Inherited dir may have vanished; retry in the daemon's cwd.
+		dir = ""
+		term, err = terminal.Start(command, cols, rows, dir, env)
+	}
 	if err != nil {
 		return -1, err
 	}
 
 	screen := terminal.NewScreenMirror(cols, rows)
 	tab := &SessionTab{
-		Name:     name,
-		Command:  command,
-		Dir:      dir,
-		Terminal: term,
-		Screen:   screen,
-		doneCh:   make(chan struct{}),
+		Name:      name,
+		Command:   command,
+		Dir:       dir,
+		workspace: workspace,
+		Terminal:  term,
+		Screen:    screen,
+		doneCh:    make(chan struct{}),
 	}
 
 	s.Tabs = append(s.Tabs, tab)
@@ -131,6 +148,30 @@ func (s *DaemonSession) AddTab(name string, command []string, cols, rows uint16,
 	go s.waitLoopForTab(tab, term)
 
 	return idx, nil
+}
+
+// inheritDirLocked returns the working directory a new tab should inherit:
+// the live cwd of the active tab's process when readable, else the active
+// tab's recorded Dir, else the first non-empty tab Dir. Caller holds s.mu.
+func (s *DaemonSession) inheritDirLocked() string {
+	if len(s.Tabs) == 0 || s.ActiveTab < 0 || s.ActiveTab >= len(s.Tabs) {
+		return ""
+	}
+	active := s.Tabs[s.ActiveTab]
+	if active.Terminal != nil {
+		if cwd := terminal.ProcessCwd(active.Terminal.Pid()); cwd != "" {
+			return cwd
+		}
+	}
+	if active.Dir != "" {
+		return active.Dir
+	}
+	for _, t := range s.Tabs {
+		if t.Dir != "" {
+			return t.Dir
+		}
+	}
+	return ""
 }
 
 // SwitchTab changes the active tab to the given index.
@@ -319,9 +360,9 @@ func (s *DaemonSession) waitLoopForTab(tab *SessionTab, term terminal.Session) {
 			if s.respawnTabShell(tab) {
 				return
 			}
-		} else if tab.Dir != "" {
-			// A shell tab with a workspace dir exited: respawn the shell
-			// in the workspace directory instead of auto-closing.
+		} else if tab.workspace {
+			// A shell tab pinned to an explicit workspace dir exited:
+			// respawn the shell there instead of auto-closing.
 			if s.respawnTabShell(tab) {
 				return
 			}
@@ -380,6 +421,11 @@ func (s *DaemonSession) respawnTabShell(tab *SessionTab) bool {
 	cols, rows := tab.Screen.Size()
 	shell := terminal.DefaultShell()
 	term, err := terminal.Start([]string{shell}, cols, rows, tab.Dir, nil)
+	if err != nil && tab.Dir != "" {
+		// The recorded dir may have been deleted; retry in the daemon's cwd
+		// so the panel stays usable.
+		term, err = terminal.Start([]string{shell}, cols, rows, "", nil)
+	}
 	if err != nil {
 		return false
 	}

@@ -51,7 +51,7 @@ func (m *tuiModel) reloadConfig() {
 				cmd = []string{terminal.DefaultShell()}
 			}
 			cols, rows := m.focusedContentSize()
-			m.conn.CreateSession(s.Name, cmd, uint16(cols), uint16(rows))
+			m.conn.CreateSession(s.Name, cmd, uint16(cols), uint16(rows), s.Dir)
 			// Tabs will be created after the session appears (via event)
 			// Store pending tabs for deferred creation
 			m.pendingReloadTabs[s.Name] = s.Tabs

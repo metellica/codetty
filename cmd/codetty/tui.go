@@ -754,7 +754,7 @@ func (m *tuiModel) maybeAutoCreate() {
 	m.autoCreate = nil
 	if m.conn != nil {
 		cols, rows := m.focusedContentSize()
-		m.conn.CreateSession("", cmd, uint16(cols), uint16(rows))
+		m.conn.CreateSession("", cmd, uint16(cols), uint16(rows), "")
 	}
 }
 

@@ -1,6 +1,9 @@
 package daemon
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -242,5 +245,67 @@ func TestTabExit_ShellWithDirRespawns(t *testing.T) {
 	}
 	if tab.Dir != "/tmp" {
 		t.Errorf("respawned tab Dir = %q, want /tmp", tab.Dir)
+	}
+}
+
+// TestAddTab_InheritsDirFromActiveTab verifies a tab created without an
+// explicit dir starts in the active tab's working directory instead of the
+// daemon's cwd.
+func TestAddTab_InheritsDirFromActiveTab(t *testing.T) {
+	dir := t.TempDir()
+	sess, err := newDaemonSession("inherit", []string{"/bin/sleep", "30"}, 80, 24, dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Kill()
+
+	idx, err := sess.AddTab("second", []string{"/bin/sleep", "30"}, 80, 24, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess.mu.Lock()
+	tab := sess.Tabs[idx]
+	got, workspace := tab.Dir, tab.workspace
+	sess.mu.Unlock()
+
+	want, _ := filepath.EvalSymlinks(dir)
+	gotResolved, _ := filepath.EvalSymlinks(got)
+	if gotResolved != want {
+		t.Errorf("inherited Dir = %q (resolved %q), want %q", got, gotResolved, want)
+	}
+	if workspace {
+		t.Error("inherited dir must not mark the tab as a workspace tab")
+	}
+
+	// The new tab's process must actually run in the inherited directory.
+	cwd, err := os.Readlink(filepath.Join("/proc", strconv.Itoa(tab.Terminal.Pid()), "cwd"))
+	if err == nil && cwd != want {
+		t.Errorf("new tab process cwd = %q, want %q", cwd, want)
+	}
+}
+
+// TestAddTab_InheritedDirShellAutoCloses verifies a shell tab whose dir was
+// only inherited (not explicitly requested) still auto-closes on exit
+// instead of respawning like a workspace tab.
+func TestAddTab_InheritedDirShellAutoCloses(t *testing.T) {
+	rec := newTabEventRecorder()
+	sess, err := newDaemonSession("inherit-close", []string{"cat"}, 80, 24, "/tmp", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Kill()
+	sess.setTabsChangedCallback(rec.callback)
+
+	if _, err := sess.AddTab("shell", []string{"sh", "-c", "exit 0"}, 80, 24, "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.wait(t, "tab_closed")
+
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	if len(sess.Tabs) != 1 {
+		t.Fatalf("expected 1 tab after auto-close, got %d", len(sess.Tabs))
 	}
 }

@@ -180,9 +180,10 @@ func (dc *daemonConn) SendResizeSession(name string, cols, rows uint16) {
 }
 
 // CreateSession requests the daemon to create a new session.
-func (dc *daemonConn) CreateSession(name string, command []string, cols, rows uint16) {
+// dir sets the first tab's working directory ("" = daemon default).
+func (dc *daemonConn) CreateSession(name string, command []string, cols, rows uint16, dir string) {
 	daemon.WriteFrame(dc.conn, daemon.FrameCreateSession, daemon.MarshalJSON(daemon.CreateSessionRequest{
-		Name: name, Command: command, Cols: cols, Rows: rows,
+		Name: name, Command: command, Cols: cols, Rows: rows, Dir: dir,
 	}))
 }
 
