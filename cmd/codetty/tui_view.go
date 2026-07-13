@@ -163,16 +163,38 @@ func (m *tuiModel) focusBigView() string {
 }
 
 // focusSidePositions returns the visible-session indices shown as side
-// panels in focus-big mode (display order, selected excluded).
+// panels in focus-big mode, ordered by agent priority (blocked → done →
+// rest) consistent with the list-mode Shift+Tab traversal.
 func (m *tuiModel) focusSidePositions() []int {
-	n := len(m.visibleSessions())
-	pos := make([]int, 0, n)
-	for i := 0; i < n; i++ {
-		if i != m.selected {
-			pos = append(pos, i)
+	sessions := m.visibleSessions()
+	var blocked, done, rest []int
+	for i, sess := range sessions {
+		if i == m.selected {
+			continue
+		}
+		hasBlocked, hasDone := false, false
+		for _, tab := range sess.Tabs {
+			if tab.Agent == "" {
+				continue
+			}
+			state := effectiveAgentState(tab)
+			if state == "blocked" {
+				hasBlocked = true
+			} else if state == "done" {
+				hasDone = true
+			}
+		}
+		switch {
+		case hasBlocked:
+			blocked = append(blocked, i)
+		case hasDone:
+			done = append(done, i)
+		default:
+			rest = append(rest, i)
 		}
 	}
-	return pos
+	result := append(blocked, done...)
+	return append(result, rest...)
 }
 
 // focusSideCycle advances the Shift+Tab side-panel highlight: big panel →

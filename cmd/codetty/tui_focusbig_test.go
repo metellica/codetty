@@ -361,3 +361,28 @@ func TestFocusBigView_RendersSidePanels(t *testing.T) {
 		t.Fatalf("view missing big panel info line")
 	}
 }
+
+func TestFocusBig_ShiftTabPrioritizesAgentState(t *testing.T) {
+	m := newFocusBigTestModel()
+	// alpha (selected=0) is the big panel.
+	// beta (idx 1) has a "done" agent.
+	// gamma (idx 2) has a "blocked" agent.
+	m.sessions[1].Tabs = []tuiTab{{Name: "shell", Agent: "copilot", AgentState: "idle", Done: true}}
+	m.sessions[2].Tabs = []tuiTab{{Name: "shell", Agent: "copilot", AgentState: "blocked"}}
+
+	// First Shift+Tab should land on the blocked session (gamma=2).
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.focusCursor != 2 {
+		t.Fatalf("press 1: focusCursor = %d, want 2 (blocked)", m.focusCursor)
+	}
+	// Second should land on the done session (beta=1).
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.focusCursor != 1 {
+		t.Fatalf("press 2: focusCursor = %d, want 1 (done)", m.focusCursor)
+	}
+	// Third returns to big panel.
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.focusCursor != -1 {
+		t.Fatalf("press 3: focusCursor = %d, want -1 (big panel)", m.focusCursor)
+	}
+}
