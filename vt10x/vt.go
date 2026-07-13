@@ -72,12 +72,6 @@ type View interface {
 	// ClearScrollback discards all lines in the scrollback buffer.
 	ClearScrollback()
 
-	// TakeScrollback removes and returns the scrollback lines (newest last).
-	TakeScrollback() [][]Glyph
-
-	// RestoreScrollback replaces the scrollback with previously taken lines.
-	RestoreScrollback(lines [][]Glyph)
-
 	// DisableScrollback turns off scrollback capture entirely.
 	DisableScrollback()
 

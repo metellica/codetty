@@ -862,22 +862,3 @@ func (t *State) ScrollbackRow(y int) []Glyph {
 func (t *State) ClearScrollback() {
 	t.scrollback = nil
 }
-
-// TakeScrollback removes and returns the scrollback lines (newest last).
-// The caller may later hand them back via RestoreScrollback.
-func (t *State) TakeScrollback() [][]Glyph {
-	sb := make([][]Glyph, len(t.scrollback))
-	for i, l := range t.scrollback {
-		sb[i] = []Glyph(l)
-	}
-	t.scrollback = nil
-	return sb
-}
-
-// RestoreScrollback replaces the scrollback buffer with previously taken lines.
-func (t *State) RestoreScrollback(lines [][]Glyph) {
-	t.scrollback = make([]line, len(lines))
-	for i, l := range lines {
-		t.scrollback[i] = line(l)
-	}
-}

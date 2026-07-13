@@ -26,9 +26,6 @@ type ScreenMirror struct {
 // NewScreenMirror creates a new ScreenMirror with the given dimensions.
 func NewScreenMirror(cols, rows uint16) *ScreenMirror {
 	term := vt10x.New(vt10x.WithSize(int(cols), int(rows)), vt10x.WithWriter(io.Discard))
-	// The mirror only needs the live screen for snapshot replay; the TUI
-	// keeps its own scrollback.
-	term.DisableScrollback()
 	return &ScreenMirror{term: term}
 }
 
@@ -155,6 +152,25 @@ func (s *ScreenMirror) Snapshot() []byte {
 	var b strings.Builder
 	b.Grow(rows * (cols + 24))
 	b.WriteString("\033[0m")
+
+	// Replay scrollback history first, while the receiver is on the
+	// primary screen: each line is printed and then pushed off the top so
+	// it lands in the receiver's own scrollback buffer. The screen redraw
+	// below repaints the visible area afterwards. This preserves scroll
+	// history across attach, tab switches, and daemon reconnects.
+	if sbLen := s.term.ScrollbackLen(); sbLen > 0 {
+		b.WriteString("\033[?1049l\033[?7h") // ensure primary screen + wrap
+		for i := 0; i < sbLen; i++ {
+			writeGlyphRow(&b, s.term.ScrollbackRow(i))
+			b.WriteString("\r\n")
+		}
+		// Scroll the tail of the replayed lines off-screen so every line
+		// ends up in scrollback, leaving a blank screen for the redraw.
+		for i := 0; i < rows-1; i++ {
+			b.WriteByte('\n')
+		}
+	}
+
 	b.WriteString(modeSequences(mode))
 	b.WriteString("\033[2J")
 
@@ -194,6 +210,35 @@ func (s *ScreenMirror) Snapshot() []byte {
 	}
 
 	return []byte(b.String())
+}
+
+// writeGlyphRow renders one row of glyphs (a scrollback line) as ANSI text,
+// trimming trailing blank cells and resetting attributes at the end.
+func writeGlyphRow(b *strings.Builder, row []vt10x.Glyph) {
+	end := len(row)
+	for end > 0 {
+		g := row[end-1]
+		if (g.Char != ' ' && g.Char != 0) || g.FG != vt10x.DefaultFG || g.BG != vt10x.DefaultBG || g.Mode != 0 {
+			break
+		}
+		end--
+	}
+	var prevFG, prevBG vt10x.Color = vt10x.DefaultFG, vt10x.DefaultBG
+	var prevMode int16
+	for x := 0; x < end; x++ {
+		g := row[x]
+		if g.Char == 0 {
+			continue // wide-char continuation cell
+		}
+		if g.FG != prevFG || g.BG != prevBG || g.Mode != prevMode {
+			b.WriteString(ansiAttrs(g.FG, g.BG, g.Mode))
+			prevFG, prevBG, prevMode = g.FG, g.BG, g.Mode
+		}
+		b.WriteRune(g.Char)
+	}
+	if prevFG != vt10x.DefaultFG || prevBG != vt10x.DefaultBG || prevMode != 0 {
+		b.WriteString("\033[0m")
+	}
 }
 
 func modeSequences(mode vt10x.ModeFlag) string {

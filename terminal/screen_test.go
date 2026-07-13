@@ -142,3 +142,42 @@ func TestScreenMirror_ActiveTextEmpty(t *testing.T) {
 		t.Errorf("expected empty ActiveText before writes, got %q", got)
 	}
 }
+
+func TestScreenMirror_SnapshotReplaysScrollback(t *testing.T) {
+	m := NewScreenMirror(20, 5)
+	// Write more lines than fit on screen so history scrolls off the top.
+	for i := 0; i < 30; i++ {
+		m.Write([]byte("line-" + string(rune('a'+i%26)) + "\r\n"))
+	}
+
+	snap := m.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("snapshot empty")
+	}
+
+	// Replay into a fresh mirror (as attach/tab-switch does) and verify the
+	// scrolled-off history is reconstructed in its scrollback buffer.
+	r := NewScreenMirror(20, 5)
+	r.Write(snap)
+	r.term.Lock()
+	sbLen := r.term.ScrollbackLen()
+	var first string
+	if sbLen > 0 {
+		for _, g := range r.term.ScrollbackRow(0) {
+			if g.Char != 0 && g.Char != ' ' {
+				first += string(g.Char)
+			}
+		}
+	}
+	r.term.Unlock()
+	if sbLen == 0 {
+		t.Fatal("scrollback not reconstructed from snapshot")
+	}
+	if first != "line-a" {
+		t.Fatalf("first scrollback line = %q, want %q", first, "line-a")
+	}
+	// Visible screen must still match the source.
+	if got, want := r.TailText(0), m.TailText(0); got != want {
+		t.Fatalf("screen mismatch after replay:\ngot:  %q\nwant: %q", got, want)
+	}
+}
