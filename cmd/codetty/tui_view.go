@@ -821,7 +821,7 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	if m.prefix {
-		help := m.prefixLabel + ": d detach  c new  t tab  x kill  X close-tab  r rename  n/p nav  s list  b big  f full  w manager  Shift+←→ tabs"
+		help := m.prefixLabel + ": d detach  c new  t tab  x kill  X close-tab  r rename  R reload  n/p nav  s list  b big  f full  w manager  Shift+←→ tabs"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 
