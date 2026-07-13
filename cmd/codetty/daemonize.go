@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -16,7 +17,7 @@ func ensureDaemon(sockPath string) error {
 	}
 
 	// Ensure socket directory exists
-	dir := sockPath[:len(sockPath)-len("/codetty.sock")]
+	dir := filepath.Dir(sockPath)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}

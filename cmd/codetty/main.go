@@ -5,6 +5,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"codetty/config"
 	"codetty/terminal"
@@ -17,7 +19,7 @@ Usage:
   codetty [new] [-s name] [--] [command ...]   Create session and open TUI
   codetty attach [-s name]                     Open TUI focused on session (alias: a)
   codetty up [-f config.toml]                  Load session config, create sessions, open TUI
-  codetty ls                                   List active sessions
+  codetty ls [-a]                              List active sessions (-a: all instances)
   codetty kill [-s name]                       Kill a session
   codetty kill-server                          Stop the daemon and all sessions
   codetty upgrade                              Hot-upgrade daemon binary without killing sessions
@@ -40,8 +42,10 @@ Other keys:
   Mouse click         Select session panel
 
 Options:
-  -s, --session NAME   Target session name
-  --help, -h           Show this help
+  -s, --session NAME    Target session name
+  -i, --instance NAME   Use a named daemon instance, isolated from others on
+                        this host (before subcommand; env: CODETTY_INSTANCE)
+  --help, -h            Show this help
 `
 
 // usageText renders the CLI help text with the configured prefix key
@@ -55,13 +59,30 @@ func usageText() string {
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	rest, name, err := extractInstanceArgs(os.Args[1:])
+	if err != nil {
+		log.Fatal(err)
+	}
+	if name == "" {
+		name = os.Getenv("CODETTY_INSTANCE")
+	}
+	if err := validateInstanceName(name); err != nil {
+		log.Fatal(err)
+	}
+	instanceName = name
+	if name != "" {
+		// Propagate to the daemon (and thus to every PTY it spawns), so
+		// codetty commands run inside a session target the same instance.
+		os.Setenv("CODETTY_INSTANCE", name)
+	}
+
+	if len(rest) < 1 {
 		cmdDefault()
 		return
 	}
 
-	cmd := os.Args[1]
-	args := os.Args[2:]
+	cmd := rest[0]
+	args := rest[1:]
 
 	switch cmd {
 	case "new":
@@ -88,7 +109,7 @@ func main() {
 		fmt.Println("codetty dev")
 	default:
 		// Treat unknown args as command to run in a new session
-		cmdNew(os.Args[1:])
+		cmdNew(rest)
 	}
 }
 
@@ -100,11 +121,72 @@ func cmdDefault() {
 	startTUI(sockPath, startupConfig{autoCreate: []string{terminal.DefaultShell()}})
 }
 
-// defaultSocketPath returns the Unix socket path for the daemon.
-func defaultSocketPath() string {
-	dir := os.Getenv("XDG_RUNTIME_DIR")
-	if dir == "" {
-		dir = filepath.Join(os.TempDir(), fmt.Sprintf("codetty-%d", os.Getuid()))
+// instanceName is the resolved daemon instance name ("" = default instance).
+// Each instance has its own socket, daemon and sessions, fully isolated from
+// other instances on the same host.
+var instanceName string
+
+// extractInstanceArgs strips a leading -i/--instance flag from args, returning
+// the remaining args and the instance name. Only flags appearing before the
+// subcommand are consumed, so options of a wrapped command (e.g.
+// `codetty bash -i`) are left untouched.
+func extractInstanceArgs(args []string) ([]string, string, error) {
+	name := ""
+	for len(args) > 0 {
+		arg := args[0]
+		switch {
+		case arg == "-i" || arg == "--instance":
+			if len(args) < 2 {
+				return nil, "", fmt.Errorf("%s requires an instance name", arg)
+			}
+			name = args[1]
+			args = args[2:]
+		case strings.HasPrefix(arg, "--instance="):
+			name = strings.TrimPrefix(arg, "--instance=")
+			args = args[1:]
+		case strings.HasPrefix(arg, "-i="):
+			name = strings.TrimPrefix(arg, "-i=")
+			args = args[1:]
+		default:
+			return args, name, nil
+		}
 	}
-	return filepath.Join(dir, "codetty.sock")
+	return args, name, nil
+}
+
+var instanceNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// validateInstanceName rejects names that would produce unsafe or overlong
+// socket paths. The empty name selects the default instance.
+func validateInstanceName(name string) error {
+	if name == "" {
+		return nil
+	}
+	if len(name) > 64 || !instanceNameRe.MatchString(name) {
+		return fmt.Errorf("invalid instance name %q: use [A-Za-z0-9_-], max 64 chars", name)
+	}
+	return nil
+}
+
+// runtimeSocketDir returns the directory holding codetty daemon sockets.
+func runtimeSocketDir() string {
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
+		return dir
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("codetty-%d", os.Getuid()))
+}
+
+// defaultSocketPath returns the Unix socket path for the daemon of the
+// current instance: codetty.sock for the default instance, or
+// codetty-<name>.sock for a named instance.
+func defaultSocketPath() string {
+	return instanceSocketPath(instanceName)
+}
+
+// instanceSocketPath returns the socket path for the given instance name.
+func instanceSocketPath(name string) string {
+	if name == "" {
+		return filepath.Join(runtimeSocketDir(), "codetty.sock")
+	}
+	return filepath.Join(runtimeSocketDir(), "codetty-"+name+".sock")
 }

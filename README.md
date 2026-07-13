@@ -82,6 +82,12 @@ codetty kill -s myserver
 
 # 停止 daemon 和所有会话
 codetty kill-server
+
+# 命名实例：同一主机上运行多个相互隔离的 daemon（类似 tmux -L）
+codetty -i work                     # 使用 "work" 实例（独立 socket 与会话）
+codetty --instance work ls          # 列出 work 实例的会话
+codetty ls -a                       # 列出本机所有实例的会话
+CODETTY_INSTANCE=work codetty ls    # 也可通过环境变量指定实例
 ```
 
 ### TUI 快捷键（速览）

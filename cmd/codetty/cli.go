@@ -392,36 +392,100 @@ func createDaemonTab(sockPath, session, tabName string, cmd []string, dir string
 }
 
 func cmdList(args []string) {
+	fs := flag.NewFlagSet("ls", flag.ExitOnError)
+	all := fs.Bool("a", false, "list sessions from all instances on this host")
+	fs.BoolVar(all, "all", false, "list sessions from all instances on this host")
+	fs.Parse(args)
+
+	if *all {
+		listAllInstances()
+		return
+	}
+
 	sockPath := defaultSocketPath()
-	conn, err := net.Dial("unix", sockPath)
+	sessions, err := querySessions(sockPath)
 	if err != nil {
 		fmt.Println("no daemon running")
 		return
+	}
+	if len(sessions) == 0 {
+		fmt.Println("no sessions")
+		return
+	}
+	printSessionTable(sessions)
+}
+
+// querySessions dials the daemon at sockPath and returns its session list.
+func querySessions(sockPath string) ([]daemon.SessionInfo, error) {
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		return nil, err
 	}
 	defer conn.Close()
 
 	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionList}))
 	ft, payload, err := daemon.ReadFrame(conn)
 	if err != nil {
-		log.Fatalf("read response: %v", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if ft != daemon.FrameResponse {
-		log.Fatal("unexpected response")
+		return nil, fmt.Errorf("unexpected response")
 	}
 	var resp daemon.Response
 	json.Unmarshal(payload, &resp)
 	if !resp.OK {
-		log.Fatalf("list failed: %s", resp.Error)
+		return nil, fmt.Errorf("list failed: %s", resp.Error)
 	}
+	return resp.Sessions, nil
+}
 
-	if len(resp.Sessions) == 0 {
-		fmt.Println("no sessions")
+func printSessionTable(sessions []daemon.SessionInfo) {
+	fmt.Printf("%-16s %-12s %-8s %s\n", "NAME", "COMMAND", "CLIENTS", "CREATED")
+	for _, s := range sessions {
+		fmt.Printf("%-16s %-12s %-8d %s\n", s.Name, s.Command, s.Attached, s.CreatedAt)
+	}
+}
+
+// listAllInstances scans the runtime socket directory for codetty daemon
+// sockets and lists the sessions of every reachable instance.
+func listAllInstances() {
+	dir := runtimeSocketDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		fmt.Println("no daemon running")
 		return
 	}
 
-	fmt.Printf("%-16s %-12s %-8s %s\n", "NAME", "COMMAND", "CLIENTS", "CREATED")
-	for _, s := range resp.Sessions {
-		fmt.Printf("%-16s %-12s %-8d %s\n", s.Name, s.Command, s.Attached, s.CreatedAt)
+	found := false
+	for _, e := range entries {
+		name := e.Name()
+		var instance string
+		switch {
+		case name == "codetty.sock":
+			instance = "(default)"
+		case strings.HasPrefix(name, "codetty-") && strings.HasSuffix(name, ".sock"):
+			instance = strings.TrimSuffix(strings.TrimPrefix(name, "codetty-"), ".sock")
+		default:
+			continue
+		}
+
+		sessions, err := querySessions(filepath.Join(dir, name))
+		if err != nil {
+			continue // stale socket or unreachable daemon
+		}
+		if found {
+			fmt.Println()
+		}
+		found = true
+		fmt.Printf("instance %s:\n", instance)
+		if len(sessions) == 0 {
+			fmt.Println("no sessions")
+			continue
+		}
+		printSessionTable(sessions)
+	}
+	if !found {
+		fmt.Println("no daemon running")
 	}
 }
 
@@ -675,15 +739,6 @@ func terminalSize() (uint16, uint16) {
 		return 80, 24
 	}
 	return uint16(w), uint16(h)
-}
-
-// ensureSocketDir computes the socket directory path.
-func ensureSocketDir() string {
-	dir := os.Getenv("XDG_RUNTIME_DIR")
-	if dir == "" {
-		return fmt.Sprintf("/tmp/codetty-%d", os.Getuid())
-	}
-	return dir
 }
 
 // formatSessionList formats session info for display.
