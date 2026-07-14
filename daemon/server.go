@@ -17,6 +17,8 @@ type Server struct {
 	sockPath    string
 	listener    net.Listener
 	sessions    map[string]*DaemonSession
+	order       []string // session names in display order (authoritative)
+	active      string   // last big-panel session; restored on next attach
 	subscribers []*Subscriber
 	mu          sync.Mutex
 	done        chan struct{}
@@ -212,7 +214,7 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 		s.sendError(conn, fmt.Sprintf("session %q already exists", name))
 		return
 	}
-	s.sessions[name] = sess
+	s.addSessionLocked(sess)
 	s.mu.Unlock()
 
 	s.notifySubscribers(SessionEvent{Type: "created", Session: name, Info: sess.Info()})
@@ -259,7 +261,7 @@ func (s *Server) handleAttach(conn net.Conn, req Request) {
 func (s *Server) handleList(conn net.Conn) {
 	s.mu.Lock()
 	infos := make([]SessionInfo, 0, len(s.sessions))
-	for _, sess := range s.sessions {
+	for _, sess := range s.orderedSessionsLocked() {
 		infos = append(infos, sess.Info())
 	}
 	s.mu.Unlock()
@@ -378,7 +380,7 @@ func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRe
 		sub.SendSessionEvent(SessionEvent{Type: "error", Session: name})
 		return
 	}
-	s.sessions[name] = sess
+	s.addSessionLocked(sess)
 	s.mu.Unlock()
 	go s.watchSession(sess)
 	s.notifySubscribers(SessionEvent{Type: "created", Session: name, Info: sess.Info()})
@@ -411,6 +413,15 @@ func (s *Server) renameSessionForSubscriber(req RenameSessionRequest) {
 	delete(s.sessions, req.OldName)
 	sess.Name = req.NewName
 	s.sessions[req.NewName] = sess
+	if s.active == req.OldName {
+		s.active = req.NewName
+	}
+	for i, n := range s.order {
+		if n == req.OldName {
+			s.order[i] = req.NewName
+			break
+		}
+	}
 	s.mu.Unlock()
 
 	s.notifySubscribers(SessionEvent{
@@ -426,11 +437,31 @@ func (s *Server) handleSubscribeAll(conn net.Conn, req Request) {
 	defer s.removeSubscriber(sub)
 
 	s.mu.Lock()
-	sessions := make([]*DaemonSession, 0, len(s.sessions))
-	for _, sess := range s.sessions {
-		sessions = append(sessions, sess)
-	}
+	sessions := s.orderedSessionsLocked()
+	activeSess := s.sessions[s.active]
 	s.mu.Unlock()
+
+	// Announce the remembered big-panel session before the snapshots so
+	// the client can adopt it as its focus target (an explicit attach
+	// target set by the client takes precedence on its side). With no
+	// remembered session, fall back to the most recently created one,
+	// preserving the historical `attach` default.
+	if activeSess == nil || activeSess.isExited() {
+		activeSess = nil
+		var latest time.Time
+		for _, sess := range sessions {
+			if !sess.isExited() && sess.CreatedAt.After(latest) {
+				activeSess = sess
+				latest = sess.CreatedAt
+			}
+		}
+	}
+	if activeSess != nil {
+		sub.sendFrameDirect(FrameSessionEvent, MarshalJSON(SessionEvent{
+			Type:    "active",
+			Session: activeSess.Name,
+		}))
+	}
 
 	for _, sess := range sessions {
 		if !sess.isExited() {
@@ -467,7 +498,7 @@ func (s *Server) watchSession(sess *DaemonSession) {
 	}
 
 	s.mu.Lock()
-	delete(s.sessions, sess.Name)
+	s.removeSessionLocked(sess.Name)
 	remaining := len(s.sessions)
 	s.mu.Unlock()
 
@@ -514,15 +545,87 @@ func (s *Server) SessionByName(name string) *DaemonSession {
 	return s.sessions[name]
 }
 
-// SessionNames returns session names in iteration order.
+// addSessionLocked registers a session and appends it to the display order.
+// Caller must hold s.mu.
+func (s *Server) addSessionLocked(sess *DaemonSession) {
+	s.sessions[sess.Name] = sess
+	s.order = append(s.order, sess.Name)
+}
+
+// removeSessionLocked unregisters a session and drops it from the display
+// order. Caller must hold s.mu.
+func (s *Server) removeSessionLocked(name string) {
+	delete(s.sessions, name)
+	if s.active == name {
+		s.active = ""
+	}
+	for i, n := range s.order {
+		if n == name {
+			s.order = append(s.order[:i], s.order[i+1:]...)
+			break
+		}
+	}
+}
+
+// orderedSessionsLocked returns sessions in display order. Caller must hold s.mu.
+func (s *Server) orderedSessionsLocked() []*DaemonSession {
+	result := make([]*DaemonSession, 0, len(s.order))
+	for _, name := range s.order {
+		if sess, ok := s.sessions[name]; ok {
+			result = append(result, sess)
+		}
+	}
+	return result
+}
+
+// reorderSessionsForSubscriber applies a client-requested display order and
+// broadcasts the new order to the other subscribers (the sender already has
+// it locally; echoing it back could transiently undo rapid follow-up moves).
+// Unknown names are ignored; sessions missing from the request keep their
+// relative order at the end.
+func (s *Server) reorderSessionsForSubscriber(from *Subscriber, req ReorderSessionsRequest) {
+	s.mu.Lock()
+	newOrder := make([]string, 0, len(s.order))
+	seen := make(map[string]bool, len(s.order))
+	for _, name := range req.Order {
+		if _, ok := s.sessions[name]; ok && !seen[name] {
+			newOrder = append(newOrder, name)
+			seen[name] = true
+		}
+	}
+	for _, name := range s.order {
+		if !seen[name] {
+			newOrder = append(newOrder, name)
+		}
+	}
+	s.order = newOrder
+	order := append([]string(nil), newOrder...)
+	subs := append([]*Subscriber(nil), s.subscribers...)
+	s.mu.Unlock()
+
+	evt := SessionEvent{Type: "reordered", Order: order}
+	for _, sub := range subs {
+		if sub != from {
+			sub.SendSessionEvent(evt)
+		}
+	}
+}
+
+// setActiveSessionForSubscriber remembers the client's big-panel session so
+// the next attach restores it. Unknown names are ignored.
+func (s *Server) setActiveSessionForSubscriber(req SetActiveSessionRequest) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[req.Session]; ok {
+		s.active = req.Session
+	}
+}
+
+// SessionNames returns session names in display order.
 func (s *Server) SessionNames() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	names := make([]string, 0, len(s.sessions))
-	for name := range s.sessions {
-		names = append(names, name)
-	}
-	return names
+	return append([]string(nil), s.order...)
 }
 
 // createTabForSubscriber creates a new tab within an existing session.

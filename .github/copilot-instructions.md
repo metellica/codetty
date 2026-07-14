@@ -70,6 +70,13 @@ lifetime (like tmux). Uses Unix PTY on Linux/macOS and Windows ConPTY on Windows
 - The TUI separates `m.selected` (which session is the big panel in focus-big
   mode) from `m.inputFocus` (which session receives keyboard input). When
   `inputFocus == -1`, input goes to `m.selected`.
+- The daemon owns the session display order (`Server.order`, creation order
+  by default) and the last big-panel session (`Server.active`). Subscribe
+  snapshots, `ls`, and hot-upgrade state all follow them, so ordering and
+  selection are stable across attach/TUI restart/upgrade. TUI reorders
+  (h/l) sync via `FrameReorderSess`; selection changes sync centrally in
+  `Update` via `FrameSetActive`; on subscribe the daemon sends an "active"
+  event before the snapshots (an explicit attach/config target wins).
 - Mouse clicks in split mode do NOT forward SGR mouse sequences to the PTY
   (bash doesn't enable mouse reporting, causing garbage echo). Only scroll
   wheel is forwarded. Fullscreen mode forwards all mouse events.

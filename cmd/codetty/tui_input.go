@@ -3,6 +3,7 @@ package main
 import (
 	"codetty/terminal"
 	"fmt"
+	"slices"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -467,6 +468,7 @@ func (m *tuiModel) moveOrder(delta int) {
 	target := ((m.selected+delta)%n + n) % n
 	// Use reorderByVisibleIdx to swap positions in m.order
 	m.reorderByVisibleIdx(m.selected, target)
+	m.pushOrderToDaemon()
 }
 
 // reorderByVisibleIdx moves a session from one visible position to another in m.order.
@@ -493,15 +495,15 @@ func (m *tuiModel) reorderByVisibleIdx(fromVisible, toVisible int) {
 		return
 	}
 
-	// Remove from original position and insert at target
+	// Remove from original position and insert at target. When moving
+	// right, indices past fromOrder shift down by one after removal, so
+	// inserting at the unadjusted toOrder lands exactly on the target
+	// visible slot (decrementing here made a one-step right move a no-op).
 	m.order = append(m.order[:fromOrder], m.order[fromOrder+1:]...)
-	// Adjust toOrder if it was after fromOrder
-	if toOrder > fromOrder {
-		toOrder--
+	if toOrder > len(m.order) {
+		toOrder = len(m.order)
 	}
-	// Insert at toOrder position
-	m.order = append(m.order[:toOrder+1], m.order[toOrder:]...)
-	m.order[toOrder] = fromName
+	m.order = slices.Insert(m.order, toOrder, fromName)
 
 	// Adjust m.selected to follow the moved panel if needed
 	if m.selected == fromVisible {

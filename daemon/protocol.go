@@ -29,6 +29,8 @@ const (
 	FrameCloseTab      FrameType = 0x18 // C→S: JSON close tab request
 	FrameSwitchTab     FrameType = 0x19 // C→S: JSON switch tab request
 	FrameReloadConfig  FrameType = 0x1A // C→S: JSON reload config request
+	FrameReorderSess   FrameType = 0x1B // C→S: JSON reorder sessions request
+	FrameSetActive     FrameType = 0x1C // C→S: JSON set active (big panel) session
 )
 
 // Action identifies the requested operation in a Request frame.
@@ -114,6 +116,7 @@ type SessionEvent struct {
 	ExitCode int         `json:"exit_code,omitempty"`
 	Cols     uint16      `json:"cols,omitempty"`
 	Rows     uint16      `json:"rows,omitempty"`
+	Order    []string    `json:"order,omitempty"` // session display order (type "reordered")
 }
 
 // CreateSessionRequest is the payload for FrameCreateSession.
@@ -164,6 +167,19 @@ type TabEvent struct {
 	TabIndex  int    `json:"tab_index"`          // affected tab index
 	TabName   string `json:"tab_name,omitempty"` // tab name
 	ActiveTab int    `json:"active_tab"`         // new active tab index
+}
+
+// ReorderSessionsRequest is the payload for FrameReorderSess. Order lists
+// session names in the desired display order; unknown names are ignored and
+// unlisted sessions keep their relative position after the listed ones.
+type ReorderSessionsRequest struct {
+	Order []string `json:"order"`
+}
+
+// SetActiveSessionRequest is the payload for FrameSetActive. The daemon
+// remembers the client's big-panel session so the next attach restores it.
+type SetActiveSessionRequest struct {
+	Session string `json:"session"`
 }
 
 // ReloadConfigRequest is the payload for FrameReloadConfig.

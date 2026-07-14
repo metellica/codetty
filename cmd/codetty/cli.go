@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"codetty/config"
 	"codetty/daemon"
@@ -78,7 +77,7 @@ func cmdNew(args []string) {
 
 func cmdAttach(args []string) {
 	fs := flag.NewFlagSet("attach", flag.ExitOnError)
-	session := fs.String("s", "", "session name (default: latest)")
+	session := fs.String("s", "", "session name (default: last active)")
 	fs.Parse(args)
 
 	sockPath := defaultSocketPath()
@@ -86,44 +85,9 @@ func cmdAttach(args []string) {
 		log.Fatalf("no daemon running")
 	}
 
-	if *session == "" {
-		*session = latestSession(sockPath)
-	}
-
+	// No explicit target: leave focusTarget empty so the daemon-remembered
+	// active session (falling back to the latest created) is restored.
 	startTUI(sockPath, startupConfig{focusTarget: *session})
-}
-
-// latestSession queries the daemon for the most recently created active session.
-func latestSession(sockPath string) string {
-	conn, err := net.Dial("unix", sockPath)
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-
-	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionList}))
-	ft, payload, err := daemon.ReadFrame(conn)
-	if err != nil || ft != daemon.FrameResponse {
-		return ""
-	}
-	var resp daemon.Response
-	if err := json.Unmarshal(payload, &resp); err != nil || !resp.OK {
-		return ""
-	}
-
-	var latestName string
-	var latest time.Time
-	for _, s := range resp.Sessions {
-		t, err := time.Parse(time.RFC3339, s.CreatedAt)
-		if err != nil {
-			continue
-		}
-		if t.After(latest) {
-			latest = t
-			latestName = s.Name
-		}
-	}
-	return latestName
 }
 
 func startTUI(sockPath string, sc startupConfig) {

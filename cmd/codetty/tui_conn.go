@@ -234,3 +234,19 @@ func (dc *daemonConn) SwitchTab(session string, index int) {
 		Index:   index,
 	}))
 }
+
+// ReorderSessions pushes the full session display order to the daemon so it
+// persists across detach/attach and hot upgrades.
+func (dc *daemonConn) ReorderSessions(order []string) {
+	daemon.WriteFrame(dc.conn, daemon.FrameReorderSess, daemon.MarshalJSON(daemon.ReorderSessionsRequest{
+		Order: order,
+	}))
+}
+
+// SetActiveSession tells the daemon which session occupies the big panel so
+// the next attach restores it.
+func (dc *daemonConn) SetActiveSession(name string) {
+	daemon.WriteFrame(dc.conn, daemon.FrameSetActive, daemon.MarshalJSON(daemon.SetActiveSessionRequest{
+		Session: name,
+	}))
+}

@@ -147,6 +147,18 @@ func (s *Subscriber) Run(srv *Server) {
 				srv.switchTabForSubscriber(s, req)
 			}
 
+		case FrameReorderSess:
+			var req ReorderSessionsRequest
+			if json.Unmarshal(payload, &req) == nil {
+				srv.reorderSessionsForSubscriber(s, req)
+			}
+
+		case FrameSetActive:
+			var req SetActiveSessionRequest
+			if json.Unmarshal(payload, &req) == nil {
+				srv.setActiveSessionForSubscriber(req)
+			}
+
 		case FrameDetach:
 			return
 		}

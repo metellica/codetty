@@ -127,6 +127,13 @@ type tuiModel struct {
 	// Auto-create session on start
 	autoCreate []string // command to auto-create
 
+	// subscribed is true once the daemon acknowledged subscribe_all;
+	// active-session pushes are suppressed before that so the initial
+	// snapshot flood doesn't overwrite the daemon's remembered selection.
+	subscribed bool
+	// pushedActive is the last big-panel session name synced to the daemon.
+	pushedActive string
+
 	// Desired session order from config (applied after initial snapshots).
 	desiredOrder []string
 
@@ -202,7 +209,23 @@ func (m *tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.ackAgentDoneSession(name)
 		}
 	}
+	m.syncActiveSession()
 	return model, tea.Batch(cmd, m.scheduleBlink())
+}
+
+// syncActiveSession pushes the current big-panel session to the daemon
+// whenever it changed, so the selection survives detach/attach. All layout
+// modes (focus-big, list, fullscreen) drive the big panel via m.selected.
+func (m *tuiModel) syncActiveSession() {
+	if !m.subscribed || m.conn == nil {
+		return
+	}
+	sel := m.selectedSession()
+	if sel == nil || sel.Name == m.pushedActive {
+		return
+	}
+	m.pushedActive = sel.Name
+	m.conn.SetActiveSession(sel.Name)
 }
 
 // agentBlinkInterval is the working-badge solid/hollow animation period.
@@ -254,6 +277,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.ClearScreen
 
 	case daemonSubscribedMsg:
+		m.subscribed = true
 		m.maybeAutoCreate()
 		m.applyDesiredOrder()
 		// Initial snapshots arrive with the daemon-side (stale) session sizes.
@@ -280,6 +304,8 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessions = nil
 		m.order = nil
 		m.selected = 0
+		m.subscribed = false
+		m.pushedActive = ""
 		m.floatingIdx = -1
 		m.listFocus = false
 		m.listCursor = 0
@@ -465,6 +491,24 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 				m.order[i] = newName
 				break
 			}
+		}
+
+	case "reordered":
+		// Another client (or the daemon) changed the display order.
+		if len(evt.Order) > 0 {
+			m.applyOrderNames(evt.Order)
+		}
+
+	case "active":
+		// Daemon-remembered big-panel session, sent before the initial
+		// snapshots. An explicit attach/config target takes precedence.
+		if m.focusTarget != "" {
+			break
+		}
+		if m.sessionByName(evt.Session) != nil {
+			m.selected = m.visibleIndexByName(evt.Session)
+		} else {
+			m.focusTarget = evt.Session
 		}
 
 	case "tab_created", "tab_closed", "tab_switched":
@@ -762,23 +806,31 @@ func (m *tuiModel) maybeAutoCreate() {
 }
 
 // applyDesiredOrder reorders m.order to match the config-specified order.
-// Called once after all initial session snapshots have arrived.
+// Called once after all initial session snapshots have arrived. The result
+// is pushed to the daemon so the order sticks across re-attach.
 func (m *tuiModel) applyDesiredOrder() {
 	if len(m.desiredOrder) == 0 {
 		return
 	}
+	m.applyOrderNames(m.desiredOrder)
+	m.desiredOrder = nil
+	m.pushOrderToDaemon()
+}
 
+// applyOrderNames reorders m.order to match names: known sessions first in
+// the given order, then any extras keeping their relative order. The current
+// selection is preserved by name.
+func (m *tuiModel) applyOrderNames(names []string) {
 	// Remember the currently selected session name.
 	var selectedName string
 	if sel := m.selectedSession(); sel != nil {
 		selectedName = sel.Name
 	}
 
-	// Build new order: desired first, then any extras from daemon.
 	newOrder := make([]string, 0, len(m.order))
 	added := make(map[string]bool)
-	for _, name := range m.desiredOrder {
-		if m.sessionByName(name) != nil {
+	for _, name := range names {
+		if m.sessionByName(name) != nil && !added[name] {
 			newOrder = append(newOrder, name)
 			added[name] = true
 		}
@@ -790,11 +842,18 @@ func (m *tuiModel) applyDesiredOrder() {
 	}
 
 	m.order = newOrder
-	m.desiredOrder = nil
 
 	// Restore selected index after reorder.
 	if selectedName != "" {
 		m.selected = m.visibleIndexByName(selectedName)
+	}
+}
+
+// pushOrderToDaemon syncs the local display order to the daemon, making it
+// the authoritative order for future attaches and hot upgrades.
+func (m *tuiModel) pushOrderToDaemon() {
+	if m.conn != nil && len(m.order) > 0 {
+		m.conn.ReorderSessions(append([]string(nil), m.order...))
 	}
 }
 

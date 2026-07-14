@@ -19,7 +19,7 @@ func TestUpgrade_PersistsTabDir(t *testing.T) {
 	}
 
 	srv := NewServer(filepath.Join(dir, "d.sock"))
-	srv.sessions["upg"] = sess
+	srv.addSessionLocked(sess)
 
 	stateFile, err := srv.PrepareUpgrade()
 	if err != nil {

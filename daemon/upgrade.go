@@ -17,8 +17,9 @@ import (
 
 // UpgradeState holds the serialized daemon state for hot restart.
 type UpgradeState struct {
-	SocketPath string           `json:"socket_path"`
-	Sessions   []UpgradeSession `json:"sessions"`
+	SocketPath    string           `json:"socket_path"`
+	ActiveSession string           `json:"active_session,omitempty"`
+	Sessions      []UpgradeSession `json:"sessions"`
 }
 
 // UpgradeSession holds the state of a single session for hot restart.
@@ -55,10 +56,11 @@ func (s *Server) PrepareUpgrade() (string, error) {
 	defer s.mu.Unlock()
 
 	state := UpgradeState{
-		SocketPath: s.sockPath,
+		SocketPath:    s.sockPath,
+		ActiveSession: s.active,
 	}
 
-	for _, sess := range s.sessions {
+	for _, sess := range s.orderedSessionsLocked() {
 		us := UpgradeSession{
 			Name:      sess.Name,
 			Command:   sess.Command,
@@ -158,6 +160,7 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 	}
 
 	srv := NewServer(state.SocketPath)
+	srv.active = state.ActiveSession
 
 	for _, us := range state.Sessions {
 		sess := &DaemonSession{
@@ -207,6 +210,7 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 		}
 
 		srv.sessions[us.Name] = sess
+		srv.order = append(srv.order, us.Name)
 		go srv.watchSession(sess)
 	}
 

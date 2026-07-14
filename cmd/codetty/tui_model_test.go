@@ -332,8 +332,210 @@ func TestReorderByVisibleIdx(t *testing.T) {
 
 	m.reorderByVisibleIdx(0, 2)
 
-	if m.order[0] != "b" || m.order[1] != "a" || m.order[2] != "c" {
+	if m.order[0] != "b" || m.order[1] != "c" || m.order[2] != "a" {
 		t.Fatalf("unexpected order after reorder: %v", m.order)
+	}
+}
+
+func TestHandleSessionEvent_ReorderedAppliesOrder(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 160
+	m.height = 40
+	m.sessions = []*tuiSession{
+		newTUISession("a", "bash", 80, 24),
+		newTUISession("b", "bash", 80, 24),
+		newTUISession("c", "bash", 80, 24),
+	}
+	m.order = []string{"a", "b", "c"}
+	m.selected = 1 // "b"
+
+	m.handleSessionEvent(daemon.SessionEvent{
+		Type:  "reordered",
+		Order: []string{"c", "ghost", "a"},
+	})
+
+	if !slices.Equal(m.order, []string{"c", "a", "b"}) {
+		t.Fatalf("order after reordered event = %v, want [c a b]", m.order)
+	}
+	if got := m.selectedSession(); got == nil || got.Name != "b" {
+		t.Fatalf("selection not preserved, got %#v", got)
+	}
+}
+
+func TestHandleSessionEvent_ActiveAdoptedAsFocusTarget(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 100
+	m.height = 30
+
+	// "active" arrives before the snapshots (as the daemon sends it).
+	m.handleSessionEvent(daemon.SessionEvent{Type: "active", Session: "beta"})
+	if m.focusTarget != "beta" {
+		t.Fatalf("focusTarget = %q, want beta", m.focusTarget)
+	}
+
+	m.handleSessionEvent(daemon.SessionEvent{Type: "snapshot", Session: "alpha", Cols: 80, Rows: 24})
+	m.handleSessionEvent(daemon.SessionEvent{Type: "snapshot", Session: "beta", Cols: 80, Rows: 24})
+
+	if got := m.selectedSession(); got == nil || got.Name != "beta" {
+		t.Fatalf("selectedSession = %#v, want beta", got)
+	}
+}
+
+func TestHandleSessionEvent_ActiveDoesNotOverrideExplicitTarget(t *testing.T) {
+	m := newTUIModel(nil, "alpha", nil)
+	m.width = 100
+	m.height = 30
+
+	m.handleSessionEvent(daemon.SessionEvent{Type: "active", Session: "beta"})
+	if m.focusTarget != "alpha" {
+		t.Fatalf("focusTarget = %q, want alpha (explicit target preserved)", m.focusTarget)
+	}
+
+	m.handleSessionEvent(daemon.SessionEvent{Type: "snapshot", Session: "beta", Cols: 80, Rows: 24})
+	m.handleSessionEvent(daemon.SessionEvent{Type: "snapshot", Session: "alpha", Cols: 80, Rows: 24})
+
+	if got := m.selectedSession(); got == nil || got.Name != "alpha" {
+		t.Fatalf("selectedSession = %#v, want alpha", got)
+	}
+}
+
+func TestHandleSessionEvent_ActiveSelectsKnownSession(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 100
+	m.height = 30
+	m.sessions = []*tuiSession{
+		newTUISession("a", "bash", 80, 24),
+		newTUISession("b", "bash", 80, 24),
+	}
+	m.order = []string{"a", "b"}
+	m.selected = 0
+
+	m.handleSessionEvent(daemon.SessionEvent{Type: "active", Session: "b"})
+
+	if got := m.selectedSession(); got == nil || got.Name != "b" {
+		t.Fatalf("selectedSession = %#v, want b", got)
+	}
+}
+
+func TestSyncActiveSession_PushesSelectionChange(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	m := newTUIModel(&daemonConn{conn: client}, "", nil)
+	m.width = 160
+	m.height = 40
+	m.sessions = []*tuiSession{
+		newTUISession("a", "bash", 80, 24),
+		newTUISession("b", "bash", 80, 24),
+	}
+	m.order = []string{"a", "b"}
+	m.selected = 1
+	m.subscribed = true
+	m.pushedActive = "a"
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ft, payload, err := daemon.ReadFrame(server)
+		if err != nil {
+			t.Errorf("ReadFrame: %v", err)
+			return
+		}
+		if ft != daemon.FrameSetActive {
+			t.Errorf("frame type = %d, want FrameSetActive", ft)
+			return
+		}
+		var req daemon.SetActiveSessionRequest
+		if err := json.Unmarshal(payload, &req); err != nil {
+			t.Errorf("unmarshal: %v", err)
+			return
+		}
+		if req.Session != "b" {
+			t.Errorf("pushed active = %q, want b", req.Session)
+		}
+	}()
+
+	m.syncActiveSession()
+
+	if m.pushedActive != "b" {
+		t.Fatalf("pushedActive = %q, want b", m.pushedActive)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon never received set-active frame")
+	}
+
+	// No re-push when the selection is unchanged.
+	m.syncActiveSession() // would block on the unread pipe if it pushed
+}
+
+func TestSyncActiveSession_SuppressedBeforeSubscribe(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	m := newTUIModel(&daemonConn{conn: client}, "", nil)
+	m.sessions = []*tuiSession{newTUISession("a", "bash", 80, 24)}
+	m.order = []string{"a"}
+
+	// Not subscribed yet: must not write to the pipe (a write would block
+	// forever with no reader and hang the test if attempted).
+	m.syncActiveSession()
+	if m.pushedActive != "" {
+		t.Fatalf("pushedActive = %q, want empty before subscribe", m.pushedActive)
+	}
+}
+
+func TestMoveOrder_PushesOrderToDaemon(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	m := newTUIModel(&daemonConn{conn: client}, "", nil)
+	m.width = 160
+	m.height = 40
+	m.sessions = []*tuiSession{
+		newTUISession("a", "bash", 80, 24),
+		newTUISession("b", "bash", 80, 24),
+	}
+	m.order = []string{"a", "b"}
+	m.selected = 0
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ft, payload, err := daemon.ReadFrame(server)
+		if err != nil {
+			t.Errorf("ReadFrame: %v", err)
+			return
+		}
+		if ft != daemon.FrameReorderSess {
+			t.Errorf("frame type = %d, want FrameReorderSess", ft)
+			return
+		}
+		var req daemon.ReorderSessionsRequest
+		if err := json.Unmarshal(payload, &req); err != nil {
+			t.Errorf("unmarshal: %v", err)
+			return
+		}
+		if !slices.Equal(req.Order, []string{"b", "a"}) {
+			t.Errorf("pushed order = %v, want [b a]", req.Order)
+		}
+	}()
+
+	m.moveOrder(1)
+
+	if !slices.Equal(m.order, []string{"b", "a"}) {
+		t.Fatalf("local order = %v, want [b a]", m.order)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon never received reorder frame")
 	}
 }
 
