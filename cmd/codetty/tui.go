@@ -103,9 +103,10 @@ type tuiModel struct {
 	// tick self-perpetuates only while some agent is working.
 	blinkPending bool
 
-	// mouseFwdDown is true while a left-button press has been forwarded to
-	// a mouse-enabled app in the big panel, so the matching drag/release
-	// events are forwarded too (and spurious releases are not).
+	// mouseFwdDown is true while a button press (left, right or middle)
+	// has been forwarded to a mouse-enabled app in the big panel, so the
+	// matching drag/release events are forwarded too (and spurious
+	// releases are not).
 	mouseFwdDown bool
 
 	// Hidden sessions (still running but not displayed)

@@ -156,17 +156,10 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				localX := msg.X - r.contentX
 				localY := msg.Y - r.contentY
 				if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
-					// Clicking the selected panel. If the app handles its own
-					// mouse (vim, copilot, ...), forward the real
-					// press so in-app clicks and drags work; otherwise
-					// start a text selection.
+					// Always start a pending local selection (same as the
+					// floating window): a drag selects+copies locally, a
+					// plain click is forwarded to the app on release.
 					sess := sessions[r.sessionIdx]
-					if sess.MouseEnabled() {
-						m.forwardMouseToSession(sess.Name, msg, localX, localY)
-						m.mouseFwdDown = true
-						m.sel = textSelection{}
-						return nil
-					}
 					m.sel = textSelection{
 						pending: true,
 						session: sess.Name,
@@ -183,6 +176,25 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 			// Click on border/title area (fallback: open floating)
 			m.sel = textSelection{}
+		}
+		// Right/middle click: forward to the big panel when the app
+		// handles its own mouse (e.g. copilot's right-click copy menu).
+		if msg.Button == tea.MouseButtonRight || msg.Button == tea.MouseButtonMiddle {
+			if sess := m.selectedSession(); sess != nil && sess.MouseEnabled() {
+				for _, r := range m.panelRegions() {
+					if r.sessionIdx != m.selected {
+						continue
+					}
+					localX := msg.X - r.contentX
+					localY := msg.Y - r.contentY
+					if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
+						m.forwardMouseToSession(sess.Name, msg, localX, localY)
+						m.mouseFwdDown = true
+					}
+					break
+				}
+			}
+			return nil
 		}
 		// Forward scroll wheel to PTY (with local coordinate translation).
 		// Only the selected panel receives wheel input.
@@ -357,15 +369,9 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 				return nil
 			}
 
-			// Mouse-enabled app: forward the real press so drags and
-			// press/release pairs reach the app; selection is bypassed.
-			if mouseOn {
-				m.forwardMouseToPTY(msg)
-				m.mouseFwdDown = true
-				m.sel = textSelection{}
-				return nil
-			}
-
+			// Always start a pending local selection (same as the
+			// floating window): a drag selects+copies locally, a
+			// plain click is forwarded to the app on release.
 			m.sel = textSelection{
 				pending: true,
 				session: sess.Name,
@@ -378,9 +384,12 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			return nil
 		}
-		// Forward scroll and other buttons directly
+		// Forward scroll and other buttons (right/middle) directly
 		if mouseOn {
 			m.forwardMouseToPTY(msg)
+			if msg.Button != tea.MouseButtonWheelUp && msg.Button != tea.MouseButtonWheelDown {
+				m.mouseFwdDown = true
+			}
 		} else if msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown {
 			m.handleSessionScroll(sess, msg.Button == tea.MouseButtonWheelUp)
 		}
@@ -576,6 +585,10 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 			} else {
 				m.closeFloating()
 			}
+		} else if inside && mouseOn {
+			// Right/middle click: forward to the app (e.g. copilot's
+			// right-click copy menu).
+			m.forwardMouseToSession(sess.Name, msg, localX, localY)
 		}
 	case tea.MouseActionMotion:
 		if m.sel.pending && m.sel.session == sess.Name {

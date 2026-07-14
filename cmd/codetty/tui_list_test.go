@@ -517,21 +517,21 @@ func TestListMode_BigPanelPressForwardedToMouseApp(t *testing.T) {
 	press := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: sideW + 5, Y: 4}
 	m.handleMouse(press)
 
-	if m.sel.pending || m.sel.active {
-		t.Fatal("press on mouse-enabled app must not start a text selection")
+	// Same as the floating window: the press starts a pending local
+	// selection and nothing reaches the PTY yet.
+	if !m.sel.pending {
+		t.Fatal("press must start a pending selection even for mouse-enabled apps")
 	}
-	if !m.mouseFwdDown {
-		t.Fatal("mouseFwdDown should be set after forwarding the press")
+	if m.mouseFwdDown {
+		t.Fatal("mouseFwdDown must not be set on a left press")
 	}
-	// contentX=sideW+1, contentY=1 → local (4,3) → SGR 1-based (5,4), press = 'M'.
-	cap.waitFor(t, "\x1b[<0;5;4M")
 
 	release := tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: sideW + 5, Y: 4}
 	m.handleMouse(release)
 
-	if m.mouseFwdDown {
-		t.Fatal("mouseFwdDown should be cleared after the release")
-	}
+	// Click without drag: press+release forwarded to the app.
+	// contentX=sideW+1, contentY=1 → local (4,3) → SGR 1-based (5,4).
+	cap.waitFor(t, "\x1b[<0;5;4M")
 	cap.waitFor(t, "\x1b[<0;5;4m")
 }
 
@@ -640,5 +640,82 @@ func TestSyncTabInfo_RefitsPTYWhenTabBarAppears(t *testing.T) {
 	})
 	if got := m.sessions[0].Rows; int(got) != rows {
 		t.Fatalf("rows after tab bar disappears = %d, want %d", got, rows)
+	}
+}
+
+func TestListMode_BigPanelRightClickForwardedToMouseApp(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	cap := &pipeCapture{}
+	go cap.drain(server)
+
+	m := newListTestModel()
+	m.conn = &daemonConn{conn: client}
+	_, sideW := m.listLayoutWidths()
+	m.sessions[0].WriteOutput([]byte("\x1b[?1003h\x1b[?1006h"))
+
+	press := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: sideW + 5, Y: 4}
+	m.handleMouse(press)
+	if !m.mouseFwdDown {
+		t.Fatal("mouseFwdDown should be set after forwarding a right press")
+	}
+	// contentX=sideW+1, contentY=1 → local (4,3) → SGR 1-based (5,4).
+	cap.waitFor(t, "\x1b[<2;5;4M")
+
+	release := tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonRight, X: sideW + 5, Y: 4}
+	m.handleMouse(release)
+	if m.mouseFwdDown {
+		t.Fatal("mouseFwdDown should be cleared after the release")
+	}
+	cap.waitFor(t, "\x1b[<2;5;4m")
+}
+
+func TestListMode_BigPanelRightClickIgnoredForPlainShell(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	cap := &pipeCapture{}
+	go cap.drain(server)
+
+	m := newListTestModel()
+	m.conn = &daemonConn{conn: client}
+	_, sideW := m.listLayoutWidths()
+
+	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: sideW + 5, Y: 4})
+	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonRight, X: sideW + 5, Y: 4})
+
+	time.Sleep(20 * time.Millisecond)
+	if cap.contains("\x1b[<") {
+		t.Fatal("right click on a plain shell must not reach the PTY")
+	}
+}
+
+func TestListMode_DragOverMouseAppSelectsLocally(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	cap := &pipeCapture{}
+	go cap.drain(server)
+
+	m := newListTestModel()
+	m.conn = &daemonConn{conn: client}
+	_, sideW := m.listLayoutWidths()
+	m.sessions[0].WriteOutput([]byte("hello world"))
+	m.sessions[0].WriteOutput([]byte("\x1b[?1003h\x1b[?1006h"))
+
+	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: sideW + 1, Y: 1})
+	m.handleMouse(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: sideW + 8, Y: 1})
+	if !m.sel.active {
+		t.Fatal("drag over a mouse-enabled app must run the local selection")
+	}
+	cmd := m.handleMouse(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: sideW + 8, Y: 1})
+	if cmd == nil {
+		t.Fatal("release after drag should copy the selection to the clipboard")
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	if cap.contains("\x1b[<") {
+		t.Fatal("drag-selection must not forward mouse events to the PTY")
 	}
 }

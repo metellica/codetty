@@ -98,14 +98,9 @@ func (m *tuiModel) handleTabsMouse(msg tea.MouseMsg) tea.Cmd {
 				m.sel = textSelection{}
 				return nil
 			}
-			// Mouse-enabled app: forward the real press so drags and
-			// press/release pairs reach the app; selection is bypassed.
-			if mouseOn {
-				m.forwardMouseToSession(sess.Name, msg, msg.X, localY)
-				m.mouseFwdDown = true
-				m.sel = textSelection{}
-				return nil
-			}
+			// Always start a pending local selection (same as the
+			// floating window): a drag selects+copies locally, a
+			// plain click is forwarded to the app on release.
 			m.sel = textSelection{
 				pending: true,
 				session: sess.Name,
@@ -131,8 +126,11 @@ func (m *tuiModel) handleTabsMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			return nil
 		}
+		// Right/middle click: forward to the app (e.g. copilot's
+		// right-click copy menu) and track it so the release follows.
 		if mouseOn && inContent {
 			m.forwardMouseToSession(sess.Name, msg, msg.X, localY)
+			m.mouseFwdDown = true
 		}
 
 	case tea.MouseActionMotion:

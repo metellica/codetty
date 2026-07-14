@@ -1,8 +1,10 @@
 package main
 
 import (
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
@@ -177,5 +179,55 @@ func TestTabs_FocusedContentSizeReservesTopAndBottom(t *testing.T) {
 	cols, rows := m.focusedContentSize()
 	if cols != m.width || rows != m.height-2 {
 		t.Fatalf("focusedContentSize = %dx%d, want %dx%d", cols, rows, m.width, m.height-2)
+	}
+}
+
+func TestTabs_RightClickForwardedToMouseApp(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	cap := &pipeCapture{}
+	go cap.drain(server)
+
+	m := newTabsTestModel()
+	m.conn = &daemonConn{conn: client}
+	// Enable mouse reporting on alpha (like copilot's right-click copy menu).
+	m.sessions[0].WriteOutput([]byte("\x1b[?1003h\x1b[?1006h"))
+
+	press := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 10, Y: 5}
+	m.handleTabsMouse(press)
+	if !m.mouseFwdDown {
+		t.Fatal("mouseFwdDown should be set after forwarding a right press")
+	}
+	// Content row is screen row minus the top tab bar: local (10,4) → SGR (11,5).
+	cap.waitFor(t, "\x1b[<2;11;5M")
+
+	release := tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonRight, X: 10, Y: 5}
+	m.handleTabsMouse(release)
+	if m.mouseFwdDown {
+		t.Fatal("mouseFwdDown should be cleared after the release")
+	}
+	cap.waitFor(t, "\x1b[<2;11;5m")
+}
+
+func TestTabs_RightClickIgnoredForPlainShell(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	cap := &pipeCapture{}
+	go cap.drain(server)
+
+	m := newTabsTestModel()
+	m.conn = &daemonConn{conn: client}
+
+	m.handleTabsMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 10, Y: 5})
+	m.handleTabsMouse(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonRight, X: 10, Y: 5})
+
+	time.Sleep(20 * time.Millisecond)
+	if cap.contains("\x1b[<") {
+		t.Fatal("right click on a plain shell must not reach the PTY")
+	}
+	if m.mouseFwdDown {
+		t.Fatal("mouseFwdDown must not be set for plain shells")
 	}
 }
