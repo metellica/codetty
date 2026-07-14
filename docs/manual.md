@@ -190,7 +190,7 @@ codetty up -f myconfig.toml     # 指定配置文件
 ### 基本示例
 
 ```toml
-layout = "list"               # 初始布局：list / focus-big / fullscreen
+layout = "list"               # 初始布局：list / focus-big / fullscreen / tabs
 focus = "editor"              # 初始聚焦的 session 名称
 
 # 原生 session（直接运行命令）
@@ -307,7 +307,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `layout` | string | `"list"` | 初始布局模式（list / focus-big / fullscreen） |
+| `layout` | string | `"list"` | 初始布局模式（list / focus-big / fullscreen / tabs） |
 | `focus` | string | 第一个 session | 初始聚焦 session |
 
 **template.\<name\>：**
@@ -401,7 +401,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 | `Ctrl+A n` | 切换到下一个 session |
 | `Ctrl+A p` | 切换到上一个 session |
 | `Ctrl+A 1`-`9` | 跳转到指定编号的 session |
-| `Shift+Tab` | 列表模式下在侧栏项间连续跳转（优先跳到需处理的 agent，越过最后一项回到大面板）；焦点放大模式下在侧面板间循环高亮（Enter 浮动 / Space 提升为大面板）；浮动窗口中关闭浮动并高亮下一面板；全屏模式打开 session 切换器（实时预览） |
+| `Shift+Tab` | 列表模式下在侧栏项间连续跳转（优先跳到需处理的 agent，越过最后一项回到大面板）；焦点放大模式下在侧面板间循环高亮（Enter 浮动 / Space 提升为大面板）；浮动窗口中关闭浮动并高亮下一面板；全屏模式打开 session 切换器（实时预览）；标签页模式切换到下一个 session |
 | `Enter` | 在高亮面板上打开浮动窗口（网格模式或焦点放大的侧面板） |
 
 ### 布局控制
@@ -412,6 +412,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 | `Ctrl+A q` | 关闭浮动窗口 |
 | `Ctrl+A s` | 切换到列表模式（默认） |
 | `Ctrl+A b` | 切换到焦点放大模式 |
+| `Ctrl+A T` | 切换到标签页模式（顶部 session 标签栏） |
 
 ### 面板重排
 
@@ -545,6 +546,17 @@ remove_windows = ["git"]         # 删除模板中的 window
 - 支持文本选择与复制
 - `Ctrl+A f` 退回上一个模式（通过模式栈导航）
 - `Shift+Tab` 打开 session 切换器（见下）
+
+### 标签页模式 (Tabs)
+
+顶部一行显示所有 session 的标签栏，其余区域为当前 session 的内容
+（无边框，底部信息行与全屏模式一致）。`Ctrl+A T` 进入。
+
+- 标签颜色与焦点放大模式的标签栏一致：当前 session 蓝色高亮，agent
+  状态着色（blocked 红底、working 橙色闪烁、done 绿色）
+- 点击顶部标签切换 session（自动跳到需处理的 agent 标签页）
+- `Shift+Tab` 切换到下一个 session
+- 内容区支持文本选择、滚轮与鼠标转发（同全屏模式）
 
 ### 全屏 Session 切换器 (Shift+Tab)
 

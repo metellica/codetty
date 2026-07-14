@@ -51,29 +51,31 @@ func (m *tuiModel) fullscreenView() string {
 		content = strings.Join(lines, "\n")
 	}
 
-	// Build bottom line: tab bar on left (if multi-tab), session info right-aligned.
+	return content + "\n" + m.bottomInfoLine(sess, m.width)
+}
+
+// bottomInfoLine builds the borderless bottom line shared by fullscreen and
+// tab mode: the per-session tab bar on the left (if the session has multiple
+// tabs) and "[n] name" session info right-aligned.
+func (m *tuiModel) bottomInfoLine(sess *tuiSession, w int) string {
 	sessInfo := fmt.Sprintf("[%d] %s", m.selected+1, sess.Name)
 	infoStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 
-	hasTabBar := len(sess.Tabs) > 1
-	if hasTabBar {
-		tabBar := renderTabBar(sess.Tabs, sess.ActiveTab, m.width, false)
-		tabBarW := lipgloss.Width(tabBar)
-		infoW := lipgloss.Width(sessInfo)
-		pad := m.width - tabBarW - infoW
+	if len(sess.Tabs) > 1 {
+		tabBar := renderTabBar(sess.Tabs, sess.ActiveTab, w, false)
+		pad := w - lipgloss.Width(tabBar) - lipgloss.Width(sessInfo)
 		if pad > 0 {
-			return content + "\n" + tabBar + strings.Repeat(" ", pad) + infoStyle.Render(sessInfo)
+			return tabBar + strings.Repeat(" ", pad) + infoStyle.Render(sessInfo)
 		}
-		return content + "\n" + tabBar
+		return tabBar
 	}
 
 	infoRendered := infoStyle.Render(sessInfo)
-	infoW := lipgloss.Width(infoRendered)
-	pad := m.width - infoW
+	pad := w - lipgloss.Width(infoRendered)
 	if pad < 0 {
 		pad = 0
 	}
-	return content + "\n" + strings.Repeat(" ", pad) + infoRendered
+	return strings.Repeat(" ", pad) + infoRendered
 }
 
 // focusBigLayoutWidths returns the big-panel and side-column widths for
@@ -843,7 +845,7 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	if m.prefix {
-		help := m.prefixLabel + ": d detach  c new  t tab  x kill  X close-tab  r rename  R reload  n/p nav  s list  b big  f full  w manager  Shift+←→ tabs"
+		help := m.prefixLabel + ": d detach  c new  t tab  x kill  X close-tab  r rename  R reload  n/p nav  s list  b big  f full  T tabs  w manager  Shift+←→ tabs"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 
@@ -852,6 +854,8 @@ func (m *tuiModel) statusBar() string {
 	switch m.mode {
 	case modeFullscreen:
 		modeName = "fullscreen"
+	case modeTabs:
+		modeName = "tabs"
 	case modeFocusBig:
 		modeName = "big"
 		if m.focusCursor >= 0 {
@@ -919,7 +923,7 @@ func (m *tuiModel) agentStatusSegment() string {
 
 func (m *tuiModel) hitTest(x, y int) int {
 	sessions := m.visibleSessions()
-	if len(sessions) == 0 || m.mode == modeFullscreen {
+	if len(sessions) == 0 || m.mode == modeFullscreen || m.mode == modeTabs {
 		return -1
 	}
 
@@ -1034,6 +1038,18 @@ func (m *tuiModel) imeCursorSeq() string {
 			return ""
 		}
 		return fmt.Sprintf("\x1b[%d;%dH", curY+1, curX+1)
+
+	case modeTabs:
+		contentH := m.height - 2 // top session tab bar + bottom info line
+		if contentH < 1 {
+			return ""
+		}
+		_, curX, curY := sess.RenderANSI(m.width, contentH)
+		if curX < 0 || curY < 0 {
+			return ""
+		}
+		// Content starts on the second screen row (below the tab bar).
+		return fmt.Sprintf("\x1b[%d;%dH", curY+2, curX+1)
 
 	case modeList:
 		mainW, sideW := m.listLayoutWidths()

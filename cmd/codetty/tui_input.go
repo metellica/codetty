@@ -141,6 +141,9 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 			// Open the session switcher with live previews instead of
 			// blindly cycling — fullscreen hides all other sessions.
 			m.openSwitcher()
+		case modeTabs:
+			// Session tabs are visible on the top row: cycle directly.
+			m.selectDelta(1)
 		case modeFocusBig:
 			// Cycle the side-panel highlight; after the last panel focus
 			// returns to the big panel. Enter opens the highlighted
@@ -336,8 +339,8 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 					}
 				}
 				m.resizeSessionPTYs()
-			} else if m.mode == modeList || m.mode == modeFocusBig {
-				// List/focus-big → fullscreen
+			} else if m.mode == modeList || m.mode == modeFocusBig || m.mode == modeTabs {
+				// List/focus-big/tabs → fullscreen
 				m.pushMode()
 				m.mode = modeFullscreen
 				m.listFocus = false
@@ -353,6 +356,12 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		case 'b':
 			m.mode = modeFocusBig
+			m.listFocus = false
+			m.focusCursor = -1
+			m.resizeSessionPTYs()
+			return nil
+		case 'T':
+			m.mode = modeTabs
 			m.listFocus = false
 			m.focusCursor = -1
 			m.resizeSessionPTYs()

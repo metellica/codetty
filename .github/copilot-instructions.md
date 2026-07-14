@@ -48,6 +48,10 @@ lifetime (like tmux). Uses Unix PTY on Linux/macOS and Windows ConPTY on Windows
   Ctrl+click to promote to big panel, scroll wheel forwarding.
 - `cmd/codetty/tui_view.go` renders the TUI layout: split mode (grid),
   focus-big mode (one large + side panels), fullscreen mode.
+- `cmd/codetty/tui_tabs.go` renders tab mode: a session tab bar on the top
+  row (reusing `renderTabBar` via synthetic `tuiTab` items so active/agent
+  colors match focus-big), the selected session below, plus its mouse
+  handling with content coordinates offset one row down.
 - `cmd/codetty/tui_list.go` renders list mode (the default): big panel on
   the left, a session-list sidebar on the right showing per-tab agent
   states. Shift+Tab cycles through list entries then back to the big

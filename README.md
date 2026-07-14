@@ -23,7 +23,7 @@
 ## 功能
 
 - **Daemon 架构** — 会话在后台持续运行，detach/attach 不影响进程，SSH 断开后可恢复
-- **多布局模式** — 列表 (list，默认)、焦点放大 (focus-big)、网格 (grid)、全屏 (fullscreen)、浮动窗口
+- **多布局模式** — 列表 (list，默认)、焦点放大 (focus-big)、标签页 (tabs)、全屏 (fullscreen)、浮动窗口
 - **可配置命令前缀** — 默认 Ctrl+A（类似 tmux/screen），可通过配置文件自定义，且能自动避免与 tmux 冲突
 - **Tmux 集成** — 发现并加载已有 tmux session，统一管理
 - **Session 管理器** — 隐藏/显示/关闭 session，面板按钮操作
@@ -104,6 +104,7 @@ CODETTY_INSTANCE=work codetty ls    # 也可通过环境变量指定实例
 | `Ctrl+A f` | 全屏 / 浮动窗口切换 |
 | `Ctrl+A q` | 关闭浮动窗口 |
 | `Ctrl+A s` / `Ctrl+A b` | 切换列表 / 焦点放大模式 |
+| `Ctrl+A T` | 标签页模式（顶部 session 标签栏） |
 | `Ctrl+A m` | 打开临时浮动 shell |
 | `Ctrl+A 1-9` | 跳转到指定编号会话 |
 

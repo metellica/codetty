@@ -69,6 +69,10 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return m.handleFloatingMouse(msg)
 	}
 
+	if m.mode == modeTabs {
+		return m.handleTabsMouse(msg)
+	}
+
 	switch msg.Action {
 	case tea.MouseActionPress:
 		if msg.Button == tea.MouseButtonLeft {

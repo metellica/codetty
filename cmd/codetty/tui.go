@@ -34,6 +34,7 @@ const (
 	modeList       layoutMode = iota
 	modeFullscreen            // no borders, no status bar, just terminal
 	modeFocusBig              // list-style big panel + switch-only side panels
+	modeTabs                  // session tab bar on top, selected session below
 )
 
 // tuiModel is the Bubble Tea model for the unified codetty TUI.
@@ -397,6 +398,8 @@ func (m *tuiModel) View() string {
 	switch m.mode {
 	case modeFullscreen:
 		base = m.fullscreenView()
+	case modeTabs:
+		base = m.tabsView()
 	case modeFocusBig:
 		base = m.focusBigView()
 	default:
@@ -952,6 +955,13 @@ func (m *tuiModel) closeFloatingFocusNext() {
 func (m *tuiModel) focusedContentSize() (int, int) {
 	if m.mode == modeFullscreen {
 		return m.width, m.height - 1 // reserve bottom info line
+	}
+	if m.mode == modeTabs {
+		rows := m.height - 2 // top session tab bar + bottom info line
+		if rows < 1 {
+			rows = 1
+		}
+		return m.width, rows
 	}
 
 	statusH := 1
