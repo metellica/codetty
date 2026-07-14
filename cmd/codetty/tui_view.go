@@ -368,17 +368,15 @@ func (m *tuiModel) renderBigPanelFrame(sess *tuiSession, w, h int, focused bool,
 	if focused {
 		style = tuiFocusBorder.Width(w - 2).Height(h - 2)
 	}
+	// Agent state colors the border like the small panels: blocked (red),
+	// working (orange) and done (green) all override the focus color.
 	switch agentState {
 	case "blocked":
 		style = style.BorderForeground(agentBlockedColor)
 	case "working":
-		if !focused {
-			style = style.BorderForeground(agentWorkingColor)
-		}
+		style = style.BorderForeground(agentWorkingColor)
 	case "done":
-		if !focused {
-			style = style.BorderForeground(agentDoneColor)
-		}
+		style = style.BorderForeground(agentDoneColor)
 	}
 
 	innerW := w - 2
@@ -444,20 +442,15 @@ func (m *tuiModel) renderPanelWithColor(sess *tuiSession, title string, w, h int
 	if focused {
 		style = tuiFocusBorder.Width(w - 2).Height(h - 2)
 	}
-	// Border color encodes the most urgent agent state: blocked (red)
-	// overrides even the focus color; working (orange) and done (green)
-	// only replace the unfocused border.
+	// Border color encodes the agent state like the small panels: blocked
+	// (red), working (orange) and done (green) all override the focus color.
 	switch agentState {
 	case "blocked":
 		style = style.BorderForeground(agentBlockedColor)
 	case "working":
-		if !focused {
-			style = style.BorderForeground(agentWorkingColor)
-		}
+		style = style.BorderForeground(agentWorkingColor)
 	case "done":
-		if !focused {
-			style = style.BorderForeground(agentDoneColor)
-		}
+		style = style.BorderForeground(agentDoneColor)
 	}
 
 	innerW := w - 2
