@@ -156,7 +156,7 @@ func (s *tuiSession) resetTerminal() {
 	// Clear alt-screen, mouse, and all other mode flags so stale modes
 	// from the previous tab (e.g. ModeAltScreen from nvim) don't persist.
 	s.term.Lock()
-	s.term.ClearMode(vt10x.ModeAltScreen | vt10x.ModeMouseMask | vt10x.ModeMouseSgr | vt10x.ModeAppCursor)
+	s.term.ClearMode(vt10x.ModeAltScreen | vt10x.ModeMouseMask | vt10x.ModeMouseSgr | vt10x.ModeAppCursor | vt10x.ModeBracketedPaste)
 	// The scrollback belongs to the previous tab's content: discard it and
 	// snap back to the live view.
 	s.term.ClearScrollback()
@@ -343,15 +343,26 @@ func (s *tuiSession) AltScreenActive() bool {
 	return s.term.Mode()&vt10x.ModeAltScreen != 0
 }
 
-// ResetMouseMode clears mouse reporting mode flags from the terminal.
-// Called on tab switch so stale flags from a previous tab (e.g. lazygit)
-// don't cause SGR sequences to be forwarded to a plain shell.
+// BracketedPasteEnabled returns true if the session's terminal has bracketed
+// paste mode (DEC 2004) on.
+func (s *tuiSession) BracketedPasteEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.term.Lock()
+	defer s.term.Unlock()
+	return s.term.Mode()&vt10x.ModeBracketedPaste != 0
+}
+
+// ResetMouseMode clears mouse reporting and bracketed paste mode flags
+// from the terminal. Called on tab switch so stale flags from a previous
+// tab (e.g. lazygit) don't cause SGR sequences or bracketed-paste markers
+// to be forwarded to a plain shell.
 func (s *tuiSession) ResetMouseMode() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.term.Lock()
 	defer s.term.Unlock()
-	s.term.ClearMode(vt10x.ModeMouseMask | vt10x.ModeMouseSgr)
+	s.term.ClearMode(vt10x.ModeMouseMask | vt10x.ModeMouseSgr | vt10x.ModeBracketedPaste)
 }
 
 // RenderDimmed renders terminal content in uniform dim gray, skipping per-cell color processing.

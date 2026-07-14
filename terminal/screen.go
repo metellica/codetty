@@ -264,6 +264,7 @@ func modeSequences(mode vt10x.ModeFlag) string {
 	onoff(mode&vt10x.ModeMouseMany != 0, "\033[?1003h", "\033[?1003l")
 	onoff(mode&vt10x.ModeMouseSgr != 0, "\033[?1006h", "\033[?1006l")
 	onoff(mode&vt10x.ModeFocus != 0, "\033[?1004h", "\033[?1004l")
+	onoff(mode&vt10x.ModeBracketedPaste != 0, "\033[?2004h", "\033[?2004l")
 	if mode&vt10x.Mode8bit != 0 {
 		b.WriteString("\033[?1034h")
 	}

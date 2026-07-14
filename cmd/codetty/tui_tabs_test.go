@@ -182,7 +182,7 @@ func TestTabs_FocusedContentSizeReservesTopAndBottom(t *testing.T) {
 	}
 }
 
-func TestTabs_RightClickForwardedToMouseApp(t *testing.T) {
+func TestTabs_RightClickPastesLastCopy(t *testing.T) {
 	client, server := net.Pipe()
 	defer server.Close()
 	defer client.Close()
@@ -191,26 +191,39 @@ func TestTabs_RightClickForwardedToMouseApp(t *testing.T) {
 
 	m := newTabsTestModel()
 	m.conn = &daemonConn{conn: client}
-	// Enable mouse reporting on alpha (like copilot's right-click copy menu).
-	m.sessions[0].WriteOutput([]byte("\x1b[?1003h\x1b[?1006h"))
+	m.clipText = "hello copy"
 
-	press := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 10, Y: 5}
-	m.handleTabsMouse(press)
-	if !m.mouseFwdDown {
-		t.Fatal("mouseFwdDown should be set after forwarding a right press")
-	}
-	// Content row is screen row minus the top tab bar: local (10,4) → SGR (11,5).
-	cap.waitFor(t, "\x1b[<2;11;5M")
-
-	release := tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonRight, X: 10, Y: 5}
-	m.handleTabsMouse(release)
+	m.handleTabsMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 10, Y: 5})
 	if m.mouseFwdDown {
-		t.Fatal("mouseFwdDown should be cleared after the release")
+		t.Fatal("right-click paste must not set mouseFwdDown")
 	}
-	cap.waitFor(t, "\x1b[<2;11;5m")
+	cap.waitFor(t, "hello copy")
+	if cap.contains("\x1b[200~") {
+		t.Fatal("paste must not be bracketed when the app has 2004 off")
+	}
+	if cap.contains("\x1b[<") {
+		t.Fatal("right click must not be forwarded as a mouse event")
+	}
 }
 
-func TestTabs_RightClickIgnoredForPlainShell(t *testing.T) {
+func TestTabs_RightClickPasteBracketed(t *testing.T) {
+	client, server := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	cap := &pipeCapture{}
+	go cap.drain(server)
+
+	m := newTabsTestModel()
+	m.conn = &daemonConn{conn: client}
+	m.clipText = "hello copy"
+	// App enables bracketed paste (like copilot/most shells).
+	m.sessions[0].WriteOutput([]byte("\x1b[?2004h"))
+
+	m.handleTabsMouse(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: 10, Y: 5})
+	cap.waitFor(t, "\x1b[200~hello copy\x1b[201~")
+}
+
+func TestTabs_RightClickNoCopyIsNoop(t *testing.T) {
 	client, server := net.Pipe()
 	defer server.Close()
 	defer client.Close()
@@ -225,9 +238,9 @@ func TestTabs_RightClickIgnoredForPlainShell(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 	if cap.contains("\x1b[<") {
-		t.Fatal("right click on a plain shell must not reach the PTY")
+		t.Fatal("right click must not reach the PTY as a mouse event")
 	}
 	if m.mouseFwdDown {
-		t.Fatal("mouseFwdDown must not be set for plain shells")
+		t.Fatal("mouseFwdDown must not be set by right clicks")
 	}
 }

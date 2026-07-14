@@ -177,10 +177,10 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			// Click on border/title area (fallback: open floating)
 			m.sel = textSelection{}
 		}
-		// Right/middle click: forward to the big panel when the app
-		// handles its own mouse (e.g. copilot's right-click copy menu).
+		// Right click: paste the last copied selection into the big
+		// panel. Middle click: forward to mouse-enabled apps.
 		if msg.Button == tea.MouseButtonRight || msg.Button == tea.MouseButtonMiddle {
-			if sess := m.selectedSession(); sess != nil && sess.MouseEnabled() {
+			if sess := m.selectedSession(); sess != nil {
 				for _, r := range m.panelRegions() {
 					if r.sessionIdx != m.selected {
 						continue
@@ -188,8 +188,12 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 					localX := msg.X - r.contentX
 					localY := msg.Y - r.contentY
 					if localX >= 0 && localX < r.contentW && localY >= 0 && localY < r.contentH {
-						m.forwardMouseToSession(sess.Name, msg, localX, localY)
-						m.mouseFwdDown = true
+						if msg.Button == tea.MouseButtonRight {
+							m.pasteToSession(sess)
+						} else if sess.MouseEnabled() {
+							m.forwardMouseToSession(sess.Name, msg, localX, localY)
+							m.mouseFwdDown = true
+						}
 					}
 					break
 				}
@@ -384,7 +388,14 @@ func (m *tuiModel) handleFullscreenMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			return nil
 		}
-		// Forward scroll and other buttons (right/middle) directly
+		// Right click: paste the last copied selection (not on the info line).
+		if msg.Button == tea.MouseButtonRight {
+			if msg.Y != m.height-1 {
+				m.pasteToSession(sess)
+			}
+			return nil
+		}
+		// Forward scroll and other buttons (middle) directly
 		if mouseOn {
 			m.forwardMouseToPTY(msg)
 			if msg.Button != tea.MouseButtonWheelUp && msg.Button != tea.MouseButtonWheelDown {
@@ -585,9 +596,11 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 			} else {
 				m.closeFloating()
 			}
+		} else if inside && msg.Button == tea.MouseButtonRight {
+			// Right click: paste the last copied selection.
+			m.pasteToSession(sess)
 		} else if inside && mouseOn {
-			// Right/middle click: forward to the app (e.g. copilot's
-			// right-click copy menu).
+			// Middle click: forward to the app.
 			m.forwardMouseToSession(sess.Name, msg, localX, localY)
 		}
 	case tea.MouseActionMotion:
@@ -629,7 +642,8 @@ func (m *tuiModel) handleFloatingMouse(msg tea.MouseMsg) tea.Cmd {
 				m.ackAgentDoneSession(sess.Name)
 			}
 			m.sel = textSelection{}
-		} else if inside && mouseOn {
+		} else if inside && mouseOn && msg.Button != tea.MouseButtonRight {
+			// Right presses are consumed as paste; don't leak the release.
 			m.forwardMouseToSession(sess.Name, msg, localX, localY)
 		}
 	}
@@ -837,14 +851,30 @@ func (m *tuiModel) extractSelectedText() string {
 	return strings.Join(lines, "\n")
 }
 
-// copyToClipboard uses OSC 52 to copy text to the system clipboard.
+// copyToClipboard uses OSC 52 to copy text to the system clipboard, and
+// remembers the text locally so right-click can paste it back.
 func (m *tuiModel) copyToClipboard(text string) tea.Cmd {
+	m.clipText = text
 	encoded := base64.StdEncoding.EncodeToString([]byte(text))
 	osc52 := fmt.Sprintf("\x1b]52;c;%s\x1b\\", encoded)
 	return func() tea.Msg {
 		os.Stdout.Write([]byte(osc52))
 		return nil
 	}
+}
+
+// pasteToSession sends the last locally copied text to a session's PTY,
+// wrapped in bracketed-paste markers when the app has DEC 2004 enabled.
+func (m *tuiModel) pasteToSession(sess *tuiSession) {
+	if m.clipText == "" || m.conn == nil || sess == nil {
+		return
+	}
+	text := m.clipText
+	if sess.BracketedPasteEnabled() {
+		text = "\x1b[200~" + text + "\x1b[201~"
+	}
+	m.conn.SendInput(sess.Name, []byte(text))
+	m.ackAgentDoneSession(sess.Name)
 }
 
 // selectionCovers checks if a cell at (col, row) in session-local coords is selected.

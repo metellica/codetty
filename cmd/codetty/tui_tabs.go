@@ -126,8 +126,14 @@ func (m *tuiModel) handleTabsMouse(msg tea.MouseMsg) tea.Cmd {
 			}
 			return nil
 		}
-		// Right/middle click: forward to the app (e.g. copilot's
-		// right-click copy menu) and track it so the release follows.
+		// Right click: paste the last copied selection into the content
+		// area. Middle click: forward to mouse-enabled apps.
+		if msg.Button == tea.MouseButtonRight {
+			if inContent {
+				m.pasteToSession(sess)
+			}
+			return nil
+		}
 		if mouseOn && inContent {
 			m.forwardMouseToSession(sess.Name, msg, msg.X, localY)
 			m.mouseFwdDown = true

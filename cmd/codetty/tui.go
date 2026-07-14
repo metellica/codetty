@@ -109,6 +109,10 @@ type tuiModel struct {
 	// releases are not).
 	mouseFwdDown bool
 
+	// clipText is the last text copied via drag selection; right-click
+	// pastes it into the focused session.
+	clipText string
+
 	// Hidden sessions (still running but not displayed)
 	hidden map[string]bool
 

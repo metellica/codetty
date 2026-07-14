@@ -643,7 +643,7 @@ func TestSyncTabInfo_RefitsPTYWhenTabBarAppears(t *testing.T) {
 	}
 }
 
-func TestListMode_BigPanelRightClickForwardedToMouseApp(t *testing.T) {
+func TestListMode_BigPanelRightClickPastesLastCopy(t *testing.T) {
 	client, server := net.Pipe()
 	defer server.Close()
 	defer client.Close()
@@ -653,25 +653,21 @@ func TestListMode_BigPanelRightClickForwardedToMouseApp(t *testing.T) {
 	m := newListTestModel()
 	m.conn = &daemonConn{conn: client}
 	_, sideW := m.listLayoutWidths()
-	m.sessions[0].WriteOutput([]byte("\x1b[?1003h\x1b[?1006h"))
+	m.clipText = "hello copy"
+	m.sessions[0].WriteOutput([]byte("\x1b[?1003h\x1b[?1006h\x1b[?2004h"))
 
 	press := tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonRight, X: sideW + 5, Y: 4}
 	m.handleMouse(press)
-	if !m.mouseFwdDown {
-		t.Fatal("mouseFwdDown should be set after forwarding a right press")
-	}
-	// contentX=sideW+1, contentY=1 → local (4,3) → SGR 1-based (5,4).
-	cap.waitFor(t, "\x1b[<2;5;4M")
-
-	release := tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonRight, X: sideW + 5, Y: 4}
-	m.handleMouse(release)
 	if m.mouseFwdDown {
-		t.Fatal("mouseFwdDown should be cleared after the release")
+		t.Fatal("right-click paste must not set mouseFwdDown")
 	}
-	cap.waitFor(t, "\x1b[<2;5;4m")
+	cap.waitFor(t, "\x1b[200~hello copy\x1b[201~")
+	if cap.contains("\x1b[<") {
+		t.Fatal("right click must not be forwarded as a mouse event")
+	}
 }
 
-func TestListMode_BigPanelRightClickIgnoredForPlainShell(t *testing.T) {
+func TestListMode_BigPanelRightClickNoCopyIsNoop(t *testing.T) {
 	client, server := net.Pipe()
 	defer server.Close()
 	defer client.Close()
@@ -687,7 +683,7 @@ func TestListMode_BigPanelRightClickIgnoredForPlainShell(t *testing.T) {
 
 	time.Sleep(20 * time.Millisecond)
 	if cap.contains("\x1b[<") {
-		t.Fatal("right click on a plain shell must not reach the PTY")
+		t.Fatal("right click must not reach the PTY as a mouse event")
 	}
 }
 
