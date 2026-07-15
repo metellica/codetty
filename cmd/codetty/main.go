@@ -6,11 +6,52 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"runtime/debug"
 	"strings"
 
 	"codetty/config"
 	"codetty/terminal"
 )
+
+// Build metadata, stamped via -ldflags by build.sh; plain `go build`
+// falls back to the VCS info Go embeds automatically.
+var (
+	version   = "dev"
+	buildTime = "unknown"
+)
+
+// versionString renders the version line for --version / `codetty version`.
+func versionString() string {
+	v, bt := version, buildTime
+	if v == "dev" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			var rev, vcsTime string
+			dirty := false
+			for _, s := range info.Settings {
+				switch s.Key {
+				case "vcs.revision":
+					rev = s.Value
+				case "vcs.time":
+					vcsTime = s.Value
+				case "vcs.modified":
+					dirty = s.Value == "true"
+				}
+			}
+			if len(rev) >= 12 {
+				v = "dev-" + rev[:12]
+				if dirty {
+					v += "-dirty"
+				}
+			}
+			if bt == "unknown" && vcsTime != "" {
+				bt = vcsTime
+			}
+		}
+	}
+	return fmt.Sprintf("codetty %s (built %s, %s %s/%s)",
+		v, bt, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+}
 
 const usageTemplate = `codetty — terminal multiplexer
 
@@ -22,7 +63,9 @@ Usage:
   codetty ls [-a]                              List active sessions (-a: all instances)
   codetty kill [-s name]                       Kill a session
   codetty kill-server                          Stop the daemon and all sessions
-  codetty upgrade                              Hot-upgrade daemon binary without killing sessions
+  codetty upgrade [-r remote|all]              Hot-upgrade daemon binary without killing
+                                               sessions (-r: deploy + upgrade a remote)
+  codetty version                              Show version and build time
 
 TUI Keys (%s prefix):
   d       Detach (exit TUI, sessions keep running)
@@ -108,8 +151,8 @@ func main() {
 		cmdBridge()
 	case "--help", "-h", "help":
 		fmt.Print(usageText())
-	case "--version", "-v":
-		fmt.Println("codetty dev")
+	case "--version", "-v", "version":
+		fmt.Println(versionString())
 	default:
 		// Treat unknown args as command to run in a new session
 		cmdNew(rest)

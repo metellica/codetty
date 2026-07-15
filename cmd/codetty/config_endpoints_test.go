@@ -113,6 +113,32 @@ func TestShellQuote(t *testing.T) {
 	}
 }
 
+func TestRemoteBinaryQuoting(t *testing.T) {
+	auto, err := newSSHDaemonEndpoint("gpu", config.RemoteDef{Host: "gpu01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := auto.remoteBinary(); got != `"$HOME/.local/lib/codetty/codetty"` {
+		t.Fatalf("auto remoteBinary = %q", got)
+	}
+	fixed, err := newSSHDaemonEndpoint("gpu", config.RemoteDef{
+		Host: "gpu01", Deploy: "never", Binary: "/opt/code tty/codetty",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fixed.remoteBinary(); got != `'/opt/code tty/codetty'` {
+		t.Fatalf("fixed remoteBinary = %q", got)
+	}
+}
+
+func TestVersionString(t *testing.T) {
+	got := versionString()
+	if !strings.HasPrefix(got, "codetty ") || !strings.Contains(got, "built ") {
+		t.Fatalf("versionString = %q", got)
+	}
+}
+
 func TestCheckMachineIgnoresSSHStderr(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "ssh")

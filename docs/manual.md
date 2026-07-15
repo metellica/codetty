@@ -252,6 +252,11 @@ tab 仍在;远程上的 shadow tab 全部关闭后条目自动清除。
 取最高公共版本和能力交集通信;区间无交集时明确报错并提示升级较旧的一方。
 日常演进通过新增 JSON 字段/capability 完成,不要求两端 binary 完全一致。
 
+`codetty version` 显示版本与构建时间(由 `build.sh` 注入)。远程热更新:
+`codetty upgrade -r <name>` 把本地二进制部署到指定远程(`[remote.*]` 名、
+`~/.ssh/config` 别名或任意 SSH host)并原地热升级其 daemon,session 不中断;
+`-r all` 更新配置及注册表中的全部远程。
+
 ### tmux Session 与 Window
 
 配置文件支持定义 tmux session 并在其中创建多个 window（每个 window 运行一个命令）：

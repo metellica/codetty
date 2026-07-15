@@ -209,11 +209,29 @@ func (e *sshDaemonEndpoint) Dial() (io.ReadWriteCloser, error) {
 }
 
 func (e *sshDaemonEndpoint) bridgeCommand() string {
-	binary := shellQuote(e.binary)
+	return fmt.Sprintf("exec %s -i %s __bridge", e.remoteBinary(), shellQuote(e.instance))
+}
+
+// remoteBinary returns the shell-quoted remote binary path.
+func (e *sshDaemonEndpoint) remoteBinary() string {
 	if e.deploy == "auto" {
-		binary = `"$HOME/.local/lib/codetty/codetty"`
+		return `"$HOME/.local/lib/codetty/codetty"`
 	}
-	return fmt.Sprintf("exec %s -i %s __bridge", binary, shellQuote(e.instance))
+	return shellQuote(e.binary)
+}
+
+// UpgradeDaemon deploys the local binary if needed (per the deploy policy,
+// via Ensure) and hot-upgrades the remote daemon in place. Runs in the same
+// SSH environment as the bridge, so the daemon socket resolves identically.
+func (e *sshDaemonEndpoint) UpgradeDaemon() (string, error) {
+	if err := e.Ensure(); err != nil {
+		return "", err
+	}
+	binary := e.remoteBinary()
+	script := fmt.Sprintf("%s -i %s upgrade && %s --version",
+		binary, shellQuote(e.instance), binary)
+	output, err := e.runSSH(60*time.Second, nil, script)
+	return strings.TrimSpace(string(output)), err
 }
 
 func (e *sshDaemonEndpoint) runSSH(timeout time.Duration, stdin io.Reader, script string) ([]byte, error) {

@@ -521,10 +521,19 @@ func cmdKillServer(args []string) {
 }
 
 func cmdUpgrade(args []string) {
+	fs := flag.NewFlagSet("upgrade", flag.ExitOnError)
+	remote := fs.String("r", "", "remote to upgrade: a [remote.*] name, ssh host, or \"all\"")
+	fs.Parse(args)
+
+	if *remote != "" {
+		cmdUpgradeRemote(*remote)
+		return
+	}
+
 	// Determine the binary path to upgrade to
 	binaryPath := ""
-	if len(args) > 0 {
-		binaryPath = args[0]
+	if fs.NArg() > 0 {
+		binaryPath = fs.Arg(0)
 	} else {
 		// Default: use the current executable (already rebuilt in place)
 		exe, err := os.Executable()
@@ -560,6 +569,85 @@ func cmdUpgrade(args []string) {
 		log.Fatalf("upgrade failed: %s", resp.Error)
 	}
 	fmt.Println("daemon upgrading... TUI clients will reconnect automatically")
+}
+
+// cmdUpgradeRemote deploys the local binary to one or all known remotes and
+// hot-upgrades their daemons in place (running sessions survive).
+func cmdUpgradeRemote(name string) {
+	endpoints := make(map[string]*sshDaemonEndpoint)
+	add := func(n string, def config.RemoteDef) {
+		if _, ok := endpoints[n]; ok {
+			return
+		}
+		if e, err := newSSHDaemonEndpoint(n, def); err == nil {
+			endpoints[n] = e
+		}
+	}
+	var cfg *config.SessionsConfig
+	if cwd, err := os.Getwd(); err == nil {
+		cfg, _, _ = config.LoadSessions("", cwd)
+	}
+	if cfg != nil {
+		for n, def := range cfg.Remote {
+			add(n, def)
+		}
+	}
+	for n, def := range loadRecordedRemotes() {
+		add(n, def)
+	}
+
+	var targets []*sshDaemonEndpoint
+	if name == "all" {
+		if len(endpoints) == 0 {
+			log.Fatal("no remotes known (none in config [remote.*] or the recorded registry)")
+		}
+		names := make([]string, 0, len(endpoints))
+		for n := range endpoints {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			targets = append(targets, endpoints[n])
+		}
+	} else {
+		e := endpoints[name]
+		if e == nil {
+			// ~/.ssh/config aliases offered in the picker, then any
+			// plain SSH host as a last resort.
+			for _, t := range loadRemoteTargets() {
+				if t.label == name {
+					e, _ = t.endpoint.(*sshDaemonEndpoint)
+					break
+				}
+			}
+		}
+		if e == nil {
+			se, err := newSSHDaemonEndpoint(name, config.RemoteDef{Host: name})
+			if err != nil {
+				log.Fatalf("remote %q: %v", name, err)
+			}
+			e = se
+		}
+		targets = append(targets, e)
+	}
+
+	failed := false
+	for _, e := range targets {
+		fmt.Printf("[%s] deploying binary + upgrading daemon...\n", e.name)
+		out, err := e.UpgradeDaemon()
+		for _, line := range strings.Split(out, "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				fmt.Printf("[%s] %s\n", e.name, line)
+			}
+		}
+		if err != nil {
+			failed = true
+			fmt.Printf("[%s] error: %v\n", e.name, err)
+		}
+	}
+	if failed {
+		os.Exit(1)
+	}
 }
 
 func cmdReload(args []string) {
