@@ -439,7 +439,25 @@ func (s *Server) renameSessionForSubscriber(req RenameSessionRequest) {
 }
 
 func (s *Server) handleSubscribeAll(conn net.Conn, req Request) {
+	// SSH-style negotiation: reject before sending any state when the
+	// version ranges don't overlap; otherwise remember the negotiated
+	// version and capability intersection for this subscriber.
+	proto, ok := NegotiateProto(req.Proto, req.ProtoMin)
+	if !ok {
+		WriteFrame(conn, FrameResponse, MarshalJSON(Response{
+			Error: fmt.Sprintf(
+				"incompatible protocol: daemon speaks %d..%d, client speaks %d..%d (upgrade the older side)",
+				MinProtocolVersion, ProtocolVersion, req.ProtoMin, req.Proto),
+			Proto:    ProtocolVersion,
+			ProtoMin: MinProtocolVersion,
+			Caps:     ProtocolCaps(),
+		}))
+		return
+	}
+
 	sub := newSubscriber(conn)
+	sub.proto = proto
+	sub.caps = IntersectCaps(req.Caps)
 	s.addSubscriber(sub)
 	defer s.removeSubscriber(sub)
 
@@ -487,7 +505,12 @@ func (s *Server) handleSubscribeAll(conn net.Conn, req Request) {
 		}
 	}
 
-	sub.sendFrameDirect(FrameResponse, MarshalJSON(Response{OK: true}))
+	sub.sendFrameDirect(FrameResponse, MarshalJSON(Response{
+		OK:       true,
+		Proto:    ProtocolVersion,
+		ProtoMin: MinProtocolVersion,
+		Caps:     ProtocolCaps(),
+	}))
 	sub.activate()
 	sub.Run(s)
 }

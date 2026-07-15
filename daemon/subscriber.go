@@ -18,6 +18,11 @@ type Subscriber struct {
 	closed  bool
 	ready   bool
 	pending []queuedFrame
+
+	// Negotiated protocol state, set during the subscribe handshake before
+	// Run starts and read-only afterwards.
+	proto int
+	caps  map[string]bool
 }
 
 func newSubscriber(conn net.Conn) *Subscriber {

@@ -61,6 +61,20 @@ type daemonPeer struct {
 	seen       map[string]bool
 	reconcile  bool
 	initialAck bool
+
+	// Negotiated protocol state from the subscribe ACK (stateMu). A peer
+	// that rejected the handshake is marked rejected and never reconnected.
+	proto    int
+	caps     map[string]bool
+	rejected bool
+}
+
+// hasCap reports whether the peer advertised a capability; future features
+// must check this before sending frames the peer may not understand.
+func (peer *daemonPeer) hasCap(name string) bool {
+	peer.stateMu.Lock()
+	defer peer.stateMu.Unlock()
+	return peer.caps[name]
 }
 
 // track records session lifecycle transitions for reconnect reconciliation.
@@ -234,6 +248,16 @@ func reconnectCmd(sockPath string) tea.Cmd {
 	}
 }
 
+// helloRequest returns the subscribe_all request carrying our protocol hello.
+func helloRequest() daemon.Request {
+	return daemon.Request{
+		Action:   daemon.ActionSubscribeAll,
+		Proto:    daemon.ProtocolVersion,
+		ProtoMin: daemon.MinProtocolVersion,
+		Caps:     daemon.ProtocolCaps(),
+	}
+}
+
 // Subscribe sends subscribe_all and starts the read loop.
 func (dc *daemonConn) Subscribe(p *tea.Program) error {
 	dc.program = p
@@ -252,9 +276,7 @@ func (dc *daemonConn) Subscribe(p *tea.Program) error {
 		return nil
 	}
 
-	if err := daemon.WriteFrame(dc.conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{
-		Action: daemon.ActionSubscribeAll,
-	})); err != nil {
+	if err := daemon.WriteFrame(dc.conn, daemon.FrameRequest, daemon.MarshalJSON(helloRequest())); err != nil {
 		return fmt.Errorf("send subscribe_all request: %w", err)
 	}
 
@@ -265,9 +287,7 @@ func (dc *daemonConn) Subscribe(p *tea.Program) error {
 func (dc *daemonConn) subscribePeer(peer *daemonPeer) error {
 	peer.writeMu.Lock()
 	defer peer.writeMu.Unlock()
-	if err := daemon.WriteFrame(peer.conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{
-		Action: daemon.ActionSubscribeAll,
-	})); err != nil {
+	if err := daemon.WriteFrame(peer.conn, daemon.FrameRequest, daemon.MarshalJSON(helloRequest())); err != nil {
 		return fmt.Errorf("subscribe %s: %w", peer.id, err)
 	}
 	return nil
@@ -276,6 +296,13 @@ func (dc *daemonConn) subscribePeer(peer *daemonPeer) error {
 func (dc *daemonConn) readPeerLoop(peer *daemonPeer) {
 	for {
 		_ = dc.readPeer(peer)
+		peer.stateMu.Lock()
+		rejected := peer.rejected
+		peer.stateMu.Unlock()
+		if rejected {
+			_ = peer.conn.Close()
+			return
+		}
 		select {
 		case <-dc.closed:
 			return
@@ -333,6 +360,21 @@ func (dc *daemonConn) handlePeerFrame(peer *daemonPeer, ft daemon.FrameType, pay
 			fn()
 		}
 	case daemon.FrameResponse:
+		var resp daemon.Response
+		respOK := json.Unmarshal(payload, &resp) == nil
+		if respOK && !resp.OK && resp.Error != "" {
+			// Handshake rejected (e.g. incompatible protocol): give up on
+			// this peer permanently — reconnecting would be rejected again.
+			peer.stateMu.Lock()
+			peer.rejected = true
+			peer.initialAck = true
+			peer.stateMu.Unlock()
+			dc.ackPending(peer)
+			if dc.program != nil {
+				dc.program.Send(tuiNoticeMsg{text: fmt.Sprintf("%s: %s", peer.id, resp.Error)})
+			}
+			return
+		}
 		for _, session := range dc.finishPeerReconcile(peer) {
 			out, post := dc.removeStalePart(peer.id, session)
 			for _, e := range out {
@@ -345,18 +387,31 @@ func (dc *daemonConn) handlePeerFrame(peer *daemonPeer, ft daemon.FrameType, pay
 		peer.stateMu.Lock()
 		firstAck := !peer.initialAck
 		peer.initialAck = true
+		if respOK {
+			// Same computation as the daemon side: highest common
+			// version, capability intersection (legacy ACKs without a
+			// hello negotiate to version 1 with all current caps).
+			peer.proto, _ = daemon.NegotiateProto(resp.Proto, resp.ProtoMin)
+			peer.caps = daemon.IntersectCaps(resp.Caps)
+		}
 		peer.stateMu.Unlock()
 		if firstAck {
-			dc.subMu.Lock()
-			if dc.pendingSubs > 0 {
-				dc.pendingSubs--
-				if dc.pendingSubs == 0 {
-					dc.program.Send(daemonSubscribedMsg{})
-				}
-			}
-			dc.subMu.Unlock()
+			dc.ackPending(peer)
 		}
 	}
+}
+
+// ackPending counts a peer's initial subscribe answer towards the "all
+// peers subscribed" notification the TUI waits for at startup.
+func (dc *daemonConn) ackPending(peer *daemonPeer) {
+	dc.subMu.Lock()
+	if dc.pendingSubs > 0 {
+		dc.pendingSubs--
+		if dc.pendingSubs == 0 {
+			dc.program.Send(daemonSubscribedMsg{})
+		}
+	}
+	dc.subMu.Unlock()
 }
 
 // removeStalePart drops a part whose session disappeared while the peer
@@ -420,9 +475,7 @@ func (dc *daemonConn) reconnectPeer(peer *daemonPeer) error {
 
 		peer.writeMu.Lock()
 		old := peer.conn
-		if err := daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{
-			Action: daemon.ActionSubscribeAll,
-		})); err != nil {
+		if err := daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(helloRequest())); err != nil {
 			peer.writeMu.Unlock()
 			_ = conn.Close()
 			if delay < 10*time.Second {
@@ -467,6 +520,11 @@ func (dc *daemonConn) readLoop() {
 			}
 
 		case daemon.FrameResponse:
+			var resp daemon.Response
+			if json.Unmarshal(payload, &resp) == nil && !resp.OK && resp.Error != "" {
+				dc.program.Send(daemonDisconnectedMsg{Err: fmt.Errorf("%s", resp.Error)})
+				return
+			}
 			if !dc.subscribed {
 				dc.subscribed = true
 				dc.program.Send(daemonSubscribedMsg{})

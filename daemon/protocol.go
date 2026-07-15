@@ -10,6 +10,80 @@ import (
 // FrameType identifies the type of local protocol frame.
 type FrameType byte
 
+// Protocol negotiation, modeled after SSH: the protocol version answers
+// "can we talk at all" and almost never changes; everything else is
+// negotiated through capability lists whose intersection both sides
+// compute independently. Compatible evolution (new JSON fields, new frame
+// types guarded by a capability) never bumps the version; only a change
+// that breaks the framing or the meaning of existing frames does.
+const (
+	// ProtocolVersion is the newest protocol version this build speaks.
+	ProtocolVersion = 1
+	// MinProtocolVersion is the oldest protocol version this build still
+	// speaks. Raising it drops compatibility with older peers.
+	MinProtocolVersion = 1
+)
+
+// ProtocolCaps returns the capability names this build supports. Peers use
+// the intersection of both sides' lists; a feature listed here may only be
+// exercised against a peer that also advertises it.
+func ProtocolCaps() []string {
+	return []string{
+		"tagged_io",   // session-tagged input/output multiplexing
+		"tab_ops",     // create/close/switch tab frames
+		"tab_name",    // TabName on create session/tab requests
+		"reorder",     // FrameReorderSess
+		"set_active",  // FrameSetActive
+		"hot_upgrade", // upgrade action
+	}
+}
+
+// NegotiateProto picks the protocol version to speak with a peer that
+// advertised the range [theirMin, theirProto]. Peers predating negotiation
+// advertise nothing (zero values) and are treated as version 1. The result
+// is the highest version both sides speak, and false when the ranges do
+// not overlap.
+func NegotiateProto(theirProto, theirMin int) (int, bool) {
+	if theirProto == 0 {
+		theirProto = 1
+	}
+	if theirMin == 0 {
+		theirMin = 1
+	}
+	v := ProtocolVersion
+	if theirProto < v {
+		v = theirProto
+	}
+	if v < MinProtocolVersion || v < theirMin {
+		return 0, false
+	}
+	return v, true
+}
+
+// IntersectCaps returns the capabilities shared with a peer. A nil list
+// means the peer predates capability negotiation; such peers implement
+// everything current builds do, so the full local set is assumed. An empty
+// non-nil list is honored as "no capabilities".
+func IntersectCaps(theirs []string) map[string]bool {
+	shared := make(map[string]bool)
+	if theirs == nil {
+		for _, c := range ProtocolCaps() {
+			shared[c] = true
+		}
+		return shared
+	}
+	local := make(map[string]bool)
+	for _, c := range ProtocolCaps() {
+		local[c] = true
+	}
+	for _, c := range theirs {
+		if local[c] {
+			shared[c] = true
+		}
+	}
+	return shared
+}
+
 const (
 	FrameRequest       FrameType = 0x01 // C→S: JSON request
 	FrameResponse      FrameType = 0x02 // S→C: JSON response
@@ -60,6 +134,12 @@ type Request struct {
 	NoAttach bool     `json:"no_attach,omitempty"` // create session but don't start attached client
 	TabName  string   `json:"tab_name,omitempty"`  // tab name for create_tab action
 	TabIndex int      `json:"tab_index,omitempty"` // tab index for close_tab action
+
+	// Protocol hello, sent with subscribe_all. Zero values mean the peer
+	// predates negotiation (treated as version 1 with all current caps).
+	Proto    int      `json:"proto,omitempty"`     // newest protocol version the client speaks
+	ProtoMin int      `json:"proto_min,omitempty"` // oldest protocol version the client speaks
+	Caps     []string `json:"caps,omitempty"`      // client capability names
 }
 
 // Response is the JSON payload for FrameResponse.
@@ -68,6 +148,13 @@ type Response struct {
 	Error    string        `json:"error,omitempty"`
 	Session  string        `json:"session,omitempty"`
 	Sessions []SessionInfo `json:"sessions,omitempty"`
+
+	// Protocol hello, echoed on the subscribe_all ACK (and on the rejection
+	// response when negotiation fails) so the client can compute the same
+	// negotiated version and capability intersection.
+	Proto    int      `json:"proto,omitempty"`
+	ProtoMin int      `json:"proto_min,omitempty"`
+	Caps     []string `json:"caps,omitempty"`
 }
 
 // SessionInfo describes a session in list responses.

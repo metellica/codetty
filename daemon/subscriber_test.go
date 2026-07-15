@@ -502,3 +502,71 @@ func TestSubscriber_DisconnectsOnServerStop(t *testing.T) {
 		t.Fatal("expected subscriber connection to close after server stop")
 	}
 }
+
+func TestSubscriber_HandshakeNegotiation(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "test.sock")
+	srv := NewServer(sockPath)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	// A compatible hello is acknowledged with the daemon's own hello.
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	WriteFrame(conn, FrameRequest, MarshalJSON(Request{
+		Action:   ActionSubscribeAll,
+		Proto:    ProtocolVersion,
+		ProtoMin: MinProtocolVersion,
+		Caps:     []string{"tagged_io", "future_thing"},
+	}))
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var ack Response
+	for {
+		ft, payload, err := ReadFrame(conn)
+		if err != nil {
+			t.Fatalf("read ack: %v", err)
+		}
+		if ft == FrameResponse {
+			if err := json.Unmarshal(payload, &ack); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if !ack.OK || ack.Proto != ProtocolVersion || ack.ProtoMin != MinProtocolVersion || len(ack.Caps) == 0 {
+		t.Fatalf("ack = %+v", ack)
+	}
+
+	// A client whose minimum version is above ours is rejected before any
+	// session state is sent.
+	conn2, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn2.Close()
+	WriteFrame(conn2, FrameRequest, MarshalJSON(Request{
+		Action:   ActionSubscribeAll,
+		Proto:    ProtocolVersion + 5,
+		ProtoMin: ProtocolVersion + 4,
+	}))
+	conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	ft, payload, err := ReadFrame(conn2)
+	if err != nil {
+		t.Fatalf("read rejection: %v", err)
+	}
+	if ft != FrameResponse {
+		t.Fatalf("first frame = %v, want immediate rejection response", ft)
+	}
+	var rej Response
+	if err := json.Unmarshal(payload, &rej); err != nil {
+		t.Fatal(err)
+	}
+	if rej.OK || rej.Error == "" || rej.Proto != ProtocolVersion {
+		t.Fatalf("rejection = %+v", rej)
+	}
+}

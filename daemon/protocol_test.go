@@ -145,3 +145,44 @@ func TestTaggedOutputSessionNameTooLongPanics(t *testing.T) {
 
 	EncodeTaggedOutput(strings.Repeat("a", 256), []byte("x"))
 }
+
+func TestNegotiateProto(t *testing.T) {
+	// Legacy peer (no hello) negotiates to version 1.
+	v, ok := NegotiateProto(0, 0)
+	if !ok || v != 1 {
+		t.Fatalf("legacy peer = (%d, %v), want (1, true)", v, ok)
+	}
+	// Same version peer.
+	v, ok = NegotiateProto(ProtocolVersion, MinProtocolVersion)
+	if !ok || v != ProtocolVersion {
+		t.Fatalf("same version = (%d, %v), want (%d, true)", v, ok, ProtocolVersion)
+	}
+	// Newer peer that still speaks our version: use ours.
+	v, ok = NegotiateProto(ProtocolVersion+3, ProtocolVersion)
+	if !ok || v != ProtocolVersion {
+		t.Fatalf("newer peer = (%d, %v), want (%d, true)", v, ok, ProtocolVersion)
+	}
+	// Newer peer whose minimum is above our maximum: incompatible.
+	if _, ok := NegotiateProto(ProtocolVersion+3, ProtocolVersion+2); ok {
+		t.Fatal("expected incompatible ranges to fail")
+	}
+}
+
+func TestIntersectCaps(t *testing.T) {
+	// Legacy peer without a caps list gets the full local set.
+	caps := IntersectCaps(nil)
+	for _, c := range ProtocolCaps() {
+		if !caps[c] {
+			t.Fatalf("legacy peer missing cap %q", c)
+		}
+	}
+	// Intersection keeps only shared names.
+	caps = IntersectCaps([]string{"tagged_io", "future_thing"})
+	if !caps["tagged_io"] || caps["future_thing"] || caps["tab_ops"] {
+		t.Fatalf("intersection = %v", caps)
+	}
+	// An explicit empty list means no capabilities.
+	if caps := IntersectCaps([]string{}); len(caps) != 0 {
+		t.Fatalf("empty list = %v, want none", caps)
+	}
+}

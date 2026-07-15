@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -646,4 +647,129 @@ func mustUnmarshal(t *testing.T, payload []byte, v any) {
 	if err := json.Unmarshal(payload, v); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
+}
+
+// endpointFor wires a pre-connected pipe as a reconnectable endpoint: the
+// first Dial returns the pipe, later Dials fail (so rejection tests would
+// notice an unwanted reconnect attempt via dial counting).
+type countingEndpoint struct {
+	id    string
+	conn  io.ReadWriteCloser
+	dials atomic.Int32
+	once  sync.Once
+}
+
+func (e *countingEndpoint) ID() string    { return e.id }
+func (e *countingEndpoint) Ensure() error { return nil }
+func (e *countingEndpoint) Dial() (io.ReadWriteCloser, error) {
+	e.dials.Add(1)
+	var conn io.ReadWriteCloser
+	e.once.Do(func() { conn = e.conn })
+	if conn == nil {
+		return nil, io.EOF
+	}
+	return conn, nil
+}
+
+func TestPeerHandshakeStoresNegotiationAndRejectionStopsPeer(t *testing.T) {
+	okClient, okServer := net.Pipe()
+	rejClient, rejServer := net.Pipe()
+	t.Cleanup(func() {
+		_ = okServer.Close()
+		_ = rejServer.Close()
+	})
+
+	rejEndpoint := &countingEndpoint{id: "remote:old", conn: rejClient}
+	endpoints := map[string]daemonEndpoint{
+		"local":      &singleConnEndpoint{id: "local", conn: okClient},
+		"remote:old": rejEndpoint,
+	}
+	dc, err := newMultiDaemonConn(endpoints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(dc.closePeers)
+
+	// Healthy daemon: ACK with a hello (subset of caps), keep serving.
+	go func() {
+		_, _, _ = daemon.ReadFrame(okServer)
+		_ = daemon.WriteFrame(okServer, daemon.FrameResponse, daemon.MarshalJSON(daemon.Response{
+			OK:       true,
+			Proto:    daemon.ProtocolVersion,
+			ProtoMin: daemon.MinProtocolVersion,
+			Caps:     []string{"tagged_io"},
+		}))
+	}()
+	// Incompatible daemon: reject the handshake and close, like the real
+	// server does.
+	go func() {
+		_, _, _ = daemon.ReadFrame(rejServer)
+		_ = daemon.WriteFrame(rejServer, daemon.FrameResponse, daemon.MarshalJSON(daemon.Response{
+			Error: "incompatible protocol: daemon speaks 1..1, client speaks 4..5 (upgrade the older side)",
+		}))
+		_ = rejServer.Close()
+	}()
+
+	program, messages := startTestProgram(t)
+	if err := dc.Subscribe(program); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotNotice, gotSubscribed bool
+	deadline := time.After(2 * time.Second)
+	for !gotNotice || !gotSubscribed {
+		select {
+		case msg := <-messages:
+			switch m := msg.(type) {
+			case tuiNoticeMsg:
+				if !strings.Contains(m.text, "incompatible protocol") {
+					t.Fatalf("notice = %q", m.text)
+				}
+				gotNotice = true
+			case daemonSubscribedMsg:
+				// A rejected peer must still count towards startup so the
+				// TUI does not hang waiting for it.
+				gotSubscribed = true
+			}
+		case <-deadline:
+			t.Fatalf("timed out: notice=%v subscribed=%v", gotNotice, gotSubscribed)
+		}
+	}
+
+	local := dc.peer("local")
+	waitFor(t, func() bool {
+		local.stateMu.Lock()
+		defer local.stateMu.Unlock()
+		return local.initialAck
+	})
+	if local.proto != daemon.ProtocolVersion {
+		t.Fatalf("local proto = %d, want %d", local.proto, daemon.ProtocolVersion)
+	}
+	if !local.hasCap("tagged_io") || local.hasCap("tab_ops") {
+		t.Fatalf("caps = %v, want only the intersection", local.caps)
+	}
+
+	rejected := dc.peer("remote:old")
+	waitFor(t, func() bool {
+		rejected.stateMu.Lock()
+		defer rejected.stateMu.Unlock()
+		return rejected.rejected
+	})
+	// Give a would-be reconnect loop time to fire, then verify none did.
+	time.Sleep(400 * time.Millisecond)
+	if got := rejEndpoint.dials.Load(); got != 1 {
+		t.Fatalf("rejected peer dialed %d times, want 1 (no reconnects)", got)
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition not met in time")
 }
