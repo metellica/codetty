@@ -3,61 +3,150 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 
 	"codetty/config"
 	"codetty/daemon"
 )
 
+// containerPlan is one daemon-side container session to create for a config
+// session: either the local part (named after the session) or a remote
+// shadow session (<display>@@<localID>).
+type containerPlan struct {
+	EndpointID string
+	Container  string
+	Tabs       []config.ResolvedTab
+}
+
+// sessionPlan groups one resolved session's tabs by target daemon: the
+// local container first, then remote shadows sorted by endpoint ID.
+type sessionPlan struct {
+	Session    config.ResolvedSession
+	Containers []containerPlan
+}
+
+// buildConfigEndpoints resolves the daemon endpoints a config needs (the
+// local daemon is always included) and the per-session container plans
+// describing which tabs live on which daemon.
 func buildConfigEndpoints(
 	cfg *config.SessionsConfig,
 	sessions []config.ResolvedSession,
 	sockPath string,
-) (map[string]daemonEndpoint, map[string]string, error) {
-	endpoints := make(map[string]daemonEndpoint)
-	routes := make(map[string]string, len(sessions))
+) (map[string]daemonEndpoint, []sessionPlan, error) {
+	endpoints := map[string]daemonEndpoint{
+		"local": localDaemonEndpoint{sockPath: sockPath},
+	}
 	remoteByKey := make(map[string]string)
+	shadowID := localShadowID()
 
-	for _, session := range sessions {
-		if session.Remote == "" {
-			if _, ok := endpoints["local"]; !ok {
-				endpoints["local"] = localDaemonEndpoint{sockPath: sockPath}
-			}
-			routes[session.Name] = "local"
-			continue
-		}
-
-		def, ok := cfg.Remote[session.Remote]
+	endpointFor := func(sessionName, remoteName string) (string, error) {
+		def, ok := cfg.Remote[remoteName]
 		if !ok {
-			return nil, nil, fmt.Errorf("session %q: remote %q not found", session.Name, session.Remote)
+			return "", fmt.Errorf("session %q: remote %q not found", sessionName, remoteName)
 		}
 		instance := def.Instance
 		if instance == "" {
 			instance = "default"
 		}
 		key := def.Host + "\x00" + instance
-		endpoint, err := newSSHDaemonEndpoint(session.Remote, def)
+		endpoint, err := newSSHDaemonEndpoint(remoteName, def)
 		if err != nil {
-			return nil, nil, err
+			return "", err
 		}
 		id, ok := remoteByKey[key]
 		if !ok {
 			id = endpoint.ID()
 			remoteByKey[key] = id
 			endpoints[id] = endpoint
-		} else if existing, ok := endpoints[id].(*sshDaemonEndpoint); ok &&
+			return id, nil
+		}
+		if existing, ok := endpoints[id].(*sshDaemonEndpoint); ok &&
 			(existing.deploy != endpoint.deploy || existing.binary != endpoint.binary) {
-			return nil, nil, fmt.Errorf(
+			return "", fmt.Errorf(
 				"remote %q conflicts with another definition for %s instance %q",
-				session.Remote,
+				remoteName,
 				def.Host,
 				instance,
 			)
 		}
-		routes[session.Name] = id
+		return id, nil
 	}
 
-	return endpoints, routes, nil
+	plans := make([]sessionPlan, 0, len(sessions))
+	for _, session := range sessions {
+		byEndpoint := make(map[string]*containerPlan)
+		var order []string
+		for _, tab := range session.Tabs {
+			id := "local"
+			container := session.Name
+			if tab.Remote != "" {
+				var err error
+				id, err = endpointFor(session.Name, tab.Remote)
+				if err != nil {
+					return nil, nil, err
+				}
+				container = shadowSessionName(session.Name, shadowID)
+			}
+			cp, ok := byEndpoint[id]
+			if !ok {
+				cp = &containerPlan{EndpointID: id, Container: container}
+				byEndpoint[id] = cp
+				order = append(order, id)
+			}
+			cp.Tabs = append(cp.Tabs, tab)
+		}
+		// Local container first, then remotes sorted by endpoint ID, to
+		// match the composite merge order in the TUI.
+		sort.Slice(order, func(i, j int) bool {
+			if (order[i] == "local") != (order[j] == "local") {
+				return order[i] == "local"
+			}
+			return order[i] < order[j]
+		})
+		plan := sessionPlan{Session: session}
+		for _, id := range order {
+			plan.Containers = append(plan.Containers, *byEndpoint[id])
+		}
+		plans = append(plans, plan)
+	}
+
+	return endpoints, plans, nil
+}
+
+// remoteTarget is a selectable execution target for a new tab: the local
+// daemon or a remote defined in the sessions config.
+type remoteTarget struct {
+	label    string
+	id       string
+	endpoint daemonEndpoint // nil for the local daemon
+}
+
+// loadRemoteTargets lists the tab execution targets available to the TUI:
+// always the local daemon, plus every [remote.*] in the sessions config.
+func loadRemoteTargets() []remoteTarget {
+	targets := []remoteTarget{{label: "local", id: "local"}}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return targets
+	}
+	cfg, _, err := config.LoadSessions("", cwd)
+	if err != nil {
+		return targets
+	}
+	names := make([]string, 0, len(cfg.Remote))
+	for name := range cfg.Remote {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		endpoint, err := newSSHDaemonEndpoint(name, cfg.Remote[name])
+		if err != nil {
+			continue
+		}
+		targets = append(targets, remoteTarget{label: name, id: endpoint.ID(), endpoint: endpoint})
+	}
+	return targets
 }
 
 func ensureEndpoints(endpoints map[string]daemonEndpoint) error {

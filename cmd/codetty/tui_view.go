@@ -837,13 +837,39 @@ func (m *tuiModel) overlayCreateSession(base string) string {
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
 }
 
-// overlayCreateTab renders a centered dialog for new tab name input.
+// overlayCreateTab renders a centered dialog for new tab creation: first a
+// target picker (when remotes are configured), then the tab name input.
 func (m *tuiModel) overlayCreateTab(base string) string {
-	title := lipgloss.NewStyle().Bold(true).Render("New Tab")
-	input := fmt.Sprintf("%s█", m.createTabText)
-	help := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("[Enter] confirm  [Esc] cancel")
-
-	content := title + "\n\n" + input + "\n\n" + help
+	var content string
+	if m.createTabPicking {
+		title := lipgloss.NewStyle().Bold(true).Render("New Tab — Target")
+		var lines []string
+		for i, target := range m.createTabTargets {
+			label := target.label
+			if target.endpoint != nil {
+				label += "  (ssh)"
+			}
+			if i == m.createTabPick {
+				lines = append(lines, lipgloss.NewStyle().
+					Foreground(lipgloss.Color("39")).Bold(true).
+					Render("> "+label))
+			} else {
+				lines = append(lines, "  "+label)
+			}
+		}
+		help := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("[↑↓] select  [Enter] next  [Esc] cancel")
+		content = title + "\n\n" + strings.Join(lines, "\n") + "\n\n" + help
+	} else {
+		title := lipgloss.NewStyle().Bold(true).Render("New Tab")
+		if len(m.createTabTargets) > 0 && m.createTabPick < len(m.createTabTargets) {
+			if target := m.createTabTargets[m.createTabPick]; target.endpoint != nil {
+				title = lipgloss.NewStyle().Bold(true).Render("New Tab @ " + target.label)
+			}
+		}
+		input := fmt.Sprintf("%s█", m.createTabText)
+		help := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("[Enter] confirm  [Esc] cancel")
+		content = title + "\n\n" + input + "\n\n" + help
+	}
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
@@ -861,6 +887,10 @@ func (m *tuiModel) statusBar() string {
 	if m.renaming {
 		prompt := fmt.Sprintf(" Rename: %s█  (Enter confirm, Esc cancel)", m.renameText)
 		return tuiStatusStyle.Width(m.width).Render(prompt)
+	}
+
+	if m.notice != "" {
+		return tuiStatusStyle.Width(m.width).Render(" " + m.notice)
 	}
 
 	sess := m.focusedSession()

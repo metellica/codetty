@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
 	"net"
 	"sync"
@@ -44,118 +46,456 @@ func (e *singleConnEndpoint) Dial() (io.ReadWriteCloser, error) {
 	return conn, nil
 }
 
-func TestMultiDaemonConnRoutesSessionsAndFiltersRemoteSnapshots(t *testing.T) {
-	localClient, localServer := net.Pipe()
-	remoteClient, remoteServer := net.Pipe()
-	t.Cleanup(func() {
-		_ = localServer.Close()
-		_ = remoteServer.Close()
-	})
+type closedReadWriteCloser struct{}
 
-	endpoints := map[string]daemonEndpoint{
-		"local":      &singleConnEndpoint{id: "local", conn: localClient},
-		"remote:gpu": &singleConnEndpoint{id: "remote:gpu", conn: remoteClient},
-	}
-	dc, err := newMultiDaemonConn(endpoints, map[string]string{
-		"local-session":  "local",
-		"remote-session": "remote:gpu",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(dc.closePeers)
+func (*closedReadWriteCloser) Read([]byte) (int, error)    { return 0, io.EOF }
+func (*closedReadWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (*closedReadWriteCloser) Close() error                { return nil }
 
-	serve := func(
-		conn net.Conn,
-		events []daemon.SessionEvent,
-		input chan<- string,
-	) {
-		ft, _, err := daemon.ReadFrame(conn)
-		if err != nil || ft != daemon.FrameRequest {
-			return
+// recordingConn records frames written to a peer for later inspection.
+type recordingConn struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (c *recordingConn) Read([]byte) (int, error) { return 0, io.EOF }
+func (c *recordingConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+func (c *recordingConn) Close() error { return nil }
+
+type recordedFrame struct {
+	ft      daemon.FrameType
+	payload []byte
+}
+
+func (c *recordingConn) frames(t *testing.T) []recordedFrame {
+	t.Helper()
+	c.mu.Lock()
+	data := append([]byte(nil), c.buf.Bytes()...)
+	c.mu.Unlock()
+	var frames []recordedFrame
+	r := bytes.NewReader(data)
+	for r.Len() > 0 {
+		ft, payload, err := daemon.ReadFrame(r)
+		if err != nil {
+			t.Fatalf("decode recorded frame: %v", err)
 		}
-		for _, event := range events {
-			_ = daemon.WriteFrame(conn, daemon.FrameSessionEvent, daemon.MarshalJSON(event))
-		}
-		_ = daemon.WriteFrame(conn, daemon.FrameResponse, daemon.MarshalJSON(daemon.Response{OK: true}))
-
-		ft, payload, err := daemon.ReadFrame(conn)
-		if err == nil && ft == daemon.FrameTaggedInput {
-			session, _, decodeErr := daemon.DecodeTaggedInput(payload)
-			if decodeErr == nil {
-				input <- session
-			}
-		}
+		frames = append(frames, recordedFrame{ft, payload})
 	}
+	return frames
+}
 
-	localInput := make(chan string, 1)
-	remoteInput := make(chan string, 1)
-	go serve(localServer, []daemon.SessionEvent{
-		{Type: "snapshot", Session: "local-session"},
-		{Type: "snapshot", Session: "unconfigured-local"},
-	}, localInput)
-	go serve(remoteServer, []daemon.SessionEvent{
-		{Type: "snapshot", Session: "remote-session"},
-		{Type: "snapshot", Session: "unconfigured-remote"},
-	}, remoteInput)
-
-	program, messages := startTestProgram(t)
-	if err := dc.Subscribe(program); err != nil {
-		t.Fatal(err)
+// newTestCompositeConn builds a multi-peer conn without dialing anything.
+func newTestCompositeConn(peerIDs ...string) *daemonConn {
+	dc := &daemonConn{
+		peers:      make(map[string]*daemonPeer),
+		localID:    "cafe0123",
+		composites: make(map[string]*compositeSession),
+		partOwner:  make(map[string]*compositeSession),
+		queuedTabs: make(map[string][]queuedTab),
+		closed:     make(chan struct{}),
 	}
-
-	seen := make(map[string]bool)
-	deadline := time.After(2 * time.Second)
-	for len(seen) < 3 {
-		select {
-		case msg := <-messages:
-			if event, ok := msg.(daemonSessionEventMsg); ok {
-				seen[event.Event.Session] = true
-			}
-		case <-deadline:
-			t.Fatalf("timed out waiting for snapshots: %v", seen)
+	for _, id := range peerIDs {
+		dc.peers[id] = &daemonPeer{
+			id:    id,
+			conn:  &recordingConn{},
+			known: make(map[string]bool),
 		}
 	}
-	if seen["unconfigured-remote"] {
-		t.Fatal("unconfigured remote session leaked into the local TUI")
-	}
-	if !seen["local-session"] || !seen["unconfigured-local"] || !seen["remote-session"] {
-		t.Fatalf("unexpected snapshots: %v", seen)
-	}
+	return dc
+}
 
-	dc.SendInput("local-session", []byte("a"))
-	dc.SendInput("remote-session", []byte("b"))
-	if got := <-localInput; got != "local-session" {
-		t.Fatalf("local input routed to %q", got)
+func (dc *daemonConn) testShadow(display string) string {
+	return shadowSessionName(display, dc.localID)
+}
+
+// mergeAndRun feeds an event through mergeEvent and runs the deferred writes.
+func (dc *daemonConn) mergeAndRun(peer *daemonPeer, evt daemon.SessionEvent) []daemon.SessionEvent {
+	out, post := dc.mergeEvent(peer, evt)
+	for _, fn := range post {
+		fn()
 	}
-	if got := <-remoteInput; got != "remote-session" {
-		t.Fatalf("remote input routed to %q", got)
+	return out
+}
+
+func TestShadowSessionNameRoundTrip(t *testing.T) {
+	name := shadowSessionName("dev", "cafe0123")
+	display, id, ok := parseShadowSessionName(name)
+	if !ok || display != "dev" || id != "cafe0123" {
+		t.Fatalf("parse(%q) = %q %q %v", name, display, id, ok)
+	}
+	if _, _, ok := parseShadowSessionName("plain"); ok {
+		t.Fatal("plain name parsed as shadow")
+	}
+	if _, _, ok := parseShadowSessionName("@@id"); ok {
+		t.Fatal("empty display parsed as shadow")
 	}
 }
 
-func TestDaemonConnRenameMovesRemoteRouteAfterEvent(t *testing.T) {
-	dc := &daemonConn{
-		peers: map[string]*daemonPeer{
-			"remote:gpu": {
-				id:    "remote:gpu",
-				known: map[string]bool{"old": true},
-			},
-		},
-		sessionPeer: map[string]string{"old": "remote:gpu"},
-		defaultPeer: "local",
+func TestCompositeMergesShadowIntoLocalSession(t *testing.T) {
+	dc := newTestCompositeConn("local", "remote:gpu")
+	local := dc.peers["local"]
+	remote := dc.peers["remote:gpu"]
+
+	out := dc.mergeAndRun(local, daemon.SessionEvent{
+		Type: "snapshot", Session: "dev",
+		Info: daemon.SessionInfo{Name: "dev", Tabs: []daemon.TabInfo{{Name: "shell"}, {Name: "edit"}}, ActiveTab: 1},
+	})
+	if len(out) != 1 || out[0].Type != "snapshot" || out[0].Session != "dev" {
+		t.Fatalf("local snapshot out = %+v", out)
 	}
-	peer := dc.peers["remote:gpu"]
-	dc.trackPeerEvent(peer, daemon.SessionEvent{
-		Type:    "renamed",
-		Session: "old",
-		Info:    daemon.SessionInfo{Name: "new"},
+	if len(out[0].Info.Tabs) != 2 || out[0].Info.ActiveTab != 1 {
+		t.Fatalf("merged info = %+v", out[0].Info)
+	}
+
+	out = dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "snapshot", Session: dc.testShadow("dev"),
+		Info: daemon.SessionInfo{Name: dc.testShadow("dev"), Tabs: []daemon.TabInfo{{Name: "agent"}}, ActiveTab: 0},
+	})
+	if len(out) != 1 || out[0].Type != "agent_state" || out[0].Session != "dev" {
+		t.Fatalf("shadow snapshot out = %+v", out)
+	}
+	info := out[0].Info
+	if len(info.Tabs) != 3 || info.Tabs[2].Name != "agent" {
+		t.Fatalf("merged tabs = %+v", info.Tabs)
+	}
+	if info.ActiveTab != 1 {
+		t.Fatalf("merged active tab = %d, want local part's tab 1", info.ActiveTab)
+	}
+}
+
+func TestCompositeFiltersForeignRemoteSessions(t *testing.T) {
+	dc := newTestCompositeConn("local", "remote:gpu")
+	remote := dc.peers["remote:gpu"]
+
+	for _, name := range []string{"plain", "dev@@deadbeef"} {
+		out := dc.mergeAndRun(remote, daemon.SessionEvent{
+			Type: "snapshot", Session: name,
+			Info: daemon.SessionInfo{Name: name},
+		})
+		if len(out) != 0 {
+			t.Fatalf("foreign session %q leaked: %+v", name, out)
+		}
+	}
+}
+
+func TestCompositeOutputOnlyFromActivePart(t *testing.T) {
+	dc := newTestCompositeConn("local", "remote:gpu")
+	local := dc.peers["local"]
+	remote := dc.peers["remote:gpu"]
+	shadow := dc.testShadow("dev")
+
+	dc.mergeAndRun(local, daemon.SessionEvent{
+		Type: "snapshot", Session: "dev",
+		Info: daemon.SessionInfo{Name: "dev", Tabs: []daemon.TabInfo{{Name: "shell"}}},
+	})
+	dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "snapshot", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}},
 	})
 
-	if got := dc.SessionPeer("new"); got != "remote:gpu" {
-		t.Fatalf("new route = %q, want remote:gpu", got)
+	if _, ok := dc.mapOutput("remote:gpu", shadow); ok {
+		t.Fatal("inactive part output was forwarded")
 	}
-	if got := dc.SessionPeer("old"); got != "local" {
-		t.Fatalf("old route = %q, want default local", got)
+	if display, ok := dc.mapOutput("local", "dev"); !ok || display != "dev" {
+		t.Fatalf("active part output = %q %v", display, ok)
+	}
+
+	// Switching to the remote tab adopts the remote part as active.
+	out := dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "tab_switched", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}, ActiveTab: 0},
+	})
+	if len(out) != 1 || out[0].Type != "tab_switched" || out[0].Session != "dev" {
+		t.Fatalf("tab_switched out = %+v", out)
+	}
+	if out[0].Info.ActiveTab != 1 {
+		t.Fatalf("merged active tab = %d, want remote tab offset 1", out[0].Info.ActiveTab)
+	}
+	if _, ok := dc.mapOutput("local", "dev"); ok {
+		t.Fatal("stale local output forwarded after remote became active")
+	}
+	if display, ok := dc.mapOutput("remote:gpu", shadow); !ok || display != "dev" {
+		t.Fatalf("remote output = %q %v", display, ok)
+	}
+}
+
+func TestCompositeTabChangeOnInactivePartDemotedToAgentState(t *testing.T) {
+	dc := newTestCompositeConn("local", "remote:gpu")
+	local := dc.peers["local"]
+	remote := dc.peers["remote:gpu"]
+	shadow := dc.testShadow("dev")
+
+	dc.mergeAndRun(local, daemon.SessionEvent{
+		Type: "snapshot", Session: "dev",
+		Info: daemon.SessionInfo{Name: "dev", Tabs: []daemon.TabInfo{{Name: "shell"}}},
+	})
+	dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "snapshot", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}},
+	})
+
+	out := dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "tab_created", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}, {Name: "logs"}}},
+	})
+	if len(out) != 1 || out[0].Type != "agent_state" {
+		t.Fatalf("inactive tab_created out = %+v, want agent_state demotion", out)
+	}
+	if len(out[0].Info.Tabs) != 3 {
+		t.Fatalf("merged tabs = %+v", out[0].Info.Tabs)
+	}
+}
+
+func TestCompositeRoutesTabOpsByMergedIndex(t *testing.T) {
+	dc := newTestCompositeConn("local", "remote:gpu")
+	local := dc.peers["local"]
+	remote := dc.peers["remote:gpu"]
+	shadow := dc.testShadow("dev")
+
+	dc.mergeAndRun(local, daemon.SessionEvent{
+		Type: "snapshot", Session: "dev",
+		Info: daemon.SessionInfo{Name: "dev", Tabs: []daemon.TabInfo{{Name: "shell"}, {Name: "edit"}}},
+	})
+	dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "snapshot", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}},
+	})
+
+	dc.SwitchTab("dev", 2)
+	frames := dc.peers["remote:gpu"].conn.(*recordingConn).frames(t)
+	if len(frames) != 1 || frames[0].ft != daemon.FrameSwitchTab {
+		t.Fatalf("remote frames = %+v", frames)
+	}
+	var sw daemon.SwitchTabRequest
+	mustUnmarshal(t, frames[0].payload, &sw)
+	if sw.Session != shadow || sw.Index != 0 {
+		t.Fatalf("switch = %+v, want shadow tab 0", sw)
+	}
+
+	// Closing the remote part's only tab kills the shadow container.
+	dc.CloseTab("dev", 2)
+	frames = dc.peers["remote:gpu"].conn.(*recordingConn).frames(t)
+	if len(frames) != 2 || frames[1].ft != daemon.FrameKillSession {
+		t.Fatalf("remote frames after close = %+v", frames)
+	}
+	var kill daemon.KillSessionRequest
+	mustUnmarshal(t, frames[1].payload, &kill)
+	if kill.Name != shadow {
+		t.Fatalf("killed %q, want %q", kill.Name, shadow)
+	}
+
+	// Closing a local tab maps to a plain close on the local daemon.
+	dc.CloseTab("dev", 1)
+	lframes := dc.peers["local"].conn.(*recordingConn).frames(t)
+	last := lframes[len(lframes)-1]
+	if last.ft != daemon.FrameCloseTab {
+		t.Fatalf("local frames = %+v", lframes)
+	}
+	var cl daemon.CloseTabRequest
+	mustUnmarshal(t, last.payload, &cl)
+	if cl.Session != "dev" || cl.Index != 1 {
+		t.Fatalf("close = %+v", cl)
+	}
+
+	if got := dc.TabTarget("dev", 2); got != "remote:gpu" {
+		t.Fatalf("TabTarget(2) = %q", got)
+	}
+	if got := dc.TabTarget("dev", 0); got != "local" {
+		t.Fatalf("TabTarget(0) = %q", got)
+	}
+}
+
+// TestReloadContainerOps covers the composite primitives config reload uses:
+// CloseTabOn always sends a plain close (creates are issued first, so a
+// close never removes a container's last tab), ContainerPeers enumerates a
+// display session's parts, and KillContainerOn kills a stale container.
+func TestReloadContainerOps(t *testing.T) {
+	dc := newTestCompositeConn("local", "remote:gpu")
+	local := dc.peers["local"]
+	remote := dc.peers["remote:gpu"]
+	shadow := dc.testShadow("dev")
+
+	dc.mergeAndRun(local, daemon.SessionEvent{
+		Type: "snapshot", Session: "dev",
+		Info: daemon.SessionInfo{Name: "dev", Tabs: []daemon.TabInfo{{Name: "shell"}}},
+	})
+	dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "snapshot", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}},
+	})
+
+	peers := dc.ContainerPeers("dev")
+	if len(peers) != 2 || peers[0] != "local" || peers[1] != "remote:gpu" {
+		t.Fatalf("ContainerPeers = %v", peers)
+	}
+
+	// Even for a part's only tab, CloseTabOn sends a plain close, never a
+	// kill: reload's create-before-close ordering guarantees the daemon
+	// already appended replacement tabs when this executes.
+	dc.CloseTabOn("dev", "remote:gpu", 0)
+	frames := remote.conn.(*recordingConn).frames(t)
+	if len(frames) != 1 || frames[0].ft != daemon.FrameCloseTab {
+		t.Fatalf("remote frames = %+v", frames)
+	}
+	var cl daemon.CloseTabRequest
+	mustUnmarshal(t, frames[0].payload, &cl)
+	if cl.Session != shadow || cl.Index != 0 {
+		t.Fatalf("close = %+v", cl)
+	}
+
+	dc.KillContainerOn("dev", "remote:gpu")
+	frames = remote.conn.(*recordingConn).frames(t)
+	if len(frames) != 2 || frames[1].ft != daemon.FrameKillSession {
+		t.Fatalf("remote frames after kill = %+v", frames)
+	}
+	var kill daemon.KillSessionRequest
+	mustUnmarshal(t, frames[1].payload, &kill)
+	if kill.Name != shadow {
+		t.Fatalf("killed %q, want %q", kill.Name, shadow)
+	}
+
+	// Unknown peers and displays are no-ops.
+	dc.KillContainerOn("dev", "remote:other")
+	dc.KillContainerOn("nope", "remote:gpu")
+	if got := len(remote.conn.(*recordingConn).frames(t)); got != 2 {
+		t.Fatalf("unexpected extra frames: %d", got)
+	}
+}
+
+func TestCompositeRenameRenamesAllParts(t *testing.T) {
+	dc := newTestCompositeConn("local", "remote:gpu")
+	local := dc.peers["local"]
+	remote := dc.peers["remote:gpu"]
+	shadow := dc.testShadow("dev")
+
+	dc.mergeAndRun(local, daemon.SessionEvent{
+		Type: "snapshot", Session: "dev",
+		Info: daemon.SessionInfo{Name: "dev", Tabs: []daemon.TabInfo{{Name: "shell"}}},
+	})
+	dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "snapshot", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}},
+	})
+
+	dc.RenameSession("dev", "bad@@name")
+	if frames := dc.peers["local"].conn.(*recordingConn).frames(t); len(frames) != 0 {
+		t.Fatalf("rename with @@ was sent: %+v", frames)
+	}
+
+	dc.RenameSession("dev", "prod")
+	lframes := dc.peers["local"].conn.(*recordingConn).frames(t)
+	rframes := dc.peers["remote:gpu"].conn.(*recordingConn).frames(t)
+	if len(lframes) != 1 || lframes[0].ft != daemon.FrameRenameSession {
+		t.Fatalf("local frames = %+v", lframes)
+	}
+	if len(rframes) != 1 || rframes[0].ft != daemon.FrameRenameSession {
+		t.Fatalf("remote frames = %+v", rframes)
+	}
+	var lr, rr daemon.RenameSessionRequest
+	mustUnmarshal(t, lframes[0].payload, &lr)
+	mustUnmarshal(t, rframes[0].payload, &rr)
+	if lr.OldName != "dev" || lr.NewName != "prod" {
+		t.Fatalf("local rename = %+v", lr)
+	}
+	if rr.OldName != shadow || rr.NewName != dc.testShadow("prod") {
+		t.Fatalf("remote rename = %+v", rr)
+	}
+
+	// The composite renames once the first part event arrives.
+	out := dc.mergeAndRun(local, daemon.SessionEvent{
+		Type: "renamed", Session: "dev",
+		Info: daemon.SessionInfo{Name: "prod"},
+	})
+	if len(out) != 1 || out[0].Type != "renamed" || out[0].Session != "dev" || out[0].Info.Name != "prod" {
+		t.Fatalf("renamed out = %+v", out)
+	}
+	// The shadow rename event arrives later and is a no-op for the TUI.
+	out = dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "renamed", Session: shadow,
+		Info: daemon.SessionInfo{Name: dc.testShadow("prod")},
+	})
+	if len(out) != 0 {
+		t.Fatalf("follow-up rename out = %+v", out)
+	}
+	if dc.composites["prod"] == nil || dc.composites["dev"] != nil {
+		t.Fatal("composite was not re-keyed")
+	}
+}
+
+func TestCompositePartExitPromotesNextPart(t *testing.T) {
+	dc := newTestCompositeConn("local", "remote:gpu")
+	local := dc.peers["local"]
+	remote := dc.peers["remote:gpu"]
+	shadow := dc.testShadow("dev")
+
+	dc.mergeAndRun(local, daemon.SessionEvent{
+		Type: "snapshot", Session: "dev",
+		Info: daemon.SessionInfo{Name: "dev", Tabs: []daemon.TabInfo{{Name: "shell"}}},
+	})
+	dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "snapshot", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}, ActiveTab: 0},
+	})
+
+	// Active (local) part dies: the remote part takes over and its daemon
+	// is asked to replay the screen via a same-index tab switch.
+	out := dc.mergeAndRun(local, daemon.SessionEvent{Type: "exited", Session: "dev"})
+	if len(out) != 1 || out[0].Type != "tab_switched" || out[0].Session != "dev" {
+		t.Fatalf("exit out = %+v", out)
+	}
+	if len(out[0].Info.Tabs) != 1 || out[0].Info.Tabs[0].Name != "agent" {
+		t.Fatalf("merged info after exit = %+v", out[0].Info)
+	}
+	rframes := dc.peers["remote:gpu"].conn.(*recordingConn).frames(t)
+	if len(rframes) != 1 || rframes[0].ft != daemon.FrameSwitchTab {
+		t.Fatalf("remote frames = %+v", rframes)
+	}
+
+	// Last part dies: the composite exits.
+	out = dc.mergeAndRun(remote, daemon.SessionEvent{Type: "exited", Session: shadow, ExitCode: 3})
+	if len(out) != 1 || out[0].Type != "exited" || out[0].Session != "dev" || out[0].ExitCode != 3 {
+		t.Fatalf("final exit out = %+v", out)
+	}
+	if len(dc.composites) != 0 {
+		t.Fatalf("composites not cleaned up: %+v", dc.composites)
+	}
+}
+
+func TestCreateTabOnQueuesUntilContainerAppears(t *testing.T) {
+	dc := newTestCompositeConn("local", "remote:gpu")
+	remote := dc.peers["remote:gpu"]
+	shadow := dc.testShadow("dev")
+
+	dc.CreateTabOn("dev", "remote:gpu", "agent", []string{"copilot"}, "/w", nil, 100, 30)
+	dc.CreateTabOn("dev", "remote:gpu", "logs", nil, "", nil, 100, 30)
+
+	frames := remote.conn.(*recordingConn).frames(t)
+	if len(frames) != 1 || frames[0].ft != daemon.FrameCreateSession {
+		t.Fatalf("frames = %+v, want single create_session", frames)
+	}
+	var cs daemon.CreateSessionRequest
+	mustUnmarshal(t, frames[0].payload, &cs)
+	if cs.Name != shadow || cs.TabName != "agent" || cs.Cols != 100 {
+		t.Fatalf("create session = %+v", cs)
+	}
+
+	// The container snapshot flushes the queued tab.
+	dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "created", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}},
+	})
+	frames = remote.conn.(*recordingConn).frames(t)
+	if len(frames) != 2 || frames[1].ft != daemon.FrameCreateTab {
+		t.Fatalf("frames after snapshot = %+v", frames)
+	}
+	var ct daemon.CreateTabRequest
+	mustUnmarshal(t, frames[1].payload, &ct)
+	if ct.Session != shadow || ct.Name != "logs" {
+		t.Fatalf("queued tab = %+v", ct)
 	}
 }
 
@@ -172,46 +512,6 @@ func TestFinishPeerReconcileReturnsMissingSessions(t *testing.T) {
 	}
 	if peer.known["gone"] || !peer.known["alive"] || peer.reconcile {
 		t.Fatalf("peer state after reconcile = %+v", peer)
-	}
-}
-
-func TestRouteSessionRejectsTargetChange(t *testing.T) {
-	dc := &daemonConn{
-		peers: map[string]*daemonPeer{
-			"local":      {id: "local"},
-			"remote:gpu": {id: "remote:gpu"},
-		},
-		sessionPeer: map[string]string{"work": "local"},
-		defaultPeer: "local",
-	}
-	if dc.RouteSession("work", "remote:gpu") {
-		t.Fatal("RouteSession allowed a live route to change")
-	}
-	if got := dc.SessionPeer("work"); got != "local" {
-		t.Fatalf("route changed to %q", got)
-	}
-}
-
-func TestDaemonConnRejectsCrossPeerRenameCollision(t *testing.T) {
-	dc := &daemonConn{
-		peers: map[string]*daemonPeer{
-			"local": {
-				id:    "local",
-				known: map[string]bool{"shared": true},
-			},
-			"remote:gpu": {
-				id:    "remote:gpu",
-				known: map[string]bool{"remote": true},
-			},
-		},
-		sessionPeer: map[string]string{
-			"shared": "local",
-			"remote": "remote:gpu",
-		},
-		defaultPeer: "local",
-	}
-	if !dc.sessionKnownOnOtherPeer("remote:gpu", "shared") {
-		t.Fatal("expected cross-peer name collision")
 	}
 }
 
@@ -245,12 +545,6 @@ func TestReconnectWaitsForSubscriptionAndBacksOff(t *testing.T) {
 	}
 }
 
-type closedReadWriteCloser struct{}
-
-func (*closedReadWriteCloser) Read([]byte) (int, error)    { return 0, io.EOF }
-func (*closedReadWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
-func (*closedReadWriteCloser) Close() error                { return nil }
-
 func TestPeerInitialSubscriptionAckCountsOnce(t *testing.T) {
 	dc := &daemonConn{pendingSubs: 2}
 	peer := &daemonPeer{known: make(map[string]bool)}
@@ -264,51 +558,92 @@ func TestPeerInitialSubscriptionAckCountsOnce(t *testing.T) {
 	}
 }
 
-func TestRemoteOnlyConnectionFiltersUnconfiguredSessions(t *testing.T) {
-	dc := &daemonConn{
-		peers: map[string]*daemonPeer{
-			"remote:gpu": {id: "remote:gpu"},
-		},
-		sessionPeer: map[string]string{"configured": "remote:gpu"},
-		defaultPeer: "remote:gpu",
+func TestMultiDaemonConnMergesPeersOverPipes(t *testing.T) {
+	localClient, localServer := net.Pipe()
+	remoteClient, remoteServer := net.Pipe()
+	t.Cleanup(func() {
+		_ = localServer.Close()
+		_ = remoteServer.Close()
+	})
+
+	endpoints := map[string]daemonEndpoint{
+		"local":      &singleConnEndpoint{id: "local", conn: localClient},
+		"remote:gpu": &singleConnEndpoint{id: "remote:gpu", conn: remoteClient},
 	}
-	if !dc.acceptSession("remote:gpu", "configured") {
-		t.Fatal("configured remote session was rejected")
+	dc, err := newMultiDaemonConn(endpoints)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if dc.acceptSession("remote:gpu", "unconfigured") {
-		t.Fatal("unconfigured remote session was accepted")
+	t.Cleanup(dc.closePeers)
+	shadow := shadowSessionName("dev", dc.localID)
+
+	serve := func(conn net.Conn, events []daemon.SessionEvent, input chan<- string) {
+		ft, _, err := daemon.ReadFrame(conn)
+		if err != nil || ft != daemon.FrameRequest {
+			return
+		}
+		for _, event := range events {
+			_ = daemon.WriteFrame(conn, daemon.FrameSessionEvent, daemon.MarshalJSON(event))
+		}
+		_ = daemon.WriteFrame(conn, daemon.FrameResponse, daemon.MarshalJSON(daemon.Response{OK: true}))
+
+		ft, payload, err := daemon.ReadFrame(conn)
+		if err == nil && ft == daemon.FrameTaggedInput {
+			session, _, decodeErr := daemon.DecodeTaggedInput(payload)
+			if decodeErr == nil {
+				input <- session
+			}
+		}
+	}
+
+	localInput := make(chan string, 1)
+	remoteInput := make(chan string, 1)
+	go serve(localServer, []daemon.SessionEvent{
+		{Type: "snapshot", Session: "work", Info: daemon.SessionInfo{Name: "work", Tabs: []daemon.TabInfo{{Name: "shell"}}}},
+	}, localInput)
+	go serve(remoteServer, []daemon.SessionEvent{
+		{Type: "snapshot", Session: shadow, Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}}},
+		{Type: "snapshot", Session: "foreign", Info: daemon.SessionInfo{Name: "foreign"}},
+	}, remoteInput)
+
+	program, messages := startTestProgram(t)
+	if err := dc.Subscribe(program); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := make(map[string]bool)
+	deadline := time.After(2 * time.Second)
+	for len(seen) < 2 {
+		select {
+		case msg := <-messages:
+			if event, ok := msg.(daemonSessionEventMsg); ok {
+				seen[event.Event.Session] = true
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for snapshots: %v", seen)
+		}
+	}
+	if seen["foreign"] || seen[shadow] {
+		t.Fatalf("foreign or raw shadow name leaked: %v", seen)
+	}
+	if !seen["work"] || !seen["dev"] {
+		t.Fatalf("unexpected snapshots: %v", seen)
+	}
+
+	// Input follows each composite's active part with the daemon-side name.
+	dc.SendInput("work", []byte("a"))
+	dc.SendInput("dev", []byte("b"))
+	if got := <-localInput; got != "work" {
+		t.Fatalf("local input routed to %q", got)
+	}
+	if got := <-remoteInput; got != shadow {
+		t.Fatalf("remote input routed to %q, want %q", got, shadow)
 	}
 }
 
-func TestUnnamedCreateOnRemoteDefaultPeerClaimsCreatedSession(t *testing.T) {
-	peer := &daemonPeer{
-		id:    "remote:gpu",
-		conn:  &closedReadWriteCloser{},
-		known: make(map[string]bool),
-	}
-	dc := &daemonConn{
-		peers:          map[string]*daemonPeer{"remote:gpu": peer},
-		sessionPeer:    map[string]string{},
-		pendingCreates: map[string]int{},
-		defaultPeer:    "remote:gpu",
-	}
-
-	dc.CreateSession("", nil, 80, 24, "")
-	if dc.pendingCreates["remote:gpu"] != 1 {
-		t.Fatalf("pendingCreates = %d, want 1 after unnamed create", dc.pendingCreates["remote:gpu"])
-	}
-
-	dc.claimPendingCreate("remote:gpu", "s1")
-	if !dc.acceptSession("remote:gpu", "s1") {
-		t.Fatal("daemon-named session from own create was rejected")
-	}
-	if dc.pendingCreates["remote:gpu"] != 0 {
-		t.Fatalf("pendingCreates = %d, want 0 after claim", dc.pendingCreates["remote:gpu"])
-	}
-
-	// A second created event with no pending create must stay filtered.
-	dc.claimPendingCreate("remote:gpu", "foreign")
-	if dc.acceptSession("remote:gpu", "foreign") {
-		t.Fatal("foreign session was claimed without a pending create")
+func mustUnmarshal(t *testing.T, payload []byte, v any) {
+	t.Helper()
+	if err := json.Unmarshal(payload, v); err != nil {
+		t.Fatalf("unmarshal: %v", err)
 	}
 }

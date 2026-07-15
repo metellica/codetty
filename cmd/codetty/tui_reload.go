@@ -9,8 +9,9 @@ import (
 	"codetty/config"
 )
 
-// reloadConfig hot-reloads the .codetty.toml config file, adding/removing tabs
-// to match the desired state without restarting existing processes.
+// reloadConfig hot-reloads the .codetty.toml config file, adding/removing
+// tabs (local and remote) to match the desired state without restarting
+// existing processes.
 func (m *tuiModel) reloadConfig() {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -37,67 +38,137 @@ func (m *tuiModel) reloadConfig() {
 	if m.conn == nil {
 		return
 	}
-	_, routes, err := buildConfigEndpoints(cfg, sessions, defaultSocketPath())
+	endpoints, plans, err := buildConfigEndpoints(cfg, sessions, defaultSocketPath())
 	if err != nil {
 		log.Printf("reload: endpoints: %v", err)
 		return
 	}
 
-	refreshPeers := make(map[string]bool)
-	for _, s := range sessions {
-		sess := m.sessionByName(s.Name)
-		target := routes[s.Name]
-		if sess != nil {
-			if current := m.conn.SessionPeer(s.Name); current != target {
-				log.Printf(
-					"reload: session %q target changed from %s to %s; restart codetty up to migrate it",
-					s.Name,
-					current,
-					target,
-				)
+	if !m.conn.multi() {
+		m.reloadLocalOnly(plans)
+		return
+	}
+
+	cols, rows := m.focusedContentSize()
+	for _, plan := range plans {
+		display := plan.Session.Name
+		desiredPeers := make(map[string]bool, len(plan.Containers))
+		for _, cp := range plan.Containers {
+			desiredPeers[cp.EndpointID] = true
+			if cp.EndpointID != localPeerID && !m.conn.HasPeer(cp.EndpointID) {
+				endpoint := endpoints[cp.EndpointID]
+				if err := endpoint.Ensure(); err != nil {
+					log.Printf("reload: prepare %s: %v", cp.EndpointID, err)
+					continue
+				}
+				// Check for an existing shadow before subscribing: if it
+				// already exists, adopt it as-is instead of re-creating
+				// its tabs (its state streams in via the subscription).
+				current, err := querySessionsEndpoint(endpoint)
+				if err != nil {
+					log.Printf("reload: query %s: %v", cp.EndpointID, err)
+					continue
+				}
+				exists := endpointSessionNames(current)[cp.Container]
+				if err := m.conn.AddPeer(cp.EndpointID, endpoint); err != nil {
+					log.Printf("reload: connect %s: %v", cp.EndpointID, err)
+					continue
+				}
+				if !exists {
+					m.createContainerTabs(display, cp, uint16(cols), uint16(rows))
+				}
 				continue
 			}
-		} else if !m.conn.RouteSession(s.Name, target) {
-			log.Printf("reload: session %q uses a new remote target; restart codetty up to connect it", s.Name)
-			continue
-		} else if target != "local" {
-			exists, err := m.conn.PeerHasSession(target, s.Name)
-			if err != nil {
-				log.Printf("reload: query session %q: %v", s.Name, err)
+
+			tabs, exists := m.conn.ContainerTabs(display, cp.EndpointID)
+			if !exists {
+				m.createContainerTabs(display, cp, uint16(cols), uint16(rows))
 				continue
 			}
-			if exists {
-				refreshPeers[target] = true
-				continue
+
+			// Diff this container's tabs against the desired set.
+			// Create before close so a close never targets a container's
+			// last remaining tab: per-peer frames are FIFO, so the daemon
+			// appends the new tabs (keeping existing indices stable)
+			// before the closes execute.
+			desired := make(map[string]bool, len(cp.Tabs))
+			for _, tab := range cp.Tabs {
+				desired[tab.Name] = true
 			}
-		}
-		if sess == nil {
-			// Session doesn't exist yet — create it with first tab
-			cmd := s.Command
-			dir := s.Dir
-			env := envMapToSlice(s.Env)
-			if len(s.Tabs) > 0 {
-				cmd = s.Tabs[0].Command
-				dir = s.Tabs[0].Dir
-				env = envMapToSlice(s.Tabs[0].Env)
+			existing := make(map[string]bool, len(tabs))
+			for _, tab := range tabs {
+				existing[tab.Name] = true
 			}
-			firstTabName := ""
-			if len(s.Tabs) > 0 {
-				firstTabName = s.Tabs[0].Name
+			for _, tab := range cp.Tabs {
+				if !existing[tab.Name] {
+					m.conn.CreateTabOn(
+						display, cp.EndpointID, tab.Name,
+						tab.Command, tab.Dir, envMapToSlice(tab.Env),
+						uint16(cols), uint16(rows),
+					)
+				}
 			}
-			cols, rows := m.focusedContentSize()
-			m.conn.CreateSessionWithEnv(s.Name, cmd, uint16(cols), uint16(rows), dir, env, firstTabName)
-			// Tabs will be created after the session appears (via event)
-			// Store pending tabs for deferred creation
-			m.pendingReloadTabs[s.Name] = s.Tabs
-			continue
+			// Close in reverse order to keep part-local indices stable.
+			for i := len(tabs) - 1; i >= 0; i-- {
+				if !desired[tabs[i].Name] {
+					m.conn.CloseTabOn(display, cp.EndpointID, i)
+				}
+			}
 		}
 
-		// Session exists — diff tabs
-		m.diffAndApplyTabs(sess, s.Tabs)
+		// Kill containers whose tabs all moved elsewhere or were removed
+		// from the config. Desired containers were processed above, so any
+		// replacement creates are already in flight.
+		for _, peerID := range m.conn.ContainerPeers(display) {
+			if !desiredPeers[peerID] {
+				m.conn.KillContainerOn(display, peerID)
+			}
+		}
 	}
-	for peerID := range refreshPeers {
-		m.conn.RefreshPeer(peerID)
+}
+
+// createContainerTabs creates every desired tab of a container; the first
+// CreateTabOn creates the container session itself and the rest are queued
+// until it appears.
+func (m *tuiModel) createContainerTabs(display string, cp containerPlan, cols, rows uint16) {
+	for _, tab := range cp.Tabs {
+		m.conn.CreateTabOn(
+			display, cp.EndpointID, tab.Name,
+			tab.Command, tab.Dir, envMapToSlice(tab.Env),
+			cols, rows,
+		)
+	}
+}
+
+// reloadLocalOnly applies a reload over a legacy single-daemon connection:
+// only local containers are diffed, remote tabs are reported.
+func (m *tuiModel) reloadLocalOnly(plans []sessionPlan) {
+	for _, plan := range plans {
+		var localTabs []config.ResolvedTab
+		for _, cp := range plan.Containers {
+			if cp.EndpointID == localPeerID {
+				localTabs = cp.Tabs
+			} else {
+				log.Printf("reload: session %q has remote tabs; restart codetty to connect them", plan.Session.Name)
+			}
+		}
+		if len(localTabs) == 0 {
+			continue
+		}
+		sess := m.sessionByName(plan.Session.Name)
+		if sess == nil {
+			first := localTabs[0]
+			cols, rows := m.focusedContentSize()
+			m.conn.CreateSessionWithEnv(
+				plan.Session.Name, first.Command,
+				uint16(cols), uint16(rows),
+				first.Dir, envMapToSlice(first.Env), first.Name,
+			)
+			// Remaining tabs are created once the session appears.
+			m.pendingReloadTabs[plan.Session.Name] = localTabs
+			continue
+		}
+		m.diffAndApplyTabs(sess, localTabs)
 	}
 }
 

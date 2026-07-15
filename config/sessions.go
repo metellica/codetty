@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -140,6 +141,9 @@ func (cfg *SessionsConfig) Validate() error {
 	for _, sd := range cfg.Session {
 		if sd.Name == "" {
 			return fmt.Errorf("session with empty name")
+		}
+		if strings.Contains(sd.Name, "@@") {
+			return fmt.Errorf("session %q: name must not contain \"@@\" (reserved for remote shadow sessions)", sd.Name)
 		}
 		if seen[sd.Name] {
 			return fmt.Errorf("duplicate session name: %q", sd.Name)
@@ -308,21 +312,18 @@ func (cfg *SessionsConfig) resolveSession(sd SessionDef, configDir string) (Reso
 		rs.Tabs = append(rs.Tabs, rt)
 	}
 
-	if len(rs.Tabs) > 0 {
-		target := rs.Tabs[0].Remote
-		for _, tab := range rs.Tabs[1:] {
-			if tab.Remote != target {
-				return ResolvedSession{}, fmt.Errorf(
-					"tabs %q and %q use different execution targets; split local and remote tabs into separate sessions",
-					rs.Tabs[0].Name,
-					tab.Name,
-				)
-			}
-		}
-		rs.Remote = target
-		rs.Command = rs.Tabs[0].Command
-		rs.Dir = rs.Tabs[0].Dir
-		rs.Env = rs.Tabs[0].Env
+	if len(rs.Tabs) == 0 {
+		// Synthesize the implicit single tab so downstream code can treat
+		// every session as a list of tabs with per-tab execution targets.
+		// Name it like the daemon names a session's first tab so config
+		// reload diffs match instead of duplicating the tab.
+		rs.Tabs = []ResolvedTab{{
+			Name:    "default",
+			Command: rs.Command,
+			Dir:     rs.Dir,
+			Env:     rs.Env,
+			Remote:  rs.Remote,
+		}}
 	}
 
 	return rs, nil

@@ -249,20 +249,50 @@ func (m *tuiModel) handleCreateKey(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *tuiModel) handleCreateTabKey(msg tea.KeyMsg) tea.Cmd {
+	if m.createTabPicking {
+		switch msg.Type {
+		case tea.KeyEscape:
+			m.resetCreateTab()
+		case tea.KeyUp:
+			if m.createTabPick > 0 {
+				m.createTabPick--
+			}
+		case tea.KeyDown:
+			if m.createTabPick < len(m.createTabTargets)-1 {
+				m.createTabPick++
+			}
+		case tea.KeyEnter:
+			m.createTabPicking = false
+		case tea.KeyRunes:
+			if len(msg.Runes) == 1 {
+				switch msg.Runes[0] {
+				case 'k':
+					if m.createTabPick > 0 {
+						m.createTabPick--
+					}
+				case 'j':
+					if m.createTabPick < len(m.createTabTargets)-1 {
+						m.createTabPick++
+					}
+				}
+			}
+		}
+		return nil
+	}
 	switch msg.Type {
 	case tea.KeyEnter:
 		name := m.createTabText
 		sessName := m.createTabSession
-		m.creatingTab = false
-		m.createTabText = ""
-		m.createTabSession = ""
+		target := remoteTarget{label: "local", id: localPeerID}
+		if len(m.createTabTargets) > 0 && m.createTabPick < len(m.createTabTargets) {
+			target = m.createTabTargets[m.createTabPick]
+		}
+		m.resetCreateTab()
 		if sessName != "" && m.conn != nil {
-			m.conn.CreateTab(sessName, name, nil, "", nil)
+			return m.createTabOnTarget(sessName, name, target)
 		}
 	case tea.KeyEscape:
-		m.creatingTab = false
-		m.createTabText = ""
-		m.createTabSession = ""
+		m.resetCreateTab()
 	case tea.KeyBackspace:
 		if len(m.createTabText) > 0 {
 			m.createTabText = trimLastRune(m.createTabText)
@@ -273,6 +303,43 @@ func (m *tuiModel) handleCreateTabKey(msg tea.KeyMsg) tea.Cmd {
 		m.createTabText += " "
 	}
 	return nil
+}
+
+func (m *tuiModel) resetCreateTab() {
+	m.creatingTab = false
+	m.createTabText = ""
+	m.createTabSession = ""
+	m.createTabTargets = nil
+	m.createTabPicking = false
+	m.createTabPick = 0
+}
+
+// createTabOnTarget creates the named tab on the chosen execution target,
+// connecting (and deploying, if needed) the remote daemon first.
+func (m *tuiModel) createTabOnTarget(session, name string, target remoteTarget) tea.Cmd {
+	conn := m.conn
+	if target.endpoint == nil {
+		if conn.multi() {
+			cols, rows := m.focusedContentSize()
+			conn.CreateTabOn(session, localPeerID, name, nil, "", nil, uint16(cols), uint16(rows))
+		} else {
+			conn.CreateTab(session, name, nil, "", nil)
+		}
+		return nil
+	}
+	cols, rows := m.focusedContentSize()
+	return func() tea.Msg {
+		if !conn.HasPeer(target.id) {
+			if err := target.endpoint.Ensure(); err != nil {
+				return tuiNoticeMsg{text: fmt.Sprintf("remote %s: %v", target.label, err)}
+			}
+			if err := conn.AddPeer(target.id, target.endpoint); err != nil {
+				return tuiNoticeMsg{text: fmt.Sprintf("remote %s: %v", target.label, err)}
+			}
+		}
+		conn.CreateTabOn(session, target.id, name, nil, "", nil, uint16(cols), uint16(rows))
+		return nil
+	}
 }
 
 func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
@@ -401,6 +468,9 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 				m.creatingTab = true
 				m.createTabText = fmt.Sprintf("tab-%d", len(sess.Tabs))
 				m.createTabSession = sess.Name
+				m.createTabTargets = loadRemoteTargets()
+				m.createTabPick = 0
+				m.createTabPicking = len(m.createTabTargets) > 1
 			}
 			return nil
 		case 'w':

@@ -70,17 +70,33 @@ command = ["nvim", "."]
 # command = ["copilot"]
 # dir = "/workspace/project"
 #
-# 单 tab session 也可在 tab 上声明 remote：
+# remote 也可以按 tab 声明，同一 session 可混合本地与远程 tab：
 # [[session]]
-# name = "gpu-shell"
+# name = "dev"
 #
 #   [[session.tab]]
-#   name = "shell"
-#   remote = "gpu"
-#   command = ["bash"]
+#   name = "shell"              # 本地 tab
 #
-# 同一 session 的所有 tab 必须位于同一个本地或远程 daemon；如需混合，
-# 请拆成多个 session。多个 session 指向同一 host + instance 时会共享连接。
+#   [[session.tab]]
+#   name = "agent"
+#   remote = "gpu"              # 远程 tab（在 gpu 上运行）
+#   command = ["copilot"]
+#   dir = "/workspace/project"
+#
+# session 级 remote 是 tab 的默认值；单个 tab 可用 local = true 强制本地：
+# [[session]]
+# name = "gpu-work"
+# remote = "gpu"
+#
+#   [[session.tab]]
+#   name = "agent"
+#   command = ["copilot"]       # 继承 session 的 remote = "gpu"
+#
+#   [[session.tab]]
+#   name = "notes"
+#   local = true                # 强制本地运行
+#
+# 多个 session/tab 指向同一 host + instance 时会共享连接。
 
 # Raw SSH 保持为普通本地命令，不会自动升级为托管远程模式：
 # [[session]]

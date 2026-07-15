@@ -102,8 +102,15 @@ func TestResolve_NativeSession(t *testing.T) {
 	if results[0].Dir != "/project" {
 		t.Fatalf("dir = %q, want /project", results[0].Dir)
 	}
-	if len(results[0].Tabs) != 0 {
-		t.Fatalf("session should have 0 tabs, got %d", len(results[0].Tabs))
+	if len(results[0].Tabs) != 1 {
+		t.Fatalf("session should have 1 implicit tab, got %d", len(results[0].Tabs))
+	}
+	tab := results[0].Tabs[0]
+	if tab.Name != "default" {
+		t.Fatalf("implicit tab name = %q, want default", tab.Name)
+	}
+	if tab.Remote != "" || tab.Dir != "/project" || len(tab.Command) == 0 || tab.Command[0] != "bash" {
+		t.Fatalf("implicit tab = %+v", tab)
 	}
 }
 
@@ -218,7 +225,7 @@ func TestResolve_RemotePathsStayRemote(t *testing.T) {
 	}
 }
 
-func TestResolve_TabRemoteSelectsSessionTarget(t *testing.T) {
+func TestResolve_TabRemoteStaysPerTab(t *testing.T) {
 	cfg := &SessionsConfig{
 		Remote: map[string]RemoteDef{"gpu": {Host: "gpu01"}},
 		Session: []SessionDef{{
@@ -235,12 +242,15 @@ func TestResolve_TabRemoteSelectsSessionTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if results[0].Remote != "gpu" || results[0].Tabs[0].Remote != "gpu" {
-		t.Fatalf("resolved target = %+v", results[0])
+	if results[0].Remote != "" {
+		t.Fatalf("session remote = %q, want local session with remote tab", results[0].Remote)
+	}
+	if results[0].Tabs[0].Remote != "gpu" {
+		t.Fatalf("tab remote = %q, want gpu", results[0].Tabs[0].Remote)
 	}
 }
 
-func TestResolve_RejectsMixedExecutionTargets(t *testing.T) {
+func TestResolve_AllowsMixedExecutionTargets(t *testing.T) {
 	cfg := &SessionsConfig{
 		Remote: map[string]RemoteDef{"gpu": {Host: "gpu01"}},
 		Session: []SessionDef{{
@@ -251,8 +261,13 @@ func TestResolve_RejectsMixedExecutionTargets(t *testing.T) {
 			},
 		}},
 	}
-	if _, err := cfg.Resolve("/project"); err == nil {
-		t.Fatal("expected mixed execution target error")
+	results, err := cfg.Resolve("/project")
+	if err != nil {
+		t.Fatalf("mixed targets should resolve: %v", err)
+	}
+	tabs := results[0].Tabs
+	if len(tabs) != 2 || tabs[0].Remote != "" || tabs[1].Remote != "gpu" {
+		t.Fatalf("tabs = %+v", tabs)
 	}
 }
 
@@ -477,5 +492,14 @@ command = ["bash"]
 	}
 	if cfg.Session[0].Tab[1].Dir != "./src" {
 		t.Fatalf("tab[1].Dir = %q, want ./src", cfg.Session[0].Tab[1].Dir)
+	}
+}
+
+func TestValidate_RejectsShadowSeparatorInName(t *testing.T) {
+	cfg := &SessionsConfig{
+		Session: []SessionDef{{Name: "dev@@abc"}},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for session name containing @@")
 	}
 }

@@ -88,6 +88,15 @@ type tuiModel struct {
 	creatingTab      bool
 	createTabText    string
 	createTabSession string // target session name (captured at prompt time)
+	// Target picker: Local plus configured remotes ([remote.*]); shown as
+	// a first stage when remotes are configured.
+	createTabTargets []remoteTarget
+	createTabPicking bool
+	createTabPick    int
+
+	// Transient status-bar notice (e.g. remote connect failures), cleared
+	// on the next key press.
+	notice string
 
 	// Text selection
 	sel textSelection
@@ -180,6 +189,11 @@ func (m *tuiModel) popMode() bool {
 	m.selected = prev.selected
 	m.floatingIdx = prev.floatingIdx
 	return true
+}
+
+// tuiNoticeMsg sets a transient status-bar notice from an async command.
+type tuiNoticeMsg struct {
+	text string
 }
 
 func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tuiModel {
@@ -283,6 +297,10 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.ClearScreen
 
+	case tuiNoticeMsg:
+		m.notice = msg.text
+		return m, nil
+
 	case daemonSubscribedMsg:
 		m.subscribed = true
 		m.maybeAutoCreate()
@@ -329,6 +347,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyMsg:
+		m.notice = ""
 		if m.confirmKill {
 			return m, m.handleConfirmKillKey(msg)
 		}

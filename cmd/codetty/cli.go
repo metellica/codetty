@@ -92,26 +92,16 @@ func cmdAttach(args []string) {
 
 func startTUI(sockPath string, sc startupConfig) {
 	endpoint := localDaemonEndpoint{sockPath: sockPath}
-	startTUIWithEndpoints(map[string]daemonEndpoint{endpoint.ID(): endpoint}, nil, sc)
+	startTUIWithEndpoints(map[string]daemonEndpoint{endpoint.ID(): endpoint}, sc)
 }
 
 func startTUIWithEndpoints(
 	endpoints map[string]daemonEndpoint,
-	routes map[string]string,
 	sc startupConfig,
 ) {
-	var conn *daemonConn
-	var err error
-	if len(endpoints) == 1 {
-		if endpoint, ok := endpoints["local"]; ok && len(routes) == 0 {
-			if local, ok := endpoint.(localDaemonEndpoint); ok {
-				conn, err = newDaemonConn(local.sockPath)
-			}
-		}
-	}
-	if conn == nil && err == nil {
-		conn, err = newMultiDaemonConn(endpoints, routes)
-	}
+	// Always use multi-peer mode: remote peers can then be added at
+	// runtime (remote tabs), with the local daemon as the session owner.
+	conn, err := newMultiDaemonConn(endpoints)
 	if err != nil {
 		log.Fatalf("connect to daemon: %v", err)
 	}
@@ -187,12 +177,9 @@ func cmdUp(args []string) {
 	}
 
 	sockPath := defaultSocketPath()
-	endpoints, routes, err := buildConfigEndpoints(cfg, sessions, sockPath)
+	endpoints, plans, err := buildConfigEndpoints(cfg, sessions, sockPath)
 	if err != nil {
 		log.Fatalf("resolve endpoints: %v", err)
-	}
-	if len(endpoints) == 0 {
-		endpoints["local"] = localDaemonEndpoint{sockPath: sockPath}
 	}
 	if err := ensureEndpoints(endpoints); err != nil {
 		log.Fatalf("prepare daemon: %v", err)
@@ -208,44 +195,32 @@ func cmdUp(args []string) {
 	}
 	cols, rows := terminalSize()
 
-	for _, s := range sessions {
-		endpointID := routes[s.Name]
-		endpoint := endpoints[endpointID]
-		if existingByEndpoint[endpointID][s.Name] {
-			fmt.Fprintf(os.Stderr, "session %q already exists, skipping\n", s.Name)
-			continue
-		}
+	for _, plan := range plans {
+		for _, cp := range plan.Containers {
+			endpoint := endpoints[cp.EndpointID]
+			if existingByEndpoint[cp.EndpointID][cp.Container] {
+				fmt.Fprintf(os.Stderr, "session %q already exists on %s, skipping\n", plan.Session.Name, cp.EndpointID)
+				continue
+			}
 
-		cmd := s.Command
-		dir := s.Dir
-		env := envToSlice(s.Env)
+			first := cp.Tabs[0]
+			cmd := first.Command
+			if err := createDaemonSessionEndpoint(
+				endpoint, cp.Container, cmd, cols, rows, first.Dir, envToSlice(first.Env), first.Name,
+			); err != nil {
+				log.Printf("create session %q on %s: %v", plan.Session.Name, cp.EndpointID, err)
+				continue
+			}
+			existingByEndpoint[cp.EndpointID][cp.Container] = true
+			fmt.Fprintf(os.Stderr, "created session %q on %s\n", plan.Session.Name, cp.EndpointID)
 
-		if len(s.Tabs) > 0 {
-			firstTab := s.Tabs[0]
-			cmd = firstTab.Command
-			dir = firstTab.Dir
-			env = envToSlice(firstTab.Env)
-		}
-
-		firstTabName := ""
-		if len(s.Tabs) > 0 {
-			firstTabName = s.Tabs[0].Name
-		}
-		if err := createDaemonSessionEndpoint(endpoint, s.Name, cmd, cols, rows, dir, env, firstTabName); err != nil {
-			log.Printf("create session %q: %v", s.Name, err)
-			continue
-		}
-		existingByEndpoint[endpointID][s.Name] = true
-		fmt.Fprintf(os.Stderr, "created session %q\n", s.Name)
-
-		if len(s.Tabs) > 1 {
-			for _, tab := range s.Tabs[1:] {
+			for _, tab := range cp.Tabs[1:] {
 				tabCmd := tab.Command
 				if len(tabCmd) == 0 {
 					tabCmd = cmd
 				}
-				if err := createDaemonTabEndpoint(endpoint, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
-					log.Printf("create tab %q in session %q: %v", tab.Name, s.Name, err)
+				if err := createDaemonTabEndpoint(endpoint, cp.Container, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
+					log.Printf("create tab %q in session %q: %v", tab.Name, plan.Session.Name, err)
 				} else {
 					fmt.Fprintf(os.Stderr, "  created tab %q\n", tab.Name)
 				}
@@ -271,7 +246,7 @@ func cmdUp(args []string) {
 		sc.focusTarget = sessions[0].Name
 	}
 
-	startTUIWithEndpoints(endpoints, routes, sc)
+	startTUIWithEndpoints(endpoints, sc)
 }
 
 // envToSlice converts an env map to sorted "KEY=value" entries.
@@ -596,12 +571,9 @@ func cmdReload(args []string) {
 	}
 
 	sockPath := defaultSocketPath()
-	endpoints, routes, err := buildConfigEndpoints(cfg, sessions, sockPath)
+	endpoints, plans, err := buildConfigEndpoints(cfg, sessions, sockPath)
 	if err != nil {
 		log.Fatalf("resolve endpoints: %v", err)
-	}
-	if len(endpoints) == 0 {
-		endpoints["local"] = localDaemonEndpoint{sockPath: sockPath}
 	}
 	if err := ensureEndpoints(endpoints); err != nil {
 		log.Fatalf("prepare daemon: %v", err)
@@ -617,77 +589,62 @@ func cmdReload(args []string) {
 	}
 	cols, rows := terminalSize()
 
-	for _, s := range sessions {
-		endpointID := routes[s.Name]
-		endpoint := endpoints[endpointID]
-		current, exists := existing[endpointID][s.Name]
-		if !exists {
-			// Create new session with first tab
-			cmd := s.Command
-			dir := s.Dir
-			env := envToSlice(s.Env)
-			if len(s.Tabs) > 0 {
-				cmd = s.Tabs[0].Command
-				dir = s.Tabs[0].Dir
-				env = envToSlice(s.Tabs[0].Env)
-			}
-			firstTabName := ""
-			if len(s.Tabs) > 0 {
-				firstTabName = s.Tabs[0].Name
-			}
-			if err := createDaemonSessionEndpoint(endpoint, s.Name, cmd, cols, rows, dir, env, firstTabName); err != nil {
-				log.Printf("create session %q: %v", s.Name, err)
-				continue
-			}
-			fmt.Fprintf(os.Stderr, "created session %q\n", s.Name)
+	for _, plan := range plans {
+		for _, cp := range plan.Containers {
+			endpoint := endpoints[cp.EndpointID]
+			current, exists := existing[cp.EndpointID][cp.Container]
+			if !exists {
+				// Create the container with its first tab
+				first := cp.Tabs[0]
+				if err := createDaemonSessionEndpoint(
+					endpoint, cp.Container, first.Command, cols, rows, first.Dir, envToSlice(first.Env), first.Name,
+				); err != nil {
+					log.Printf("create session %q on %s: %v", plan.Session.Name, cp.EndpointID, err)
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "created session %q on %s\n", plan.Session.Name, cp.EndpointID)
 
-			// Create additional tabs
-			if len(s.Tabs) > 1 {
-				for _, tab := range s.Tabs[1:] {
-					tabCmd := tab.Command
-					if err := createDaemonTabEndpoint(endpoint, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
+				for _, tab := range cp.Tabs[1:] {
+					if err := createDaemonTabEndpoint(endpoint, cp.Container, tab.Name, tab.Command, tab.Dir, envToSlice(tab.Env)); err != nil {
 						log.Printf("  create tab %q: %v", tab.Name, err)
 					}
 				}
+				continue
 			}
-			continue
-		}
 
-		// Session exists — diff tabs via daemon
-		// Get current tab info
-		currentTabs := make([]string, len(current.Tabs))
-		for i, tab := range current.Tabs {
-			currentTabs[i] = tab.Name
-		}
+			// Container exists — diff tabs via daemon
+			currentTabs := make([]string, len(current.Tabs))
+			for i, tab := range current.Tabs {
+				currentTabs[i] = tab.Name
+			}
 
-		// Build desired tab names
-		desiredNames := make(map[string]bool)
-		for _, tab := range s.Tabs {
-			desiredNames[tab.Name] = true
-		}
+			desiredNames := make(map[string]bool)
+			for _, tab := range cp.Tabs {
+				desiredNames[tab.Name] = true
+			}
 
-		// Close tabs not in desired (reverse order)
-		for i := len(currentTabs) - 1; i >= 0; i-- {
-			if !desiredNames[currentTabs[i]] {
-				fmt.Fprintf(os.Stderr, "  closing tab %q in %q\n", currentTabs[i], s.Name)
-				if err := closeDaemonTabEndpoint(endpoint, s.Name, i); err != nil {
-					log.Printf("  close tab %q: %v", currentTabs[i], err)
+			// Close tabs not in desired (reverse order)
+			for i := len(currentTabs) - 1; i >= 0; i-- {
+				if !desiredNames[currentTabs[i]] {
+					fmt.Fprintf(os.Stderr, "  closing tab %q in %q\n", currentTabs[i], plan.Session.Name)
+					if err := closeDaemonTabEndpoint(endpoint, cp.Container, i); err != nil {
+						log.Printf("  close tab %q: %v", currentTabs[i], err)
+					}
 				}
 			}
-		}
 
-		// Add tabs not in current
-		currentSet := make(map[string]bool)
-		for _, name := range currentTabs {
-			currentSet[name] = true
-		}
-		for _, tab := range s.Tabs {
-			if !currentSet[tab.Name] {
-				tabCmd := tab.Command
-				if err := createDaemonTabEndpoint(endpoint, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
-					log.Printf("  create tab %q: %v", tab.Name, err)
-				} else {
-					fmt.Fprintf(os.Stderr, "  added tab %q to %q\n", tab.Name, s.Name)
+			// Add tabs not in current
+			currentSet := make(map[string]bool)
+			for _, name := range currentTabs {
+				currentSet[name] = true
+			}
+			for _, tab := range cp.Tabs {
+				if !currentSet[tab.Name] {
+					if err := createDaemonTabEndpoint(endpoint, cp.Container, tab.Name, tab.Command, tab.Dir, envToSlice(tab.Env)); err != nil {
+						log.Printf("  create tab %q: %v", tab.Name, err)
+					} else {
+						fmt.Fprintf(os.Stderr, "  added tab %q to %q\n", tab.Name, plan.Session.Name)
+					}
 				}
 			}
 		}

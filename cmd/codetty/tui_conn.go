@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +13,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// localPeerID is the peer ID of the local daemon in multi-peer mode.
+const localPeerID = "local"
 
 // daemonConn manages the connection between TUI and daemon.
 type daemonConn struct {
@@ -21,14 +25,20 @@ type daemonConn struct {
 	subscribed bool
 	endpoint   daemonEndpoint
 
-	peers       map[string]*daemonPeer
-	sessionPeer map[string]string
-	// pendingCreates counts this client's unnamed create requests per peer,
-	// so the daemon-generated name can be routed back when the "created"
-	// event arrives (guarded by routeMu).
-	pendingCreates map[string]int
-	routeMu        sync.RWMutex
-	defaultPeer    string
+	// Multi-peer mode: the local daemon plus remote daemons hosting
+	// shadow container sessions, merged into composite sessions.
+	peers   map[string]*daemonPeer
+	peersMu sync.RWMutex
+
+	// localID identifies this TUI host inside shadow session names.
+	localID string
+
+	// Composite session state (guarded by compMu).
+	compMu     sync.Mutex
+	composites map[string]*compositeSession // display name -> composite
+	partOwner  map[string]*compositeSession // partKey(peer, name) -> composite
+	queuedTabs map[string][]queuedTab       // partKey -> tabs awaiting container
+
 	pendingSubs int
 	subMu       sync.Mutex
 	closeOnce   sync.Once
@@ -51,6 +61,29 @@ type daemonPeer struct {
 	seen       map[string]bool
 	reconcile  bool
 	initialAck bool
+}
+
+// track records session lifecycle transitions for reconnect reconciliation.
+func (peer *daemonPeer) track(evtType, session, newName string) {
+	peer.stateMu.Lock()
+	defer peer.stateMu.Unlock()
+	switch evtType {
+	case "snapshot", "created":
+		peer.known[session] = true
+		if peer.reconcile {
+			peer.seen[session] = true
+		}
+	case "renamed":
+		delete(peer.known, session)
+		if newName != "" {
+			peer.known[newName] = true
+			if peer.reconcile {
+				peer.seen[newName] = true
+			}
+		}
+	case "exited":
+		delete(peer.known, session)
+	}
 }
 
 // Tea messages from daemon connection
@@ -87,7 +120,7 @@ func newDaemonConn(sockPath string) (*daemonConn, error) {
 	return &daemonConn{conn: conn, sockPath: sockPath, endpoint: endpoint}, nil
 }
 
-func newMultiDaemonConn(endpoints map[string]daemonEndpoint, sessionPeer map[string]string) (*daemonConn, error) {
+func newMultiDaemonConn(endpoints map[string]daemonEndpoint) (*daemonConn, error) {
 	ids := make([]string, 0, len(endpoints))
 	for id := range endpoints {
 		ids = append(ids, id)
@@ -95,18 +128,12 @@ func newMultiDaemonConn(endpoints map[string]daemonEndpoint, sessionPeer map[str
 	sort.Strings(ids)
 
 	dc := &daemonConn{
-		peers:          make(map[string]*daemonPeer, len(endpoints)),
-		sessionPeer:    make(map[string]string, len(sessionPeer)),
-		pendingCreates: make(map[string]int),
-		closed:         make(chan struct{}),
-	}
-	for name, id := range sessionPeer {
-		dc.sessionPeer[name] = id
-	}
-	if _, ok := endpoints["local"]; ok {
-		dc.defaultPeer = "local"
-	} else if len(ids) > 0 {
-		dc.defaultPeer = ids[0]
+		peers:      make(map[string]*daemonPeer, len(endpoints)),
+		localID:    localShadowID(),
+		composites: make(map[string]*compositeSession),
+		partOwner:  make(map[string]*compositeSession),
+		queuedTabs: make(map[string][]queuedTab),
+		closed:     make(chan struct{}),
 	}
 
 	for _, id := range ids {
@@ -124,6 +151,71 @@ func newMultiDaemonConn(endpoints map[string]daemonEndpoint, sessionPeer map[str
 		}
 	}
 	return dc, nil
+}
+
+// multi reports whether this connection runs in multi-peer (composite) mode.
+func (dc *daemonConn) multi() bool {
+	return dc.peers != nil
+}
+
+func (dc *daemonConn) peer(id string) *daemonPeer {
+	dc.peersMu.RLock()
+	defer dc.peersMu.RUnlock()
+	return dc.peers[id]
+}
+
+func (dc *daemonConn) peerList() []*daemonPeer {
+	dc.peersMu.RLock()
+	defer dc.peersMu.RUnlock()
+	list := make([]*daemonPeer, 0, len(dc.peers))
+	for _, peer := range dc.peers {
+		list = append(list, peer)
+	}
+	return list
+}
+
+// HasPeer reports whether the peer is already connected.
+func (dc *daemonConn) HasPeer(id string) bool {
+	return dc.peer(id) != nil
+}
+
+// AddPeer connects to a new daemon endpoint at runtime and subscribes to
+// it, so shadow sessions on it merge into the composite view.
+func (dc *daemonConn) AddPeer(id string, endpoint daemonEndpoint) error {
+	if !dc.multi() {
+		return fmt.Errorf("not in multi-daemon mode")
+	}
+	if dc.peer(id) != nil {
+		return nil
+	}
+	conn, err := endpoint.Dial()
+	if err != nil {
+		return err
+	}
+	peer := &daemonPeer{
+		id:       id,
+		endpoint: endpoint,
+		conn:     conn,
+		known:    make(map[string]bool),
+	}
+	dc.peersMu.Lock()
+	if _, ok := dc.peers[id]; ok {
+		dc.peersMu.Unlock()
+		_ = conn.Close()
+		return nil
+	}
+	dc.peers[id] = peer
+	dc.peersMu.Unlock()
+
+	if err := dc.subscribePeer(peer); err != nil {
+		dc.peersMu.Lock()
+		delete(dc.peers, id)
+		dc.peersMu.Unlock()
+		_ = conn.Close()
+		return err
+	}
+	go dc.readPeerLoop(peer)
+	return nil
 }
 
 // reconnectCmd retries dialing the daemon socket for a few seconds. The
@@ -146,11 +238,12 @@ func reconnectCmd(sockPath string) tea.Cmd {
 func (dc *daemonConn) Subscribe(p *tea.Program) error {
 	dc.program = p
 
-	if len(dc.peers) > 0 {
+	if dc.multi() {
+		peers := dc.peerList()
 		dc.subMu.Lock()
-		dc.pendingSubs = len(dc.peers)
+		dc.pendingSubs = len(peers)
 		dc.subMu.Unlock()
-		for _, peer := range dc.peers {
+		for _, peer := range peers {
 			if err := dc.subscribePeer(peer); err != nil {
 				return err
 			}
@@ -221,37 +314,33 @@ func (dc *daemonConn) handlePeerFrame(peer *daemonPeer, ft daemon.FrameType, pay
 	switch ft {
 	case daemon.FrameTaggedOutput:
 		session, data, err := daemon.DecodeTaggedOutput(payload)
-		if err == nil && dc.acceptSession(peer.id, session) {
-			dc.bufferOutput(session, data)
+		if err != nil {
+			return
+		}
+		if display, ok := dc.mapOutput(peer.id, session); ok {
+			dc.bufferOutput(display, data)
 		}
 	case daemon.FrameSessionEvent:
 		var evt daemon.SessionEvent
 		if json.Unmarshal(payload, &evt) != nil {
 			return
 		}
-		if evt.Type == "created" {
-			dc.claimPendingCreate(peer.id, evt.Session)
+		out, post := dc.mergeEvent(peer, evt)
+		for _, e := range out {
+			dc.program.Send(daemonSessionEventMsg{Event: e})
 		}
-		if dc.acceptEvent(peer.id, evt) {
-			if evt.Type == "renamed" &&
-				evt.Info.Name != "" &&
-				dc.sessionKnownOnOtherPeer(peer.id, evt.Info.Name) {
-				dc.dropConflictingRename(peer, evt.Session)
-				dc.program.Send(daemonSessionEventMsg{Event: daemon.SessionEvent{
-					Type:    "exited",
-					Session: evt.Session,
-				}})
-				return
-			}
-			dc.trackPeerEvent(peer, evt)
-			dc.program.Send(daemonSessionEventMsg{Event: evt})
+		for _, fn := range post {
+			fn()
 		}
 	case daemon.FrameResponse:
 		for _, session := range dc.finishPeerReconcile(peer) {
-			dc.program.Send(daemonSessionEventMsg{Event: daemon.SessionEvent{
-				Type:    "exited",
-				Session: session,
-			}})
+			out, post := dc.removeStalePart(peer.id, session)
+			for _, e := range out {
+				dc.program.Send(daemonSessionEventMsg{Event: e})
+			}
+			for _, fn := range post {
+				fn()
+			}
 		}
 		peer.stateMu.Lock()
 		firstAck := !peer.initialAck
@@ -270,68 +359,23 @@ func (dc *daemonConn) handlePeerFrame(peer *daemonPeer, ft daemon.FrameType, pay
 	}
 }
 
-func (dc *daemonConn) sessionKnownOnOtherPeer(peerID, name string) bool {
-	dc.routeMu.RLock()
-	routedID, routed := dc.sessionPeer[name]
-	dc.routeMu.RUnlock()
-	if routed && routedID != peerID {
-		return true
+// removeStalePart drops a part whose session disappeared while the peer
+// connection was down, and reports the composite fallout.
+func (dc *daemonConn) removeStalePart(peerID, session string) (out []daemon.SessionEvent, post []func()) {
+	dc.compMu.Lock()
+	defer dc.compMu.Unlock()
+	key := partKey(peerID, session)
+	c := dc.partOwner[key]
+	if c == nil {
+		return nil, nil
 	}
-	for id, peer := range dc.peers {
-		if id == peerID {
-			continue
-		}
-		peer.stateMu.Lock()
-		known := peer.known[name]
-		peer.stateMu.Unlock()
-		if known {
-			return true
-		}
+	delete(dc.partOwner, key)
+	delete(dc.queuedTabs, key)
+	p := c.part(peerID)
+	if p == nil {
+		return nil, nil
 	}
-	return false
-}
-
-func (dc *daemonConn) dropConflictingRename(peer *daemonPeer, oldName string) {
-	peer.stateMu.Lock()
-	delete(peer.known, oldName)
-	peer.stateMu.Unlock()
-
-	dc.routeMu.Lock()
-	if id, ok := dc.sessionPeer[oldName]; ok && id == peer.id {
-		delete(dc.sessionPeer, oldName)
-	}
-	dc.routeMu.Unlock()
-}
-
-func (dc *daemonConn) trackPeerEvent(peer *daemonPeer, evt daemon.SessionEvent) {
-	peer.stateMu.Lock()
-	switch evt.Type {
-	case "snapshot", "created":
-		peer.known[evt.Session] = true
-		if peer.reconcile {
-			peer.seen[evt.Session] = true
-		}
-	case "renamed":
-		delete(peer.known, evt.Session)
-		if evt.Info.Name != "" {
-			peer.known[evt.Info.Name] = true
-			if peer.reconcile {
-				peer.seen[evt.Info.Name] = true
-			}
-		}
-	case "exited":
-		delete(peer.known, evt.Session)
-	}
-	peer.stateMu.Unlock()
-
-	if evt.Type == "renamed" && evt.Info.Name != "" {
-		dc.routeMu.Lock()
-		if id, ok := dc.sessionPeer[evt.Session]; ok && id == peer.id {
-			delete(dc.sessionPeer, evt.Session)
-			dc.sessionPeer[evt.Info.Name] = id
-		}
-		dc.routeMu.Unlock()
-	}
+	return dc.removePartLocked(c, p, 0)
 }
 
 func (dc *daemonConn) finishPeerReconcile(peer *daemonPeer) []string {
@@ -351,41 +395,6 @@ func (dc *daemonConn) finishPeerReconcile(peer *daemonPeer) []string {
 	peer.seen = nil
 	sort.Strings(stale)
 	return stale
-}
-
-func (dc *daemonConn) acceptSession(peerID, session string) bool {
-	dc.routeMu.RLock()
-	defer dc.routeMu.RUnlock()
-	if expected, ok := dc.sessionPeer[session]; ok {
-		return expected == peerID
-	}
-	return peerID == "local"
-}
-
-// claimPendingCreate routes a daemon-named session back to the peer that
-// created it in response to this client's own unnamed create request, so
-// its events are not filtered out when the default peer is remote.
-func (dc *daemonConn) claimPendingCreate(peerID, session string) {
-	dc.routeMu.Lock()
-	defer dc.routeMu.Unlock()
-	if dc.pendingCreates[peerID] <= 0 {
-		return
-	}
-	if _, routed := dc.sessionPeer[session]; routed {
-		return
-	}
-	dc.pendingCreates[peerID]--
-	dc.sessionPeer[session] = peerID
-}
-
-func (dc *daemonConn) acceptEvent(peerID string, evt daemon.SessionEvent) bool {
-	if evt.Type == "active" {
-		return dc.acceptSession(peerID, evt.Session)
-	}
-	if evt.Type == "reordered" {
-		return peerID == dc.defaultPeer
-	}
-	return dc.acceptSession(peerID, evt.Session)
 }
 
 func (dc *daemonConn) reconnectPeer(peer *daemonPeer) error {
@@ -506,15 +515,57 @@ func (dc *daemonConn) flushOutput() {
 	}
 }
 
-// SendInput sends tagged input to a session.
+// partRef identifies one daemon-side container of a composite session.
+type partRef struct {
+	peerID string
+	name   string
+}
+
+// activePart resolves the display session's active part (falling back to a
+// same-named local session when the composite is unknown yet).
+func (dc *daemonConn) activePart(display string) partRef {
+	dc.compMu.Lock()
+	defer dc.compMu.Unlock()
+	if c := dc.composites[display]; c != nil && c.active != nil {
+		return partRef{c.active.peerID, c.active.name}
+	}
+	return partRef{localPeerID, display}
+}
+
+// partsOf lists all containers of a display session (falling back to a
+// same-named local session when the composite is unknown yet).
+func (dc *daemonConn) partsOf(display string) []partRef {
+	dc.compMu.Lock()
+	defer dc.compMu.Unlock()
+	c := dc.composites[display]
+	if c == nil || len(c.parts) == 0 {
+		return []partRef{{localPeerID, display}}
+	}
+	refs := make([]partRef, 0, len(c.parts))
+	for _, p := range c.parts {
+		refs = append(refs, partRef{p.peerID, p.name})
+	}
+	return refs
+}
+
+func (dc *daemonConn) writeToPeer(peerID string, ft daemon.FrameType, payload []byte) {
+	dc.writePeerFrame(dc.peer(peerID), ft, payload)
+}
+
+// SendInput sends tagged input to a session (its active part in multi mode).
 func (dc *daemonConn) SendInput(session string, data []byte) {
-	dc.writeSessionFrame(session, daemon.FrameTaggedInput, daemon.EncodeTaggedInput(session, data))
+	if !dc.multi() {
+		_ = daemon.WriteFrame(dc.conn, daemon.FrameTaggedInput, daemon.EncodeTaggedInput(session, data))
+		return
+	}
+	ref := dc.activePart(session)
+	dc.writeToPeer(ref.peerID, daemon.FrameTaggedInput, daemon.EncodeTaggedInput(ref.name, data))
 }
 
 // SendResize sends resize to all sessions.
 func (dc *daemonConn) SendResize(cols, rows uint16) {
-	if len(dc.peers) > 0 {
-		for _, peer := range dc.peers {
+	if dc.multi() {
+		for _, peer := range dc.peerList() {
 			dc.writePeerFrame(peer, daemon.FrameResize, daemon.MarshalJSON(daemon.ResizePayload{
 				Cols: cols, Rows: rows,
 			}))
@@ -526,11 +577,20 @@ func (dc *daemonConn) SendResize(cols, rows uint16) {
 	}))
 }
 
-// SendResizeSession sends resize to a specific session by name.
+// SendResizeSession sends resize to a specific session by name (all of its
+// parts in multi mode, so every container tracks the panel size).
 func (dc *daemonConn) SendResizeSession(name string, cols, rows uint16) {
-	dc.writeSessionFrame(name, daemon.FrameResize, daemon.MarshalJSON(daemon.ResizePayload{
-		Cols: cols, Rows: rows, Name: name,
-	}))
+	if !dc.multi() {
+		_ = daemon.WriteFrame(dc.conn, daemon.FrameResize, daemon.MarshalJSON(daemon.ResizePayload{
+			Cols: cols, Rows: rows, Name: name,
+		}))
+		return
+	}
+	for _, ref := range dc.partsOf(name) {
+		dc.writeToPeer(ref.peerID, daemon.FrameResize, daemon.MarshalJSON(daemon.ResizePayload{
+			Cols: cols, Rows: rows, Name: ref.name,
+		}))
+	}
 }
 
 // CreateSession requests the daemon to create a new session.
@@ -539,6 +599,8 @@ func (dc *daemonConn) CreateSession(name string, command []string, cols, rows ui
 	dc.CreateSessionWithEnv(name, command, cols, rows, dir, nil, "")
 }
 
+// CreateSessionWithEnv creates a session on the local daemon: sessions are
+// a local concept, remote daemons only ever host shadow tab containers.
 func (dc *daemonConn) CreateSessionWithEnv(
 	name string,
 	command []string,
@@ -547,47 +609,75 @@ func (dc *daemonConn) CreateSessionWithEnv(
 	env []string,
 	tabName string,
 ) {
-	if len(dc.peers) > 0 {
-		if name != "" {
-			_ = dc.RouteSession(name, dc.defaultPeer)
-		} else if dc.defaultPeer != "local" {
-			// The daemon will pick a name; remember to claim the resulting
-			// "created" event so the session isn't filtered as unrouted.
-			dc.routeMu.Lock()
-			dc.pendingCreates[dc.defaultPeer]++
-			dc.routeMu.Unlock()
-		}
-	}
-	dc.writeSessionFrame(name, daemon.FrameCreateSession, daemon.MarshalJSON(daemon.CreateSessionRequest{
+	payload := daemon.MarshalJSON(daemon.CreateSessionRequest{
 		Name: name, Command: command, Cols: cols, Rows: rows, Dir: dir, Env: env, TabName: tabName,
-	}))
-}
-
-// KillSession requests the daemon to kill a session.
-func (dc *daemonConn) KillSession(name string) {
-	dc.writeSessionFrame(name, daemon.FrameKillSession, daemon.MarshalJSON(daemon.KillSessionRequest{
-		Name: name,
-	}))
-}
-
-// RenameSession requests the daemon to rename a session.
-func (dc *daemonConn) RenameSession(oldName, newName string) {
-	if len(dc.peers) > 0 {
-		peer := dc.peerForSession(oldName)
-		if peer == nil || dc.sessionKnownOnOtherPeer(peer.id, newName) {
-			return
-		}
+	})
+	if dc.multi() {
+		dc.writeToPeer(localPeerID, daemon.FrameCreateSession, payload)
+		return
 	}
-	dc.writeSessionFrame(oldName, daemon.FrameRenameSession, daemon.MarshalJSON(daemon.RenameSessionRequest{
-		OldName: oldName,
-		NewName: newName,
-	}))
+	_ = daemon.WriteFrame(dc.conn, daemon.FrameCreateSession, payload)
+}
+
+// KillSession requests the daemon to kill a session (all parts in multi mode).
+func (dc *daemonConn) KillSession(name string) {
+	if !dc.multi() {
+		_ = daemon.WriteFrame(dc.conn, daemon.FrameKillSession, daemon.MarshalJSON(daemon.KillSessionRequest{
+			Name: name,
+		}))
+		return
+	}
+	for _, ref := range dc.partsOf(name) {
+		dc.writeToPeer(ref.peerID, daemon.FrameKillSession, daemon.MarshalJSON(daemon.KillSessionRequest{
+			Name: ref.name,
+		}))
+	}
+}
+
+// RenameSession requests the daemon to rename a session. In multi mode all
+// parts are renamed so shadow names stay derived from the display name.
+func (dc *daemonConn) RenameSession(oldName, newName string) {
+	if !dc.multi() {
+		_ = daemon.WriteFrame(dc.conn, daemon.FrameRenameSession, daemon.MarshalJSON(daemon.RenameSessionRequest{
+			OldName: oldName,
+			NewName: newName,
+		}))
+		return
+	}
+	if newName == "" || strings.Contains(newName, shadowSep) {
+		return
+	}
+	dc.compMu.Lock()
+	c := dc.composites[oldName]
+	if c == nil || dc.composites[newName] != nil {
+		dc.compMu.Unlock()
+		return
+	}
+	type renameOp struct {
+		ref partRef
+		to  string
+	}
+	ops := make([]renameOp, 0, len(c.parts))
+	for _, p := range c.parts {
+		want := newName
+		if p.peerID != localPeerID {
+			want = shadowSessionName(newName, dc.localID)
+		}
+		ops = append(ops, renameOp{partRef{p.peerID, p.name}, want})
+	}
+	dc.compMu.Unlock()
+	for _, op := range ops {
+		dc.writeToPeer(op.ref.peerID, daemon.FrameRenameSession, daemon.MarshalJSON(daemon.RenameSessionRequest{
+			OldName: op.ref.name,
+			NewName: op.to,
+		}))
+	}
 }
 
 // Detach sends detach and closes the connection.
 func (dc *daemonConn) Detach() {
-	if len(dc.peers) > 0 {
-		for _, peer := range dc.peers {
+	if dc.multi() {
+		for _, peer := range dc.peerList() {
 			dc.writePeerFrame(peer, daemon.FrameDetach, nil)
 		}
 		dc.closePeers()
@@ -597,10 +687,23 @@ func (dc *daemonConn) Detach() {
 	dc.conn.Close()
 }
 
-// CreateTab requests the daemon to create a new tab within a session.
+// CreateTab requests a new tab within a session. In multi mode the tab is
+// created next to the session's active part (use CreateTabOn to target a
+// specific peer).
 func (dc *daemonConn) CreateTab(session, name string, command []string, dir string, env []string) {
-	dc.writeSessionFrame(session, daemon.FrameCreateTab, daemon.MarshalJSON(daemon.CreateTabRequest{
-		Session: session,
+	if !dc.multi() {
+		_ = daemon.WriteFrame(dc.conn, daemon.FrameCreateTab, daemon.MarshalJSON(daemon.CreateTabRequest{
+			Session: session,
+			Name:    name,
+			Command: command,
+			Dir:     dir,
+			Env:     env,
+		}))
+		return
+	}
+	ref := dc.activePart(session)
+	dc.writeToPeer(ref.peerID, daemon.FrameCreateTab, daemon.MarshalJSON(daemon.CreateTabRequest{
+		Session: ref.name,
 		Name:    name,
 		Command: command,
 		Dir:     dir,
@@ -608,130 +711,93 @@ func (dc *daemonConn) CreateTab(session, name string, command []string, dir stri
 	}))
 }
 
-// CloseTab requests the daemon to close a tab in a session.
+// CloseTab requests the daemon to close a tab in a session. In multi mode
+// the merged index is mapped to the owning part; closing a part's last tab
+// kills that container instead (daemons refuse closing the last tab).
 func (dc *daemonConn) CloseTab(session string, index int) {
-	dc.writeSessionFrame(session, daemon.FrameCloseTab, daemon.MarshalJSON(daemon.CloseTabRequest{
-		Session: session,
-		Index:   index,
+	if !dc.multi() {
+		_ = daemon.WriteFrame(dc.conn, daemon.FrameCloseTab, daemon.MarshalJSON(daemon.CloseTabRequest{
+			Session: session,
+			Index:   index,
+		}))
+		return
+	}
+	dc.compMu.Lock()
+	c := dc.composites[session]
+	if c == nil {
+		dc.compMu.Unlock()
+		return
+	}
+	p, localIdx := c.mapTab(index)
+	if p == nil {
+		dc.compMu.Unlock()
+		return
+	}
+	ref := partRef{p.peerID, p.name}
+	killPart := len(c.parts) > 1 && partTabCount(p) == 1
+	dc.compMu.Unlock()
+
+	if killPart {
+		dc.writeToPeer(ref.peerID, daemon.FrameKillSession, daemon.MarshalJSON(daemon.KillSessionRequest{
+			Name: ref.name,
+		}))
+		return
+	}
+	dc.writeToPeer(ref.peerID, daemon.FrameCloseTab, daemon.MarshalJSON(daemon.CloseTabRequest{
+		Session: ref.name,
+		Index:   localIdx,
 	}))
 }
 
-// SwitchTab requests the daemon to switch the active tab in a session.
+// SwitchTab requests the daemon to switch the active tab in a session,
+// mapping the merged index to the owning part in multi mode.
 func (dc *daemonConn) SwitchTab(session string, index int) {
-	dc.writeSessionFrame(session, daemon.FrameSwitchTab, daemon.MarshalJSON(daemon.SwitchTabRequest{
-		Session: session,
-		Index:   index,
+	if !dc.multi() {
+		_ = daemon.WriteFrame(dc.conn, daemon.FrameSwitchTab, daemon.MarshalJSON(daemon.SwitchTabRequest{
+			Session: session,
+			Index:   index,
+		}))
+		return
+	}
+	dc.compMu.Lock()
+	c := dc.composites[session]
+	if c == nil {
+		dc.compMu.Unlock()
+		return
+	}
+	p, localIdx := c.mapTab(index)
+	dc.compMu.Unlock()
+	if p == nil {
+		return
+	}
+	dc.writeToPeer(p.peerID, daemon.FrameSwitchTab, daemon.MarshalJSON(daemon.SwitchTabRequest{
+		Session: p.name,
+		Index:   localIdx,
 	}))
 }
 
 // ReorderSessions pushes the full session display order to the daemon so it
-// persists across detach/attach and hot upgrades.
+// persists across detach/attach and hot upgrades. Display order is owned by
+// the local daemon.
 func (dc *daemonConn) ReorderSessions(order []string) {
-	if len(dc.peers) > 0 {
-		grouped := make(map[string][]string)
-		for _, name := range order {
-			peer := dc.peerForSession(name)
-			if peer != nil {
-				grouped[peer.id] = append(grouped[peer.id], name)
-			}
-		}
-		for id, names := range grouped {
-			dc.writePeerFrame(dc.peers[id], daemon.FrameReorderSess, daemon.MarshalJSON(daemon.ReorderSessionsRequest{
-				Order: names,
-			}))
-		}
+	payload := daemon.MarshalJSON(daemon.ReorderSessionsRequest{Order: order})
+	if dc.multi() {
+		dc.writeToPeer(localPeerID, daemon.FrameReorderSess, payload)
 		return
 	}
-	daemon.WriteFrame(dc.conn, daemon.FrameReorderSess, daemon.MarshalJSON(daemon.ReorderSessionsRequest{
-		Order: order,
-	}))
+	daemon.WriteFrame(dc.conn, daemon.FrameReorderSess, payload)
 }
 
 // SetActiveSession tells the daemon which session occupies the big panel so
-// the next attach restores it.
+// the next attach restores it. The big-panel selection is owned by the
+// local daemon.
 func (dc *daemonConn) SetActiveSession(name string) {
-	dc.writeSessionFrame(name, daemon.FrameSetActive, daemon.MarshalJSON(daemon.SetActiveSessionRequest{
-		Session: name,
-	}))
-}
-
-func (dc *daemonConn) RouteSession(name, peerID string) bool {
-	if len(dc.peers) == 0 {
-		return peerID == "" || peerID == "local"
-	}
-	if _, ok := dc.peers[peerID]; !ok {
-		return false
-	}
-	dc.routeMu.Lock()
-	if current, ok := dc.sessionPeer[name]; ok && current != peerID {
-		dc.routeMu.Unlock()
-		return false
-	}
-	dc.sessionPeer[name] = peerID
-	dc.routeMu.Unlock()
-	return true
-}
-
-func (dc *daemonConn) SessionPeer(name string) string {
-	if len(dc.peers) == 0 {
-		return "local"
-	}
-	dc.routeMu.RLock()
-	defer dc.routeMu.RUnlock()
-	if id, ok := dc.sessionPeer[name]; ok {
-		return id
-	}
-	return dc.defaultPeer
-}
-
-func (dc *daemonConn) PeerHasSession(peerID, name string) (bool, error) {
-	if len(dc.peers) == 0 {
-		return false, nil
-	}
-	peer := dc.peers[peerID]
-	if peer == nil {
-		return false, fmt.Errorf("daemon peer %q is not connected", peerID)
-	}
-	sessions, err := querySessionsEndpoint(peer.endpoint)
-	if err != nil {
-		return false, err
-	}
-	for _, session := range sessions {
-		if session.Name == name {
-			return true, nil
-		}
-	}
-	return false, nil
-}
-
-func (dc *daemonConn) RefreshPeer(peerID string) {
-	peer := dc.peers[peerID]
-	if peer == nil {
+	payload := daemon.MarshalJSON(daemon.SetActiveSessionRequest{Session: name})
+	if dc.multi() {
+		dc.writeToPeer(localPeerID, daemon.FrameSetActive, payload)
 		return
 	}
-	peer.writeMu.Lock()
-	_ = peer.conn.Close()
-	peer.writeMu.Unlock()
-}
-
-func (dc *daemonConn) writeSessionFrame(session string, ft daemon.FrameType, payload []byte) {
-	if len(dc.peers) == 0 {
-		_ = daemon.WriteFrame(dc.conn, ft, payload)
-		return
-	}
-	if peer := dc.peerForSession(session); peer != nil {
-		dc.writePeerFrame(peer, ft, payload)
-	}
-}
-
-func (dc *daemonConn) peerForSession(session string) *daemonPeer {
-	id := dc.defaultPeer
-	dc.routeMu.RLock()
-	if routed, ok := dc.sessionPeer[session]; ok {
-		id = routed
-	}
-	dc.routeMu.RUnlock()
-	return dc.peers[id]
+	daemon.WriteFrame(dc.conn, daemon.FrameSetActive, payload)
 }
 
 func (dc *daemonConn) writePeerFrame(peer *daemonPeer, ft daemon.FrameType, payload []byte) {
@@ -748,7 +814,7 @@ func (dc *daemonConn) closePeers() {
 		if dc.closed != nil {
 			close(dc.closed)
 		}
-		for _, peer := range dc.peers {
+		for _, peer := range dc.peerList() {
 			_ = peer.conn.Close()
 		}
 	})
