@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 
 	"codetty/config"
-	"codetty/terminal"
 )
 
 // reloadConfig hot-reloads the .codetty.toml config file, adding/removing tabs
@@ -38,20 +37,56 @@ func (m *tuiModel) reloadConfig() {
 	if m.conn == nil {
 		return
 	}
+	_, routes, err := buildConfigEndpoints(cfg, sessions, defaultSocketPath())
+	if err != nil {
+		log.Printf("reload: endpoints: %v", err)
+		return
+	}
 
+	refreshPeers := make(map[string]bool)
 	for _, s := range sessions {
 		sess := m.sessionByName(s.Name)
+		target := routes[s.Name]
+		if sess != nil {
+			if current := m.conn.SessionPeer(s.Name); current != target {
+				log.Printf(
+					"reload: session %q target changed from %s to %s; restart codetty up to migrate it",
+					s.Name,
+					current,
+					target,
+				)
+				continue
+			}
+		} else if !m.conn.RouteSession(s.Name, target) {
+			log.Printf("reload: session %q uses a new remote target; restart codetty up to connect it", s.Name)
+			continue
+		} else if target != "local" {
+			exists, err := m.conn.PeerHasSession(target, s.Name)
+			if err != nil {
+				log.Printf("reload: query session %q: %v", s.Name, err)
+				continue
+			}
+			if exists {
+				refreshPeers[target] = true
+				continue
+			}
+		}
 		if sess == nil {
 			// Session doesn't exist yet — create it with first tab
 			cmd := s.Command
-			if len(s.Tabs) > 0 && len(s.Tabs[0].Command) > 0 {
+			dir := s.Dir
+			env := envMapToSlice(s.Env)
+			if len(s.Tabs) > 0 {
 				cmd = s.Tabs[0].Command
+				dir = s.Tabs[0].Dir
+				env = envMapToSlice(s.Tabs[0].Env)
 			}
-			if len(cmd) == 0 {
-				cmd = []string{terminal.DefaultShell()}
+			firstTabName := ""
+			if len(s.Tabs) > 0 {
+				firstTabName = s.Tabs[0].Name
 			}
 			cols, rows := m.focusedContentSize()
-			m.conn.CreateSession(s.Name, cmd, uint16(cols), uint16(rows), s.Dir)
+			m.conn.CreateSessionWithEnv(s.Name, cmd, uint16(cols), uint16(rows), dir, env, firstTabName)
 			// Tabs will be created after the session appears (via event)
 			// Store pending tabs for deferred creation
 			m.pendingReloadTabs[s.Name] = s.Tabs
@@ -60,6 +95,9 @@ func (m *tuiModel) reloadConfig() {
 
 		// Session exists — diff tabs
 		m.diffAndApplyTabs(sess, s.Tabs)
+	}
+	for peerID := range refreshPeers {
+		m.conn.RefreshPeer(peerID)
 	}
 }
 
@@ -93,9 +131,6 @@ func (m *tuiModel) diffAndApplyTabs(sess *tuiSession, desired []config.ResolvedT
 	for _, dt := range desired {
 		if _, have := existing[dt.Name]; !have {
 			cmd := dt.Command
-			if len(cmd) == 0 {
-				cmd = []string{terminal.DefaultShell()}
-			}
 			m.conn.CreateTab(sess.Name, dt.Name, cmd, dt.Dir, envMapToSlice(dt.Env))
 		}
 	}

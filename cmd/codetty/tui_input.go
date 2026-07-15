@@ -1,7 +1,6 @@
 package main
 
 import (
-	"codetty/terminal"
 	"fmt"
 	"slices"
 	"unicode/utf8"
@@ -230,7 +229,9 @@ func (m *tuiModel) handleCreateKey(msg tea.KeyMsg) tea.Cmd {
 		m.createText = ""
 		if m.conn != nil {
 			cols, rows := m.focusedContentSize()
-			m.conn.CreateSession(name, []string{terminal.DefaultShell()}, uint16(cols), uint16(rows), "")
+			// nil command: the receiving daemon resolves its own default
+			// shell (matters when the target daemon is remote).
+			m.conn.CreateSession(name, nil, uint16(cols), uint16(rows), "")
 		}
 	case tea.KeyEscape:
 		m.creating = false
@@ -411,7 +412,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 				_, _, cw, ch := m.floatingContentRect()
 				name := fmt.Sprintf("tmp-%d", len(m.sessions)+1)
 				m.floatingTarget = name
-				m.conn.CreateSession(name, []string{terminal.DefaultShell()}, uint16(cw), uint16(ch), "")
+				m.conn.CreateSession(name, nil, uint16(cw), uint16(ch), "")
 			}
 			return nil
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':

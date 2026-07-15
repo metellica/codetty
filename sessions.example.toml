@@ -13,6 +13,23 @@ layout = "list"
 # 初始聚焦的 session 名称（省略则聚焦第一个 session）
 focus = "editor"
 
+# ── 托管远程目标（可选）─────────────────────────────────────
+
+# CodeTTY 使用本机 OpenSSH 客户端连接远程主机。deploy = "auto"
+# 会把当前 codetty binary 原子部署到远程 ~/.local/lib/codetty/codetty，
+# 然后通过远程 CodeTTY daemon 托管 session；网络断开不会终止远程任务。
+#
+# [remote.gpu]
+# host = "gpu01"       # 支持 ~/.ssh/config 中的 Host alias
+# instance = "default"
+# deploy = "auto"      # auto（默认）或 never
+#
+# deploy = "never" 时，默认使用远程 PATH 中的 codetty，也可指定绝对路径：
+# [remote.preinstalled]
+# host = "build01"
+# deploy = "never"
+# binary = "/opt/codetty/bin/codetty"
+
 # ── 模板（可复用的 tab 配置）────────────────────────────────
 
 [template.dev]
@@ -45,6 +62,30 @@ command = ["nvim", "."]
 # name = "server"
 # command = ["npm", "run", "dev"]
 # dir = "./backend"
+
+# 托管远程 session：command 和 dir 都在远程执行/解释
+# [[session]]
+# name = "gpu-agent"
+# remote = "gpu"
+# command = ["copilot"]
+# dir = "/workspace/project"
+#
+# 单 tab session 也可在 tab 上声明 remote：
+# [[session]]
+# name = "gpu-shell"
+#
+#   [[session.tab]]
+#   name = "shell"
+#   remote = "gpu"
+#   command = ["bash"]
+#
+# 同一 session 的所有 tab 必须位于同一个本地或远程 daemon；如需混合，
+# 请拆成多个 session。多个 session 指向同一 host + instance 时会共享连接。
+
+# Raw SSH 保持为普通本地命令，不会自动升级为托管远程模式：
+# [[session]]
+# name = "raw-ssh"
+# command = ["ssh", "gpu01"]
 
 # 省略 command 则使用默认 shell
 [[session]]

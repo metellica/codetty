@@ -76,6 +76,65 @@ func TestServer_NewSession(t *testing.T) {
 	}
 }
 
+func TestServer_NewSessionUsesDaemonDefaultShell(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "test.sock")
+	srv := NewServer(sockPath)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	WriteFrame(conn, FrameRequest, MarshalJSON(Request{
+		Action:   ActionNewSession,
+		Session:  "shell",
+		NoAttach: true,
+		Cols:     80,
+		Rows:     24,
+	}))
+	_, payload, err := ReadFrame(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp Response
+	if err := json.Unmarshal(payload, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK {
+		t.Fatalf("new_session failed: %s", resp.Error)
+	}
+	session := srv.SessionByName("shell")
+	if session == nil || len(session.Command) == 0 {
+		t.Fatalf("session command = %v, want daemon default shell", session)
+	}
+}
+
+func TestCreateSessionForSubscriberSetsFirstTabName(t *testing.T) {
+	srv := NewServer(filepath.Join(t.TempDir(), "test.sock"))
+	sub := newSubscriber(nil)
+	srv.createSessionForSubscriber(sub, CreateSessionRequest{
+		Name:    "configured",
+		Command: []string{"cat"},
+		TabName: "agent",
+		Cols:    80,
+		Rows:    24,
+	})
+	session := srv.SessionByName("configured")
+	if session == nil {
+		t.Fatal("session was not created")
+	}
+	defer session.Kill()
+	if len(session.Tabs) != 1 || session.Tabs[0].Name != "agent" {
+		t.Fatalf("tabs = %+v, want first tab named agent", session.Tabs)
+	}
+}
+
 func TestServer_ListSessions(t *testing.T) {
 	dir := t.TempDir()
 	sockPath := filepath.Join(dir, "test.sock")

@@ -104,6 +104,8 @@ func main() {
 		cmdReload(args)
 	case "__server":
 		cmdServer(args)
+	case "__bridge":
+		cmdBridge()
 	case "--help", "-h", "help":
 		fmt.Print(usageText())
 	case "--version", "-v":

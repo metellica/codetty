@@ -127,7 +127,7 @@ func TestHandleKey_DoubleCtrlAForwardsLiteralCtrlA(t *testing.T) {
 	<-done
 }
 
-func TestHandlePrefixKey_CreateSessionUsesDefaultShell(t *testing.T) {
+func TestHandlePrefixKey_CreateSessionDefersShellToDaemon(t *testing.T) {
 	client, server := net.Pipe()
 	defer client.Close()
 	defer server.Close()
@@ -162,8 +162,8 @@ func TestHandlePrefixKey_CreateSessionUsesDefaultShell(t *testing.T) {
 			t.Errorf("json.Unmarshal: %v", err)
 			return
 		}
-		if len(req.Command) != 1 || req.Command[0] == "" {
-			t.Errorf("command = %#v, want default shell", req.Command)
+		if len(req.Command) != 0 {
+			t.Errorf("command = %#v, want empty (daemon resolves default shell)", req.Command)
 		}
 		if req.Cols != 90 || req.Rows != 33 {
 			t.Errorf("size = %dx%d, want 90x33", req.Cols, req.Rows)

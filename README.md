@@ -34,6 +34,7 @@
 - **跨平台 PTY** — Linux/macOS 使用 Unix PTY，Windows 使用 ConPTY
 - **自动 daemon** — 首次运行自动启动后台进程，所有会话退出后自动停止
 - **Session 配置文件** — 通过 `.codetty.toml` 定义 session 布局，支持 tmux pane 模板和继承
+- **托管远程 Session** — 通过系统 OpenSSH 自动部署并连接远程 CodeTTY daemon，断网重连后任务和 agent 状态继续保留
 
 ## 快速开始
 

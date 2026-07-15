@@ -91,7 +91,27 @@ func cmdAttach(args []string) {
 }
 
 func startTUI(sockPath string, sc startupConfig) {
-	conn, err := newDaemonConn(sockPath)
+	endpoint := localDaemonEndpoint{sockPath: sockPath}
+	startTUIWithEndpoints(map[string]daemonEndpoint{endpoint.ID(): endpoint}, nil, sc)
+}
+
+func startTUIWithEndpoints(
+	endpoints map[string]daemonEndpoint,
+	routes map[string]string,
+	sc startupConfig,
+) {
+	var conn *daemonConn
+	var err error
+	if len(endpoints) == 1 {
+		if endpoint, ok := endpoints["local"]; ok && len(routes) == 0 {
+			if local, ok := endpoint.(localDaemonEndpoint); ok {
+				conn, err = newDaemonConn(local.sockPath)
+			}
+		}
+	}
+	if conn == nil && err == nil {
+		conn, err = newMultiDaemonConn(endpoints, routes)
+	}
 	if err != nil {
 		log.Fatalf("connect to daemon: %v", err)
 	}
@@ -167,15 +187,31 @@ func cmdUp(args []string) {
 	}
 
 	sockPath := defaultSocketPath()
-	if err := ensureDaemon(sockPath); err != nil {
-		log.Fatalf("cannot start daemon: %v", err)
+	endpoints, routes, err := buildConfigEndpoints(cfg, sessions, sockPath)
+	if err != nil {
+		log.Fatalf("resolve endpoints: %v", err)
+	}
+	if len(endpoints) == 0 {
+		endpoints["local"] = localDaemonEndpoint{sockPath: sockPath}
+	}
+	if err := ensureEndpoints(endpoints); err != nil {
+		log.Fatalf("prepare daemon: %v", err)
 	}
 
-	existing := listExistingSessions(sockPath)
+	existingByEndpoint := make(map[string]map[string]bool, len(endpoints))
+	for id, endpoint := range endpoints {
+		current, err := querySessionsEndpoint(endpoint)
+		if err != nil {
+			log.Fatalf("list sessions on %s: %v", id, err)
+		}
+		existingByEndpoint[id] = endpointSessionNames(current)
+	}
 	cols, rows := terminalSize()
 
 	for _, s := range sessions {
-		if existing[s.Name] {
+		endpointID := routes[s.Name]
+		endpoint := endpoints[endpointID]
+		if existingByEndpoint[endpointID][s.Name] {
 			fmt.Fprintf(os.Stderr, "session %q already exists, skipping\n", s.Name)
 			continue
 		}
@@ -186,28 +222,20 @@ func cmdUp(args []string) {
 
 		if len(s.Tabs) > 0 {
 			firstTab := s.Tabs[0]
-			if len(firstTab.Command) > 0 {
-				cmd = firstTab.Command
-			}
-			if firstTab.Dir != "" {
-				dir = firstTab.Dir
-			}
-			if firstTab.Env != nil {
-				env = envToSlice(firstTab.Env)
-			}
+			cmd = firstTab.Command
+			dir = firstTab.Dir
+			env = envToSlice(firstTab.Env)
 		}
 
-		if len(cmd) == 0 {
-			cmd = []string{terminal.DefaultShell()}
-		}
 		firstTabName := ""
 		if len(s.Tabs) > 0 {
 			firstTabName = s.Tabs[0].Name
 		}
-		if err := createDaemonSession(sockPath, s.Name, cmd, cols, rows, dir, env, firstTabName); err != nil {
+		if err := createDaemonSessionEndpoint(endpoint, s.Name, cmd, cols, rows, dir, env, firstTabName); err != nil {
 			log.Printf("create session %q: %v", s.Name, err)
 			continue
 		}
+		existingByEndpoint[endpointID][s.Name] = true
 		fmt.Fprintf(os.Stderr, "created session %q\n", s.Name)
 
 		if len(s.Tabs) > 1 {
@@ -216,7 +244,7 @@ func cmdUp(args []string) {
 				if len(tabCmd) == 0 {
 					tabCmd = cmd
 				}
-				if err := createDaemonTab(sockPath, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
+				if err := createDaemonTabEndpoint(endpoint, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
 					log.Printf("create tab %q in session %q: %v", tab.Name, s.Name, err)
 				} else {
 					fmt.Fprintf(os.Stderr, "  created tab %q\n", tab.Name)
@@ -243,7 +271,7 @@ func cmdUp(args []string) {
 		sc.focusTarget = sessions[0].Name
 	}
 
-	startTUI(sockPath, sc)
+	startTUIWithEndpoints(endpoints, routes, sc)
 }
 
 // envToSlice converts an env map to sorted "KEY=value" entries.
@@ -568,29 +596,46 @@ func cmdReload(args []string) {
 	}
 
 	sockPath := defaultSocketPath()
-	if err := ensureDaemon(sockPath); err != nil {
-		log.Fatalf("no daemon running")
+	endpoints, routes, err := buildConfigEndpoints(cfg, sessions, sockPath)
+	if err != nil {
+		log.Fatalf("resolve endpoints: %v", err)
+	}
+	if len(endpoints) == 0 {
+		endpoints["local"] = localDaemonEndpoint{sockPath: sockPath}
+	}
+	if err := ensureEndpoints(endpoints); err != nil {
+		log.Fatalf("prepare daemon: %v", err)
 	}
 
-	// Get current sessions from daemon
-	existing := listExistingSessions(sockPath)
+	existing := make(map[string]map[string]daemon.SessionInfo, len(endpoints))
+	for id, endpoint := range endpoints {
+		current, err := querySessionsEndpoint(endpoint)
+		if err != nil {
+			log.Fatalf("list sessions on %s: %v", id, err)
+		}
+		existing[id] = endpointSessionsByName(current)
+	}
 	cols, rows := terminalSize()
 
 	for _, s := range sessions {
-		if !existing[s.Name] {
+		endpointID := routes[s.Name]
+		endpoint := endpoints[endpointID]
+		current, exists := existing[endpointID][s.Name]
+		if !exists {
 			// Create new session with first tab
 			cmd := s.Command
-			if len(s.Tabs) > 0 && len(s.Tabs[0].Command) > 0 {
+			dir := s.Dir
+			env := envToSlice(s.Env)
+			if len(s.Tabs) > 0 {
 				cmd = s.Tabs[0].Command
-			}
-			if len(cmd) == 0 {
-				cmd = []string{terminal.DefaultShell()}
+				dir = s.Tabs[0].Dir
+				env = envToSlice(s.Tabs[0].Env)
 			}
 			firstTabName := ""
 			if len(s.Tabs) > 0 {
 				firstTabName = s.Tabs[0].Name
 			}
-			if err := createDaemonSession(sockPath, s.Name, cmd, cols, rows, s.Dir, envToSlice(s.Env), firstTabName); err != nil {
+			if err := createDaemonSessionEndpoint(endpoint, s.Name, cmd, cols, rows, dir, env, firstTabName); err != nil {
 				log.Printf("create session %q: %v", s.Name, err)
 				continue
 			}
@@ -600,10 +645,7 @@ func cmdReload(args []string) {
 			if len(s.Tabs) > 1 {
 				for _, tab := range s.Tabs[1:] {
 					tabCmd := tab.Command
-					if len(tabCmd) == 0 {
-						tabCmd = []string{terminal.DefaultShell()}
-					}
-					if err := createDaemonTab(sockPath, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
+					if err := createDaemonTabEndpoint(endpoint, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
 						log.Printf("  create tab %q: %v", tab.Name, err)
 					}
 				}
@@ -613,7 +655,10 @@ func cmdReload(args []string) {
 
 		// Session exists — diff tabs via daemon
 		// Get current tab info
-		currentTabs := getSessionTabs(sockPath, s.Name)
+		currentTabs := make([]string, len(current.Tabs))
+		for i, tab := range current.Tabs {
+			currentTabs[i] = tab.Name
+		}
 
 		// Build desired tab names
 		desiredNames := make(map[string]bool)
@@ -625,7 +670,9 @@ func cmdReload(args []string) {
 		for i := len(currentTabs) - 1; i >= 0; i-- {
 			if !desiredNames[currentTabs[i]] {
 				fmt.Fprintf(os.Stderr, "  closing tab %q in %q\n", currentTabs[i], s.Name)
-				closeTab(sockPath, s.Name, i)
+				if err := closeDaemonTabEndpoint(endpoint, s.Name, i); err != nil {
+					log.Printf("  close tab %q: %v", currentTabs[i], err)
+				}
 			}
 		}
 
@@ -637,10 +684,7 @@ func cmdReload(args []string) {
 		for _, tab := range s.Tabs {
 			if !currentSet[tab.Name] {
 				tabCmd := tab.Command
-				if len(tabCmd) == 0 {
-					tabCmd = []string{terminal.DefaultShell()}
-				}
-				if err := createDaemonTab(sockPath, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
+				if err := createDaemonTabEndpoint(endpoint, s.Name, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
 					log.Printf("  create tab %q: %v", tab.Name, err)
 				} else {
 					fmt.Fprintf(os.Stderr, "  added tab %q to %q\n", tab.Name, s.Name)

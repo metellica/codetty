@@ -181,10 +181,14 @@ func (s *Server) handleConn(conn net.Conn) {
 }
 
 func (s *Server) handleNewSession(conn net.Conn, req Request) {
+	cmd := req.Command
+	if len(cmd) == 0 {
+		cmd = []string{terminal.DefaultShell()}
+	}
 	name := req.Session
 	if name == "" {
 		s.mu.Lock()
-		name = autoSessionName(req.Command, s.sessions)
+		name = autoSessionName(cmd, s.sessions)
 		s.mu.Unlock()
 	}
 
@@ -196,7 +200,7 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 	}
 	s.mu.Unlock()
 
-	sess, err := newDaemonSession(name, req.Command, req.Cols, req.Rows, req.Dir, req.Env, s.broadcastToSubscribers)
+	sess, err := newDaemonSession(name, cmd, req.Cols, req.Rows, req.Dir, req.Env, s.broadcastToSubscribers)
 	if err != nil {
 		s.sendError(conn, fmt.Sprintf("start session: %v", err))
 		return
@@ -368,10 +372,13 @@ func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRe
 	}
 	s.mu.Unlock()
 
-	sess, err := newDaemonSession(name, cmd, req.Cols, req.Rows, req.Dir, nil, s.broadcastToSubscribers)
+	sess, err := newDaemonSession(name, cmd, req.Cols, req.Rows, req.Dir, req.Env, s.broadcastToSubscribers)
 	if err != nil {
 		sub.SendSessionEvent(SessionEvent{Type: "error", Session: name})
 		return
+	}
+	if req.TabName != "" && len(sess.Tabs) > 0 {
+		sess.Tabs[0].Name = req.TabName
 	}
 	s.mu.Lock()
 	if _, exists := s.sessions[name]; exists {

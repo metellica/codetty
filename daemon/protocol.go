@@ -123,7 +123,9 @@ type SessionEvent struct {
 type CreateSessionRequest struct {
 	Name    string   `json:"name,omitempty"`
 	Command []string `json:"command,omitempty"`
+	Env     []string `json:"env,omitempty"`
 	Dir     string   `json:"dir,omitempty"` // working directory for the first tab
+	TabName string   `json:"tab_name,omitempty"`
 	Cols    uint16   `json:"cols"`
 	Rows    uint16   `json:"rows"`
 }

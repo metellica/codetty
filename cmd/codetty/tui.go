@@ -85,9 +85,9 @@ type tuiModel struct {
 	createText string
 
 	// Create tab mode
-	creatingTab        bool
-	createTabText      string
-	createTabSession   string // target session name (captured at prompt time)
+	creatingTab      bool
+	createTabText    string
+	createTabSession string // target session name (captured at prompt time)
 
 	// Text selection
 	sel textSelection
@@ -491,9 +491,6 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 			if m.conn != nil && len(pending) > 1 {
 				for _, tab := range pending[1:] {
 					cmd := tab.Command
-					if len(cmd) == 0 {
-						cmd = []string{"zsh"}
-					}
 					m.conn.CreateTab(evt.Session, tab.Name, cmd, tab.Dir, envMapToSlice(tab.Env))
 				}
 			}

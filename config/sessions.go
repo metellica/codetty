@@ -12,8 +12,17 @@ import (
 type SessionsConfig struct {
 	Layout   string                     `toml:"layout"`   // "list", "focus-big", "fullscreen", "tabs"
 	Focus    string                     `toml:"focus"`    // session name to focus initially
+	Remote   map[string]RemoteDef       `toml:"remote"`   // managed remote CodeTTY targets
 	Template map[string]SessionTemplate `toml:"template"` // reusable session templates
 	Session  []SessionDef               `toml:"session"`  // session definitions
+}
+
+// RemoteDef defines a managed remote CodeTTY target reached through OpenSSH.
+type RemoteDef struct {
+	Host     string `toml:"host"`
+	Instance string `toml:"instance"`
+	Deploy   string `toml:"deploy"` // "", "auto", or "never"
+	Binary   string `toml:"binary"` // remote binary path when deploy = "never"
 }
 
 // SessionTemplate defines a reusable set of tabs.
@@ -27,6 +36,8 @@ type TabDef struct {
 	Command []string          `toml:"command"`
 	Dir     string            `toml:"dir"`
 	Env     map[string]string `toml:"env"`
+	Remote  string            `toml:"remote"`
+	Local   bool              `toml:"local"`
 }
 
 // SessionDef defines a single session in the config file.
@@ -36,6 +47,7 @@ type SessionDef struct {
 	Dir      string            `toml:"dir"`
 	Env      map[string]string `toml:"env"`
 	Hidden   bool              `toml:"hidden"`
+	Remote   string            `toml:"remote"`
 	Tab      []TabDef          `toml:"tab"`
 	Template string            `toml:"template"`
 }
@@ -46,6 +58,7 @@ type ResolvedTab struct {
 	Command []string
 	Dir     string
 	Env     map[string]string
+	Remote  string
 }
 
 // ResolvedSession is a session definition with template applied.
@@ -55,6 +68,7 @@ type ResolvedSession struct {
 	Dir     string
 	Env     map[string]string
 	Hidden  bool
+	Remote  string
 	Tabs    []ResolvedTab
 }
 
@@ -108,6 +122,20 @@ func (cfg *SessionsConfig) Validate() error {
 		return fmt.Errorf("invalid layout %q (valid: list, focus-big, fullscreen, tabs)", cfg.Layout)
 	}
 
+	for name, remote := range cfg.Remote {
+		if name == "" {
+			return fmt.Errorf("remote with empty name")
+		}
+		if remote.Host == "" {
+			return fmt.Errorf("remote %q: host is required", name)
+		}
+		switch remote.Deploy {
+		case "", "auto", "never":
+		default:
+			return fmt.Errorf("remote %q: invalid deploy %q (valid: auto, never)", name, remote.Deploy)
+		}
+	}
+
 	seen := make(map[string]bool)
 	for _, sd := range cfg.Session {
 		if sd.Name == "" {
@@ -123,6 +151,9 @@ func (cfg *SessionsConfig) Validate() error {
 				return fmt.Errorf("session %q: template %q not found", sd.Name, sd.Template)
 			}
 		}
+		if err := cfg.validateRemoteRef(fmt.Sprintf("session %q", sd.Name), sd.Remote); err != nil {
+			return err
+		}
 
 		tabNames := make(map[string]bool)
 		for _, tab := range sd.Tab {
@@ -133,6 +164,15 @@ func (cfg *SessionsConfig) Validate() error {
 				return fmt.Errorf("session %q: duplicate tab name %q", sd.Name, tab.Name)
 			}
 			tabNames[tab.Name] = true
+			if tab.Local && tab.Remote != "" {
+				return fmt.Errorf("session %q tab %q: local and remote are mutually exclusive", sd.Name, tab.Name)
+			}
+			if err := cfg.validateRemoteRef(
+				fmt.Sprintf("session %q tab %q", sd.Name, tab.Name),
+				tab.Remote,
+			); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -146,9 +186,28 @@ func (cfg *SessionsConfig) Validate() error {
 				return fmt.Errorf("template %q: duplicate tab name %q", name, tab.Name)
 			}
 			tabNames[tab.Name] = true
+			if tab.Local && tab.Remote != "" {
+				return fmt.Errorf("template %q tab %q: local and remote are mutually exclusive", name, tab.Name)
+			}
+			if err := cfg.validateRemoteRef(
+				fmt.Sprintf("template %q tab %q", name, tab.Name),
+				tab.Remote,
+			); err != nil {
+				return err
+			}
 		}
 	}
 
+	return nil
+}
+
+func (cfg *SessionsConfig) validateRemoteRef(owner, name string) error {
+	if name == "" {
+		return nil
+	}
+	if _, ok := cfg.Remote[name]; !ok {
+		return fmt.Errorf("%s: remote %q not found", owner, name)
+	}
 	return nil
 }
 
@@ -170,11 +229,16 @@ func (cfg *SessionsConfig) resolveSession(sd SessionDef, configDir string) (Reso
 	rs := ResolvedSession{
 		Name:    sd.Name,
 		Command: sd.Command,
-		Dir:     resolveDir(sd.Dir, configDir),
 		Env:     sd.Env,
 		Hidden:  sd.Hidden,
+		Remote:  sd.Remote,
 	}
-	if rs.Dir == "" {
+	if rs.Remote == "" {
+		rs.Dir = resolveDir(sd.Dir, configDir)
+	} else {
+		rs.Dir = sd.Dir
+	}
+	if rs.Dir == "" && rs.Remote == "" {
 		rs.Dir = configDir
 	}
 
@@ -198,6 +262,13 @@ func (cfg *SessionsConfig) resolveSession(sd SessionDef, configDir string) (Reso
 				if it.Env != nil {
 					baseTabs[i].Env = it.Env
 				}
+				if it.Remote != "" {
+					baseTabs[i].Remote = it.Remote
+				}
+				if it.Local {
+					baseTabs[i].Local = true
+					baseTabs[i].Remote = ""
+				}
 				found = true
 				break
 			}
@@ -212,11 +283,21 @@ func (cfg *SessionsConfig) resolveSession(sd SessionDef, configDir string) (Reso
 			Name:    tab.Name,
 			Command: tab.Command,
 			Env:     tab.Env,
+			Remote:  tab.Remote,
+		}
+		if rt.Remote == "" && !tab.Local {
+			rt.Remote = rs.Remote
 		}
 		if tab.Dir != "" {
-			rt.Dir = resolveDir(tab.Dir, configDir)
-		} else {
+			if rt.Remote == "" {
+				rt.Dir = resolveDir(tab.Dir, configDir)
+			} else {
+				rt.Dir = tab.Dir
+			}
+		} else if rt.Remote == rs.Remote {
 			rt.Dir = rs.Dir
+		} else if rt.Remote == "" {
+			rt.Dir = configDir
 		}
 		if len(rt.Command) == 0 {
 			rt.Command = rs.Command
@@ -225,6 +306,23 @@ func (cfg *SessionsConfig) resolveSession(sd SessionDef, configDir string) (Reso
 			rt.Env = rs.Env
 		}
 		rs.Tabs = append(rs.Tabs, rt)
+	}
+
+	if len(rs.Tabs) > 0 {
+		target := rs.Tabs[0].Remote
+		for _, tab := range rs.Tabs[1:] {
+			if tab.Remote != target {
+				return ResolvedSession{}, fmt.Errorf(
+					"tabs %q and %q use different execution targets; split local and remote tabs into separate sessions",
+					rs.Tabs[0].Name,
+					tab.Name,
+				)
+			}
+		}
+		rs.Remote = target
+		rs.Command = rs.Tabs[0].Command
+		rs.Dir = rs.Tabs[0].Dir
+		rs.Env = rs.Tabs[0].Env
 	}
 
 	return rs, nil

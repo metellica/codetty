@@ -57,6 +57,37 @@ dir = "./src"
 	}
 }
 
+func TestLoadSessions_RemoteParsing(t *testing.T) {
+	dir := t.TempDir()
+	content := `
+[remote.gpu]
+host = "gpu01"
+instance = "work"
+deploy = "auto"
+
+[[session]]
+name = "agent"
+remote = "gpu"
+command = ["copilot"]
+dir = "/workspace/project"
+`
+	cfgPath := filepath.Join(dir, ".codetty.toml")
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, _, err := LoadSessions("", dir)
+	if err != nil {
+		t.Fatalf("LoadSessions: %v", err)
+	}
+	if got := cfg.Remote["gpu"]; got.Host != "gpu01" || got.Instance != "work" || got.Deploy != "auto" {
+		t.Fatalf("remote gpu = %+v", got)
+	}
+	if cfg.Session[0].Remote != "gpu" {
+		t.Fatalf("session remote = %q, want gpu", cfg.Session[0].Remote)
+	}
+}
+
 func TestResolve_NativeSession(t *testing.T) {
 	cfg := &SessionsConfig{
 		Session: []SessionDef{{Name: "shell", Command: []string{"bash"}}},
@@ -158,6 +189,73 @@ func TestResolve_NativeSessionDir(t *testing.T) {
 	}
 }
 
+func TestResolve_RemotePathsStayRemote(t *testing.T) {
+	cfg := &SessionsConfig{
+		Remote: map[string]RemoteDef{"gpu": {Host: "gpu01"}},
+		Session: []SessionDef{{
+			Name:    "dev",
+			Remote:  "gpu",
+			Dir:     "workspace/project",
+			Command: []string{"bash"},
+			Tab: []TabDef{
+				{Name: "agent", Command: []string{"copilot"}},
+				{Name: "logs", Dir: "/var/log"},
+			},
+		}},
+	}
+	results, err := cfg.Resolve("/local/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0].Remote != "gpu" || results[0].Dir != "workspace/project" {
+		t.Fatalf("session = %+v", results[0])
+	}
+	if results[0].Tabs[0].Remote != "gpu" || results[0].Tabs[0].Dir != "workspace/project" {
+		t.Fatalf("tab[0] = %+v", results[0].Tabs[0])
+	}
+	if results[0].Tabs[1].Dir != "/var/log" {
+		t.Fatalf("tab[1].Dir = %q, want /var/log", results[0].Tabs[1].Dir)
+	}
+}
+
+func TestResolve_TabRemoteSelectsSessionTarget(t *testing.T) {
+	cfg := &SessionsConfig{
+		Remote: map[string]RemoteDef{"gpu": {Host: "gpu01"}},
+		Session: []SessionDef{{
+			Name: "agent",
+			Tab: []TabDef{{
+				Name:    "copilot",
+				Remote:  "gpu",
+				Command: []string{"copilot"},
+				Dir:     "/workspace/project",
+			}},
+		}},
+	}
+	results, err := cfg.Resolve("/local/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0].Remote != "gpu" || results[0].Tabs[0].Remote != "gpu" {
+		t.Fatalf("resolved target = %+v", results[0])
+	}
+}
+
+func TestResolve_RejectsMixedExecutionTargets(t *testing.T) {
+	cfg := &SessionsConfig{
+		Remote: map[string]RemoteDef{"gpu": {Host: "gpu01"}},
+		Session: []SessionDef{{
+			Name: "mixed",
+			Tab: []TabDef{
+				{Name: "local"},
+				{Name: "remote", Remote: "gpu"},
+			},
+		}},
+	}
+	if _, err := cfg.Resolve("/project"); err == nil {
+		t.Fatal("expected mixed execution target error")
+	}
+}
+
 func TestValidate_Valid(t *testing.T) {
 	cfg := &SessionsConfig{
 		Layout: "list",
@@ -194,8 +292,15 @@ func TestValidate_Errors(t *testing.T) {
 		{"empty session name", SessionsConfig{Session: []SessionDef{{Name: ""}}}},
 		{"duplicate session name", SessionsConfig{Session: []SessionDef{{Name: "a"}, {Name: "a"}}}},
 		{"missing template", SessionsConfig{Session: []SessionDef{{Name: "a", Template: "missing"}}}},
+		{"missing remote", SessionsConfig{Session: []SessionDef{{Name: "a", Remote: "missing"}}}},
+		{"remote without host", SessionsConfig{Remote: map[string]RemoteDef{"gpu": {}}}},
+		{"invalid deploy", SessionsConfig{Remote: map[string]RemoteDef{"gpu": {Host: "gpu01", Deploy: "sometimes"}}}},
 		{"template empty tab name", SessionsConfig{Template: map[string]SessionTemplate{"t": {Tab: []TabDef{{Name: ""}}}}}},
 		{"template duplicate tab name", SessionsConfig{Template: map[string]SessionTemplate{"t": {Tab: []TabDef{{Name: "a"}, {Name: "a"}}}}}},
+		{"tab local and remote", SessionsConfig{
+			Remote:  map[string]RemoteDef{"gpu": {Host: "gpu01"}},
+			Session: []SessionDef{{Name: "a", Tab: []TabDef{{Name: "t", Local: true, Remote: "gpu"}}}},
+		}},
 	}
 
 	for _, tt := range tests {
