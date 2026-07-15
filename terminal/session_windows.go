@@ -5,7 +5,6 @@ package terminal
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/UserExistsError/conpty"
@@ -24,7 +23,7 @@ func startPlatform(args []string, cols, rows uint16, dir string, env []string) (
 
 	opts := []conpty.ConPtyOption{
 		conpty.ConPtyDimensions(int(cols), int(rows)),
-		conpty.ConPtyEnv(append(os.Environ(), env...)),
+		conpty.ConPtyEnv(ptyEnviron(env)),
 	}
 	if dir != "" {
 		opts = append(opts, conpty.ConPtyWorkDir(dir))

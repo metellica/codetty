@@ -24,9 +24,7 @@ func startPlatform(args []string, cols, rows uint16, dir string, env []string) (
 	if dir != "" {
 		cmd.Dir = dir
 	}
-	if len(env) > 0 {
-		cmd.Env = append(os.Environ(), env...)
-	}
+	cmd.Env = ptyEnviron(env)
 	file, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: cols, Rows: rows})
 	if err != nil {
 		return nil, err

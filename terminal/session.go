@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 )
 
 // ErrNoCommand is returned when Start is called with an empty args slice.
@@ -32,6 +33,27 @@ func Start(args []string, cols, rows uint16, dir string, env []string) (Session,
 		return nil, ErrNoCommand
 	}
 	return startPlatform(args, cols, rows, dir, env)
+}
+
+// ptyEnviron builds the child environment: the daemon's environment with a
+// sane TERM (the daemon may have been started without a terminal, e.g. over
+// non-interactive SSH where TERM is "dumb" or unset, which would disable
+// colors in every spawned shell), plus the caller's extra entries.
+func ptyEnviron(extra []string) []string {
+	environ := os.Environ()
+	termOK := false
+	for i, kv := range environ {
+		if v, ok := strings.CutPrefix(kv, "TERM="); ok {
+			if v == "" || v == "dumb" {
+				environ[i] = "TERM=xterm-256color"
+			}
+			termOK = true
+		}
+	}
+	if !termOK {
+		environ = append(environ, "TERM=xterm-256color")
+	}
+	return append(environ, extra...)
 }
 
 // DefaultShell returns the user's default shell command.
