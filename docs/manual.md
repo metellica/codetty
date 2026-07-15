@@ -238,11 +238,17 @@ name = "dev"
 
 session 级 `remote` 作为其所有 tab 的默认值（单 tab 写法 `remote = "gpu"` +
 `command` 仍然有效）；单个 tab 可用 `local = true` 强制本地。TUI 中 `Ctrl+A t`
-新建 tab 时，若配置了 `[remote.*]`，会先弹出目标选择（local / 各远程）。
+新建 tab 时会弹出目标选择:local、配置中的各 `[remote.*]`,以及自动从
+`~/.ssh/config` 读取的 Host 别名(默认 `instance = "default"`、`deploy = "auto"`;
+同名时 `[remote.*]` 定义优先)。
 
 `deploy = "never"` 可用于已经安装 CodeTTY 的主机，并可通过 `binary` 指定远程路径。
 没有 `remote` 字段时仍在本地运行；`command = ["ssh", "gpu01"]` 始终是普通 raw SSH。
 多个 session/tab 指向同一 `host + instance` 时共享一条 TUI bridge 连接。
+
+版本兼容参考 SSH 的模型:订阅握手时双方交换协议版本区间和 capability 列表,
+取最高公共版本和能力交集通信;区间无交集时明确报错并提示升级较旧的一方。
+日常演进通过新增 JSON 字段/capability 完成,不要求两端 binary 完全一致。
 
 ### tmux Session 与 Window
 

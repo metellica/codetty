@@ -126,25 +126,39 @@ type remoteTarget struct {
 // always the local daemon, plus every [remote.*] in the sessions config.
 func loadRemoteTargets() []remoteTarget {
 	targets := []remoteTarget{{label: "local", id: "local"}}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return targets
+	var cfg *config.SessionsConfig
+	if cwd, err := os.Getwd(); err == nil {
+		cfg, _, _ = config.LoadSessions("", cwd)
 	}
-	cfg, _, err := config.LoadSessions("", cwd)
-	if err != nil {
-		return targets
+	coveredHosts := make(map[string]bool)
+	if cfg != nil {
+		names := make([]string, 0, len(cfg.Remote))
+		for name := range cfg.Remote {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			endpoint, err := newSSHDaemonEndpoint(name, cfg.Remote[name])
+			if err != nil {
+				continue
+			}
+			coveredHosts[cfg.Remote[name].Host] = true
+			coveredHosts[name] = true
+			targets = append(targets, remoteTarget{label: name, id: endpoint.ID(), endpoint: endpoint})
+		}
 	}
-	names := make([]string, 0, len(cfg.Remote))
-	for name := range cfg.Remote {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		endpoint, err := newSSHDaemonEndpoint(name, cfg.Remote[name])
+	// Offer hosts from the user's OpenSSH config as additional targets
+	// with default settings (instance "default", deploy "auto"); explicit
+	// [remote.*] definitions take precedence.
+	for _, host := range sshConfigHosts() {
+		if coveredHosts[host] {
+			continue
+		}
+		endpoint, err := newSSHDaemonEndpoint(host, config.RemoteDef{Host: host})
 		if err != nil {
 			continue
 		}
-		targets = append(targets, remoteTarget{label: name, id: endpoint.ID(), endpoint: endpoint})
+		targets = append(targets, remoteTarget{label: host, id: endpoint.ID(), endpoint: endpoint})
 	}
 	return targets
 }
