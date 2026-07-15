@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"codetty/config"
 	"codetty/daemon"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -49,6 +50,22 @@ type daemonConn struct {
 	outMu      sync.Mutex
 	outBuf     map[string][]byte
 	outPending bool // true while a flush timer is running
+
+	// Ad-hoc remote registry: remoteSeeds holds the recorded remotes
+	// loaded at startup (keyed by endpoint ID, set once before Subscribe),
+	// persistRemotes rewrites the registry file. persistSig deduplicates
+	// writes (guarded by persistMu).
+	remoteSeeds    map[string]recordedRemote
+	persistRemotes func(map[string]config.RemoteDef)
+	persistMu      sync.Mutex
+	persistSig     string
+	persistSigSet  bool
+}
+
+// recordedRemote is one entry of the ad-hoc remote registry.
+type recordedRemote struct {
+	name string
+	def  config.RemoteDef
 }
 
 type daemonPeer struct {
@@ -359,6 +376,7 @@ func (dc *daemonConn) handlePeerFrame(peer *daemonPeer, ft daemon.FrameType, pay
 		for _, fn := range post {
 			fn()
 		}
+		dc.persistRemoteParts()
 	case daemon.FrameResponse:
 		var resp daemon.Response
 		respOK := json.Unmarshal(payload, &resp) == nil
@@ -398,6 +416,7 @@ func (dc *daemonConn) handlePeerFrame(peer *daemonPeer, ft daemon.FrameType, pay
 		if firstAck {
 			dc.ackPending(peer)
 		}
+		dc.persistRemoteParts()
 	}
 }
 
@@ -412,6 +431,80 @@ func (dc *daemonConn) ackPending(peer *daemonPeer) {
 		}
 	}
 	dc.subMu.Unlock()
+}
+
+// persistRemoteParts rewrites the ad-hoc remote registry to the remote
+// endpoints that currently own shadow parts. Seeded entries whose peer never
+// connected this run (e.g. an unreachable or handshake-rejected remote) are
+// preserved so their shadow tabs can still be recovered later.
+func (dc *daemonConn) persistRemoteParts() {
+	if dc.persistRemotes == nil {
+		return
+	}
+	dc.compMu.Lock()
+	owning := make(map[string]bool)
+	for _, c := range dc.composites {
+		for _, p := range c.parts {
+			if p.peerID != localPeerID {
+				owning[p.peerID] = true
+			}
+		}
+	}
+	dc.compMu.Unlock()
+
+	remotes := make(map[string]config.RemoteDef)
+	for id, rec := range dc.remoteSeeds {
+		peer := dc.peer(id)
+		keep := peer == nil
+		if peer != nil {
+			peer.stateMu.Lock()
+			// Not yet reconciled or handshake-rejected: parts unknown,
+			// keep the recorded entry rather than dropping tabs we
+			// cannot see.
+			keep = peer.rejected || !peer.initialAck
+			peer.stateMu.Unlock()
+		}
+		if keep {
+			remotes[rec.name] = rec.def
+		}
+	}
+	for id := range owning {
+		peer := dc.peer(id)
+		if peer == nil {
+			continue
+		}
+		e, ok := peer.endpoint.(*sshDaemonEndpoint)
+		if !ok {
+			continue
+		}
+		def := config.RemoteDef{Host: e.host, Instance: e.instance, Deploy: e.deploy}
+		if e.deploy != "auto" {
+			def.Binary = e.binary
+		}
+		remotes[e.name] = def
+	}
+
+	names := make([]string, 0, len(remotes))
+	for name := range remotes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var sig strings.Builder
+	for _, name := range names {
+		def := remotes[name]
+		fmt.Fprintf(&sig, "%s\x00%s\x00%s\x00%s\x00%s\x01", name, def.Host, def.Instance, def.Deploy, def.Binary)
+	}
+
+	dc.persistMu.Lock()
+	changed := !dc.persistSigSet || sig.String() != dc.persistSig
+	if changed {
+		dc.persistSigSet = true
+		dc.persistSig = sig.String()
+	}
+	dc.persistMu.Unlock()
+	if changed {
+		dc.persistRemotes(remotes)
+	}
 }
 
 // removeStalePart drops a part whose session disappeared while the peer

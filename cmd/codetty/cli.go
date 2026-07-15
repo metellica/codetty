@@ -106,6 +106,20 @@ func startTUIWithEndpoints(
 		log.Fatalf("connect to daemon: %v", err)
 	}
 
+	// Ad-hoc remote registry: remotes holding shadow tabs from earlier
+	// runs (created via the picker, not config) are reconnected in the
+	// background so their tabs reappear; part changes keep the file
+	// current.
+	recorded := loadRecordedRemotes()
+	seeds := make(map[string]recordedRemote)
+	for name, def := range recorded {
+		if e, err := newSSHDaemonEndpoint(name, def); err == nil {
+			seeds[e.ID()] = recordedRemote{name: name, def: def}
+		}
+	}
+	conn.remoteSeeds = seeds
+	conn.persistRemotes = saveRecordedRemotes
+
 	model := newTUIModel(conn, sc.focusTarget, sc.autoCreate)
 
 	// Apply startup layout mode (default is modeFocusBig).
@@ -140,6 +154,8 @@ func startTUIWithEndpoints(
 	if err := conn.Subscribe(p); err != nil {
 		log.Fatalf("subscribe: %v", err)
 	}
+
+	reconnectRecordedRemotes(conn, p, recorded)
 
 	err = runWithAutowrapDisabled(os.Stdout, func() error {
 		_, runErr := p.Run()

@@ -240,7 +240,9 @@ session 级 `remote` 作为其所有 tab 的默认值（单 tab 写法 `remote =
 `command` 仍然有效）；单个 tab 可用 `local = true` 强制本地。TUI 中 `Ctrl+A t`
 新建 tab 时会弹出目标选择:local、配置中的各 `[remote.*]`,以及自动从
 `~/.ssh/config` 读取的 Host 别名(默认 `instance = "default"`、`deploy = "auto"`;
-同名时 `[remote.*]` 定义优先)。
+同名时 `[remote.*]` 定义优先)。通过选择器临时创建的远程 tab 会记录到
+`~/.config/codetty/<instance>/remotes.json`,TUI 重启时自动重连这些远程,
+tab 仍在;远程上的 shadow tab 全部关闭后条目自动清除。
 
 `deploy = "never"` 可用于已经安装 CodeTTY 的主机，并可通过 `binary` 指定远程路径。
 没有 `remote` 字段时仍在本地运行；`command = ["ssh", "gpu01"]` 始终是普通 raw SSH。
