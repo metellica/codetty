@@ -641,6 +641,9 @@ func tabBarLabel(i int, tab tuiTab) string {
 	if label == "" {
 		label = fmt.Sprintf("%d", i+1)
 	}
+	if tab.Remote != "" {
+		label += "@" + tab.Remote
+	}
 	if badge := agentBadge(effectiveAgentState(tab)); badge != "" {
 		return fmt.Sprintf(" %d:%s %s ", i+1, label, badge)
 	}

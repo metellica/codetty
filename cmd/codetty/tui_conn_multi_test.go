@@ -163,6 +163,9 @@ func TestCompositeMergesShadowIntoLocalSession(t *testing.T) {
 	if len(info.Tabs) != 3 || info.Tabs[2].Name != "agent" {
 		t.Fatalf("merged tabs = %+v", info.Tabs)
 	}
+	if info.Tabs[0].Remote != "" || info.Tabs[1].Remote != "" || info.Tabs[2].Remote != "gpu" {
+		t.Fatalf("remote markers = %q %q %q", info.Tabs[0].Remote, info.Tabs[1].Remote, info.Tabs[2].Remote)
+	}
 	if info.ActiveTab != 1 {
 		t.Fatalf("merged active tab = %d, want local part's tab 1", info.ActiveTab)
 	}

@@ -174,6 +174,10 @@ type TabInfo struct {
 	Command    string `json:"command"`
 	Agent      string `json:"agent,omitempty"`       // detected agent name (e.g. "copilot")
 	AgentState string `json:"agent_state,omitempty"` // "idle", "working", "blocked"
+	// Remote names the remote the tab runs on. Never set by the daemon:
+	// the TUI composite layer stamps it on tabs merged from remote
+	// shadow parts so they can be marked in the UI.
+	Remote string `json:"remote,omitempty"`
 }
 
 // ResizePayload for FrameResize.

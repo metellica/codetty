@@ -596,7 +596,7 @@ func (m *tuiModel) syncTabInfo(sess *tuiSession, info daemon.SessionInfo) {
 		hadTabBar := len(sess.Tabs) > 1
 		tabs := make([]tuiTab, len(info.Tabs))
 		for i, t := range info.Tabs {
-			tabs[i] = tuiTab{Name: t.Name, Command: t.Command, Agent: t.Agent, AgentState: t.AgentState}
+			tabs[i] = tuiTab{Name: t.Name, Command: t.Command, Agent: t.Agent, AgentState: t.AgentState, Remote: t.Remote}
 			if i < len(sess.Tabs) {
 				tabs[i].Done = agentDoneAfterUpdate(sess.Tabs[i], tabs[i])
 			}

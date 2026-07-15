@@ -2,6 +2,7 @@ package main
 
 import (
 	"sort"
+	"strings"
 
 	"codetty/daemon"
 )
@@ -18,6 +19,7 @@ import (
 type compositePart struct {
 	peerID string
 	name   string             // session name on the owning daemon
+	label  string             // remote name for tab markers ("" for local)
 	info   daemon.SessionInfo // last-known info from that daemon
 }
 
@@ -101,6 +103,7 @@ func (c *compositeSession) mergedInfo() daemon.SessionInfo {
 	if len(c.parts) == 1 {
 		info := c.parts[0].info
 		info.Name = c.display
+		info.Tabs = stampRemoteTabs(info.Tabs, c.parts[0].label)
 		return info
 	}
 	if len(c.parts) == 0 {
@@ -120,7 +123,7 @@ func (c *compositeSession) mergedInfo() daemon.SessionInfo {
 		if len(tabs) == 0 {
 			tabs = []daemon.TabInfo{{Name: "default", Command: p.info.Command}}
 		}
-		info.Tabs = append(info.Tabs, tabs...)
+		info.Tabs = append(info.Tabs, stampRemoteTabs(tabs, p.label)...)
 		if p == c.active {
 			at := p.info.ActiveTab
 			if at < 0 || at >= len(tabs) {
@@ -135,6 +138,32 @@ func (c *compositeSession) mergedInfo() daemon.SessionInfo {
 
 func partKey(peerID, name string) string {
 	return peerID + "\x00" + name
+}
+
+// stampRemoteTabs marks tabs as living on the named remote. Copies before
+// stamping so the part's own slice is never mutated.
+func stampRemoteTabs(tabs []daemon.TabInfo, label string) []daemon.TabInfo {
+	if label == "" || len(tabs) == 0 {
+		return tabs
+	}
+	out := make([]daemon.TabInfo, len(tabs))
+	copy(out, tabs)
+	for i := range out {
+		out[i].Remote = label
+	}
+	return out
+}
+
+// peerRemoteLabel names the remote a peer's tabs run on for UI markers;
+// local tabs get no marker.
+func peerRemoteLabel(peer *daemonPeer) string {
+	if peer.id == localPeerID {
+		return ""
+	}
+	if e, ok := peer.endpoint.(*sshDaemonEndpoint); ok {
+		return e.name
+	}
+	return strings.TrimPrefix(peer.id, "remote:")
 }
 
 // displayForName maps a peer-side session name to a composite display name.
@@ -197,7 +226,7 @@ func (dc *daemonConn) mergeEvent(peer *daemonPeer, evt daemon.SessionEvent) (out
 		isNewComposite := len(c.parts) == 0
 		p := c.part(peer.id)
 		if p == nil {
-			p = &compositePart{peerID: peer.id, name: evt.Session}
+			p = &compositePart{peerID: peer.id, name: evt.Session, label: peerRemoteLabel(peer)}
 			c.insertPart(p)
 			dc.partOwner[partKey(peer.id, evt.Session)] = c
 		}

@@ -247,6 +247,8 @@ tab 仍在;远程上的 shadow tab 全部关闭后条目自动清除。
 `deploy = "never"` 可用于已经安装 CodeTTY 的主机，并可通过 `binary` 指定远程路径。
 没有 `remote` 字段时仍在本地运行；`command = ["ssh", "gpu01"]` 始终是普通 raw SSH。
 多个 session/tab 指向同一 `host + instance` 时共享一条 TUI bridge 连接。
+远程 tab 在 tab 栏和 list 侧栏中带 `@<remote>` 标记(如 `2:agent@gpu2`),
+便于与本地 tab 区分。
 
 版本兼容参考 SSH 的模型:订阅握手时双方交换协议版本区间和 capability 列表,
 取最高公共版本和能力交集通信;区间无交集时明确报错并提示升级较旧的一方。

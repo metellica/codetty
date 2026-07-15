@@ -143,6 +143,9 @@ func (m *tuiModel) buildListLines(sessions []*tuiSession, innerW int) []listLine
 				badge = "○"
 			}
 			tabLabel := fmt.Sprintf("   %s %s %s", badge, tab.Agent, word)
+			if tab.Remote != "" {
+				tabLabel = fmt.Sprintf("   %s %s@%s %s", badge, tab.Agent, tab.Remote, word)
+			}
 			if lipgloss.Width(tabLabel) > boxW {
 				tabLabel = ansi.Truncate(tabLabel, boxW, "…")
 			}

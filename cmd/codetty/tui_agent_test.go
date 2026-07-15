@@ -191,6 +191,21 @@ func TestTabBarLabelIncludesBadgeAndKeepsHitTestInSync(t *testing.T) {
 	}
 }
 
+func TestTabBarLabelMarksRemoteTabs(t *testing.T) {
+	local := tabBarLabel(0, tuiTab{Name: "shell"})
+	if strings.Contains(local, "@") {
+		t.Fatalf("local label %q has remote marker", local)
+	}
+	remote := tabBarLabel(1, tuiTab{Name: "agent", Remote: "gpu2"})
+	if !strings.Contains(remote, "agent@gpu2") {
+		t.Fatalf("remote label %q missing @gpu2 marker", remote)
+	}
+	unnamed := tabBarLabel(2, tuiTab{Remote: "gpu2"})
+	if !strings.Contains(unnamed, "3@gpu2") {
+		t.Fatalf("unnamed remote label %q missing marker", unnamed)
+	}
+}
+
 func TestRenderTabBarMutedDropsActiveHighlight(t *testing.T) {
 	plain := tuiTab{Name: "shell"}
 	blocked := tuiTab{Name: "agent", Agent: "copilot", AgentState: "blocked"}
