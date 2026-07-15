@@ -817,17 +817,49 @@ func (m *tuiModel) overlayConfirmKill(base string) string {
 		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
 }
 
+// overlayCreateSession renders a centered dialog for new session name input.
+func (m *tuiModel) overlayCreateSession(base string) string {
+	title := lipgloss.NewStyle().Bold(true).Render("New Session")
+	input := fmt.Sprintf("%s█", m.createText)
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("[Enter] confirm  [Esc] cancel")
+
+	content := title + "\n\n" + input + "\n\n" + help
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("39")).
+		Padding(1, 3)
+
+	box := boxStyle.Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		box,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
+}
+
+// overlayCreateTab renders a centered dialog for new tab name input.
+func (m *tuiModel) overlayCreateTab(base string) string {
+	title := lipgloss.NewStyle().Bold(true).Render("New Tab")
+	input := fmt.Sprintf("%s█", m.createTabText)
+	help := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Render("[Enter] confirm  [Esc] cancel")
+
+	content := title + "\n\n" + input + "\n\n" + help
+
+	boxStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("39")).
+		Padding(1, 3)
+
+	box := boxStyle.Render(content)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
+		box,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("0")))
+}
+
 func (m *tuiModel) statusBar() string {
 	if m.renaming {
 		prompt := fmt.Sprintf(" Rename: %s█  (Enter confirm, Esc cancel)", m.renameText)
-		return tuiStatusStyle.Width(m.width).Render(prompt)
-	}
-	if m.creating {
-		prompt := fmt.Sprintf(" New session name: %s█  (Enter confirm, Esc cancel)", m.createText)
-		return tuiStatusStyle.Width(m.width).Render(prompt)
-	}
-	if m.creatingTab {
-		prompt := fmt.Sprintf(" New tab name: %s█  (Enter confirm, Esc cancel)", m.createTabText)
 		return tuiStatusStyle.Width(m.width).Render(prompt)
 	}
 

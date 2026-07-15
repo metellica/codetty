@@ -85,8 +85,9 @@ type tuiModel struct {
 	createText string
 
 	// Create tab mode
-	creatingTab   bool
-	createTabText string
+	creatingTab        bool
+	createTabText      string
+	createTabSession   string // target session name (captured at prompt time)
 
 	// Text selection
 	sel textSelection
@@ -374,16 +375,18 @@ func (m *tuiModel) View() string {
 		}
 	}
 
+	var base string
 	if len(m.sessions) == 0 {
 		hint := "No sessions. Creating one..."
 		if m.autoCreate == nil {
 			hint = "No sessions. Press " + m.prefixLabel + " c to create one."
 		}
-		// Only show the status bar when in an interactive overlay state.
-		hasOverlay := m.renaming || m.creating || m.creatingTab || m.prefix
+		// Only show the status bar when in an interactive overlay state
+		// that still uses the bottom bar (renaming, prefix help).
+		hasStatusBar := m.renaming || m.prefix
 		centerH := m.height
 		var status string
-		if hasOverlay {
+		if hasStatusBar {
 			status = m.statusBar()
 			centerH = m.height - lipgloss.Height(status)
 		}
@@ -392,23 +395,21 @@ func (m *tuiModel) View() string {
 		}
 		body := lipgloss.Place(m.width, centerH, lipgloss.Center, lipgloss.Center,
 			tuiTitleStyle.Render("⬡ codetty")+"\n\n"+hint)
-		base := body
-		if hasOverlay {
+		base = body
+		if hasStatusBar {
 			base += "\n" + status
 		}
-		return base
-	}
-
-	var base string
-	switch m.mode {
-	case modeFullscreen:
-		base = m.fullscreenView()
-	case modeTabs:
-		base = m.tabsView()
-	case modeFocusBig:
-		base = m.focusBigView()
-	default:
-		base = m.listView()
+	} else {
+		switch m.mode {
+		case modeFullscreen:
+			base = m.fullscreenView()
+		case modeTabs:
+			base = m.tabsView()
+		case modeFocusBig:
+			base = m.focusBigView()
+		default:
+			base = m.listView()
+		}
 	}
 
 	// Overlay floating window if active
@@ -429,6 +430,16 @@ func (m *tuiModel) View() string {
 	// Overlay kill confirmation if active
 	if m.confirmKill {
 		base = m.overlayConfirmKill(base)
+	}
+
+	// Overlay create session dialog if active
+	if m.creating {
+		base = m.overlayCreateSession(base)
+	}
+
+	// Overlay create tab dialog if active
+	if m.creatingTab {
+		base = m.overlayCreateTab(base)
 	}
 
 	// Push the focused session's cursor position to the IME writer so that
