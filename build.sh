@@ -4,7 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "Building codetty..."
-go build -o codetty ./cmd/codetty
+# CGO_ENABLED=0 gives a static binary so remote auto-deploy works on hosts
+# with older glibc.
+CGO_ENABLED=0 go build -o codetty ./cmd/codetty
 echo "Done: codetty"
 
 if [[ "${1:-}" == "install" ]]; then
