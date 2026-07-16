@@ -503,6 +503,116 @@ func TestCreateTabOnQueuesUntilContainerAppears(t *testing.T) {
 	}
 }
 
+// AddPeerSynced must consume the peer's initial snapshot stream before
+// returning: tab creation right after it must see existing shadow
+// containers, or it would issue a doomed create_session and drop the
+// requested tab (and its name) entirely.
+func TestAddPeerWaitsForInitialSnapshot(t *testing.T) {
+	prog, _ := startTestProgram(t)
+	dc := newTestCompositeConn("local")
+	dc.program = prog
+	shadow := dc.testShadow("dev")
+
+	client, server := net.Pipe()
+	endpoint := &singleConnEndpoint{id: "remote:gpu", conn: client}
+
+	serverFrames := make(chan recordedFrame, 8)
+	go func() {
+		if _, _, err := daemon.ReadFrame(server); err != nil {
+			return // hello request
+		}
+		daemon.WriteFrame(server, daemon.FrameSessionEvent, daemon.MarshalJSON(daemon.SessionEvent{
+			Type: "snapshot", Session: shadow,
+			Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "old"}}},
+			Cols: 100, Rows: 30,
+		}))
+		daemon.WriteFrame(server, daemon.FrameResponse, daemon.MarshalJSON(daemon.Response{OK: true}))
+		for {
+			ft, payload, err := daemon.ReadFrame(server)
+			if err != nil {
+				return
+			}
+			serverFrames <- recordedFrame{ft, payload}
+		}
+	}()
+
+	if err := dc.AddPeerSynced("remote:gpu", endpoint); err != nil {
+		t.Fatalf("AddPeerSynced: %v", err)
+	}
+	t.Cleanup(func() {
+		close(dc.closed)
+		server.Close()
+	})
+
+	if dc.composites["dev"] == nil || dc.composites["dev"].part("remote:gpu") == nil {
+		t.Fatal("existing shadow container not visible after AddPeer")
+	}
+
+	dc.CreateTabOn("dev", "remote:gpu", "agent", nil, "", nil, 100, 30)
+
+	select {
+	case f := <-serverFrames:
+		if f.ft != daemon.FrameCreateTab {
+			t.Fatalf("frame type = %d, want create_tab", f.ft)
+		}
+		var ct daemon.CreateTabRequest
+		mustUnmarshal(t, f.payload, &ct)
+		if ct.Session != shadow || ct.Name != "agent" {
+			t.Fatalf("create tab = %+v", ct)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no frame reached the peer")
+	}
+}
+
+// Remote containers keep the PTY size of a previous run; when one joins a
+// composite it must be re-fitted to the panel size the TUI last pushed.
+func TestRemotePartJoinRefitsStaleContainer(t *testing.T) {
+	dc := newTestCompositeConn("local", "remote:gpu")
+	local := dc.peers["local"]
+	remote := dc.peers["remote:gpu"]
+	shadow := dc.testShadow("dev")
+
+	dc.mergeAndRun(local, daemon.SessionEvent{
+		Type: "snapshot", Session: "dev",
+		Info: daemon.SessionInfo{Name: "dev", Tabs: []daemon.TabInfo{{Name: "shell"}}},
+	})
+	dc.SendResizeSession("dev", 120, 40)
+
+	dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "snapshot", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}},
+		Cols: 80, Rows: 24,
+	})
+
+	resizes := func() []daemon.ResizePayload {
+		var out []daemon.ResizePayload
+		for _, f := range remote.conn.(*recordingConn).frames(t) {
+			if f.ft == daemon.FrameResize {
+				var rp daemon.ResizePayload
+				mustUnmarshal(t, f.payload, &rp)
+				out = append(out, rp)
+			}
+		}
+		return out
+	}
+
+	got := resizes()
+	if len(got) != 1 || got[0].Name != shadow || got[0].Cols != 120 || got[0].Rows != 40 {
+		t.Fatalf("resizes = %+v, want one %s 120x40", got, shadow)
+	}
+
+	// A part already at the panel size is left alone.
+	dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "snapshot", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}},
+		Cols: 120, Rows: 40,
+	})
+	if got := resizes(); len(got) != 1 {
+		t.Fatalf("resizes after fitted snapshot = %+v, want no new resize", got)
+	}
+}
+
 func TestFinishPeerReconcileReturnsMissingSessions(t *testing.T) {
 	peer := &daemonPeer{
 		known:     map[string]bool{"alive": true, "gone": true},
@@ -775,4 +885,86 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition not met in time")
+}
+
+// Two endpoints reaching the same daemon (e.g. an ssh alias and the raw
+// IP of one host) must be deduplicated on the subscribe ACK's daemon ID:
+// otherwise the shared shadow session merges twice and every tab shows up
+// duplicated, with clicks landing on the wrong copy.
+func TestDuplicateDaemonPeerDeduped(t *testing.T) {
+	prog, _ := startTestProgram(t)
+	dc := newTestCompositeConn("local", "remote:jenkins", "remote:141")
+	dc.program = prog
+	shadow := dc.testShadow("dev")
+
+	jenkins := dc.peers["remote:jenkins"]
+	dup := dc.peers["remote:141"]
+
+	snapshot := daemon.SessionEvent{
+		Type: "snapshot", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{
+			{Name: "tab-4"}, {Name: "tab-5"},
+		}},
+	}
+
+	ack := func(peer *daemonPeer, id string) {
+		dc.handlePeerFrame(peer, daemon.FrameResponse, daemon.MarshalJSON(daemon.Response{
+			OK: true, DaemonID: id,
+		}))
+	}
+
+	// Both peers deliver the same shadow session, then ACK with the same
+	// daemon identity.
+	dc.handlePeerFrame(jenkins, daemon.FrameSessionEvent, daemon.MarshalJSON(snapshot))
+	ack(jenkins, "deadbeef01")
+	dc.handlePeerFrame(dup, daemon.FrameSessionEvent, daemon.MarshalJSON(snapshot))
+
+	// Before dedup the composite briefly holds both parts (4 tabs).
+	dc.compMu.Lock()
+	tabs := len(dc.composites["dev"].mergedInfo().Tabs)
+	dc.compMu.Unlock()
+	if tabs != 4 {
+		t.Fatalf("pre-dedup merged tabs = %d, want 4", tabs)
+	}
+
+	ack(dup, "deadbeef01")
+
+	// The duplicate's part is unwound: single part, no doubled tabs.
+	dc.compMu.Lock()
+	c := dc.composites["dev"]
+	parts, tabs := len(c.parts), len(c.mergedInfo().Tabs)
+	dc.compMu.Unlock()
+	if parts != 1 || tabs != 2 {
+		t.Fatalf("post-dedup parts=%d tabs=%d, want 1 part with 2 tabs", parts, tabs)
+	}
+	if dc.peer("remote:141") != jenkins {
+		t.Fatal("alias must resolve remote:141 to the jenkins peer")
+	}
+	if dc.HasPeer("remote:141") != true {
+		t.Fatal("HasPeer must report aliased peers as present")
+	}
+
+	// Tab creation targeting the alias routes to the canonical peer.
+	dc.CreateTabOn("dev", "remote:141", "agent", nil, "", nil, 100, 30)
+	var created []daemon.CreateTabRequest
+	for _, f := range jenkins.conn.(*recordingConn).frames(t) {
+		if f.ft == daemon.FrameCreateTab {
+			var ct daemon.CreateTabRequest
+			mustUnmarshal(t, f.payload, &ct)
+			created = append(created, ct)
+		}
+	}
+	if len(created) != 1 || created[0].Session != shadow || created[0].Name != "agent" {
+		t.Fatalf("create tab via alias = %+v, want one %s/agent on jenkins", created, shadow)
+	}
+
+	// A distinct daemon is left alone.
+	other := &daemonPeer{id: "remote:gpu2", conn: &recordingConn{}, known: map[string]bool{}}
+	dc.peersMu.Lock()
+	dc.peers["remote:gpu2"] = other
+	dc.peersMu.Unlock()
+	ack(other, "0badc0de99")
+	if dc.peer("remote:gpu2") != other {
+		t.Fatal("peer with a different daemon ID must stay registered")
+	}
 }

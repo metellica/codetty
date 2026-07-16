@@ -120,6 +120,8 @@ const (
 	ActionCreateTab    Action = "create_tab"
 	ActionCloseTab     Action = "close_tab"
 	ActionUpgrade      Action = "upgrade"
+	ActionSendKeys     Action = "send_keys"
+	ActionCapture      Action = "capture"
 )
 
 // Request is the JSON payload for FrameRequest.
@@ -135,6 +137,12 @@ type Request struct {
 	TabName  string   `json:"tab_name,omitempty"`  // tab name for create_tab action
 	TabIndex int      `json:"tab_index,omitempty"` // tab index for close_tab action
 
+	// send_keys / capture target and payload. Tab selects a tab within
+	// the session: "" = active tab, a number = tab index, otherwise a
+	// tab name. Data carries the raw bytes to write to the tab's PTY.
+	Tab  string `json:"tab,omitempty"`
+	Data []byte `json:"data,omitempty"`
+
 	// Protocol hello, sent with subscribe_all. Zero values mean the peer
 	// predates negotiation (treated as version 1 with all current caps).
 	Proto    int      `json:"proto,omitempty"`     // newest protocol version the client speaks
@@ -148,6 +156,7 @@ type Response struct {
 	Error    string        `json:"error,omitempty"`
 	Session  string        `json:"session,omitempty"`
 	Sessions []SessionInfo `json:"sessions,omitempty"`
+	Text     string        `json:"text,omitempty"` // capture action: screen text
 
 	// Protocol hello, echoed on the subscribe_all ACK (and on the rejection
 	// response when negotiation fails) so the client can compute the same
@@ -155,6 +164,12 @@ type Response struct {
 	Proto    int      `json:"proto,omitempty"`
 	ProtoMin int      `json:"proto_min,omitempty"`
 	Caps     []string `json:"caps,omitempty"`
+
+	// DaemonID uniquely identifies the answering daemon instance on
+	// subscribe ACKs. Clients connected to the same daemon through
+	// several endpoints (e.g. an ssh alias and the raw IP of one host)
+	// use it to deduplicate peers instead of double-merging sessions.
+	DaemonID string `json:"daemon_id,omitempty"`
 }
 
 // SessionInfo describes a session in list responses.

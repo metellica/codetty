@@ -5,7 +5,9 @@ package daemon
 import (
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -32,6 +34,88 @@ func TestServer_StartAndStop(t *testing.T) {
 	_, err = net.DialTimeout("unix", sockPath, 100*time.Millisecond)
 	if err == nil {
 		t.Fatal("should not be able to connect after stop")
+	}
+}
+
+// Clients racing to auto-start the daemon can spawn several __server
+// processes; the instance lock must let exactly one bind the socket, and
+// losers must not disturb the winner's socket (previously a losing
+// daemon's shutdown unlinked it).
+func TestServer_InstanceLockSingleDaemon(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "test.sock")
+
+	srv1 := NewServer(sockPath)
+	if err := srv1.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	srv2 := NewServer(sockPath)
+	if err := srv2.Start(); err == nil {
+		srv2.Stop()
+		t.Fatal("second daemon on the same socket must be refused")
+	}
+
+	// The winner's socket must still be intact.
+	conn, err := net.DialTimeout("unix", sockPath, time.Second)
+	if err != nil {
+		t.Fatalf("winner socket broken after refused start: %v", err)
+	}
+	conn.Close()
+
+	// Stop releases the lock so a fresh daemon can start.
+	srv1.Stop()
+	srv3 := NewServer(sockPath)
+	if err := srv3.Start(); err != nil {
+		t.Fatalf("start after stop: %v", err)
+	}
+	srv3.Stop()
+}
+
+// The instance lock must be handed across a hot upgrade: the recovered
+// server keeps holding it (no window for a racing client to start a
+// second daemon) and a concurrent start is still refused.
+func TestServer_InstanceLockSurvivesUpgradeState(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "test.sock")
+
+	srv1 := NewServer(sockPath)
+	if err := srv1.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer srv1.Stop()
+
+	stateFile, err := srv1.PrepareUpgrade()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state UpgradeState
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.LockFd <= 0 {
+		t.Fatalf("LockFd = %d, want the held lock fd", state.LockFd)
+	}
+
+	srv2, err := RecoverFromUpgrade(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv2.lock == nil {
+		t.Fatal("recovered server does not hold the instance lock")
+	}
+	// srv1 and srv2 share the same lock fd (in-process stand-in for
+	// exec); drop srv2's reference so srv1.Stop doesn't double-close.
+	srv2.lock = nil
+
+	other := NewServer(sockPath)
+	if err := other.Start(); err == nil {
+		other.Stop()
+		t.Fatal("lock must still be held after upgrade recovery")
 	}
 }
 
@@ -336,5 +420,124 @@ func TestServer_CreateTab(t *testing.T) {
 	}
 	if sess.Tabs[1].Name != "secondary" {
 		t.Errorf("tab[1].Name = %q, want secondary", sess.Tabs[1].Name)
+	}
+}
+
+// send_keys writes bytes to the targeted tab's PTY; capture returns the
+// tab's screen text — together the tmux send-keys/capture-pane analog.
+func TestServer_SendKeysAndCapture(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "test.sock")
+	srv := NewServer(sockPath)
+	srv.Start()
+	defer srv.Stop()
+
+	conn, _ := net.Dial("unix", sockPath)
+	WriteFrame(conn, FrameRequest, MarshalJSON(Request{
+		Action: ActionNewSession, Session: "sk", Command: []string{"cat"},
+		Cols: 80, Rows: 24, NoAttach: true,
+	}))
+	ReadFrame(conn)
+	conn.Close()
+
+	send := func(req Request) Response {
+		t.Helper()
+		c, err := net.Dial("unix", sockPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		WriteFrame(c, FrameRequest, MarshalJSON(req))
+		ft, payload, err := ReadFrame(c)
+		if err != nil || ft != FrameResponse {
+			t.Fatalf("response: ft=%d err=%v", ft, err)
+		}
+		var resp Response
+		json.Unmarshal(payload, &resp)
+		return resp
+	}
+
+	if resp := send(Request{Action: ActionSendKeys, Session: "sk", Data: []byte("hello\r")}); !resp.OK {
+		t.Fatalf("send_keys: %s", resp.Error)
+	}
+
+	// cat echoes the line; poll the screen until it shows up.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		resp := send(Request{Action: ActionCapture, Session: "sk"})
+		if !resp.OK {
+			t.Fatalf("capture: %s", resp.Error)
+		}
+		if strings.Contains(resp.Text, "hello") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("screen never showed sent keys; text=%q", resp.Text)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	// Errors: bad session, bad tab ref.
+	if resp := send(Request{Action: ActionSendKeys, Session: "nope", Data: []byte("x")}); resp.OK {
+		t.Fatal("send_keys to missing session must fail")
+	}
+	if resp := send(Request{Action: ActionCapture, Session: "sk", Tab: "9"}); resp.OK {
+		t.Fatal("capture of out-of-range tab must fail")
+	}
+}
+
+// The subscribe ACK must carry a stable daemon identity so clients can
+// deduplicate multiple endpoints reaching the same daemon; it must also
+// survive hot upgrade (clients would otherwise treat the upgraded daemon
+// as a new one).
+func TestServer_DaemonIDOnSubscribeAndUpgrade(t *testing.T) {
+	dir := t.TempDir()
+	srv := NewServer(filepath.Join(dir, "test.sock"))
+	if srv.daemonID == "" {
+		t.Fatal("daemonID must be set at construction")
+	}
+	srv.Start()
+	defer srv.Stop()
+
+	subscribe := func() string {
+		t.Helper()
+		conn, err := net.Dial("unix", srv.sockPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		WriteFrame(conn, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll}))
+		for {
+			ft, payload, err := ReadFrame(conn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ft != FrameResponse {
+				continue
+			}
+			var resp Response
+			json.Unmarshal(payload, &resp)
+			if !resp.OK {
+				t.Fatalf("subscribe failed: %s", resp.Error)
+			}
+			return resp.DaemonID
+		}
+	}
+
+	if got := subscribe(); got != srv.daemonID {
+		t.Fatalf("ACK daemon_id = %q, want %q", got, srv.daemonID)
+	}
+
+	stateFile, err := srv.PrepareUpgrade()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv2, err := RecoverFromUpgrade(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv2.lock = nil // shared with srv in-process; avoid double release
+	if srv2.daemonID != srv.daemonID {
+		t.Fatalf("daemonID after upgrade = %q, want %q", srv2.daemonID, srv.daemonID)
 	}
 }

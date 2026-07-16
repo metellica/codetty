@@ -17,9 +17,16 @@ import (
 
 // UpgradeState holds the serialized daemon state for hot restart.
 type UpgradeState struct {
-	SocketPath    string           `json:"socket_path"`
-	ActiveSession string           `json:"active_session,omitempty"`
-	Sessions      []UpgradeSession `json:"sessions"`
+	SocketPath    string `json:"socket_path"`
+	ActiveSession string `json:"active_session,omitempty"`
+	// DaemonID keeps the daemon identity stable across hot upgrades so
+	// connected clients don't see a "new" daemon after exec.
+	DaemonID string `json:"daemon_id,omitempty"`
+	// LockFd is the instance-lock fd kept open across exec, so no racing
+	// client can start a second daemon mid-upgrade. 0 = not held (state
+	// written by an older binary).
+	LockFd   int              `json:"lock_fd,omitempty"`
+	Sessions []UpgradeSession `json:"sessions"`
 }
 
 // UpgradeSession holds the state of a single session for hot restart.
@@ -58,6 +65,10 @@ func (s *Server) PrepareUpgrade() (string, error) {
 	state := UpgradeState{
 		SocketPath:    s.sockPath,
 		ActiveSession: s.active,
+		DaemonID:      s.daemonID,
+	}
+	if s.lock != nil {
+		state.LockFd = s.lock.prepareExec()
 	}
 
 	for _, sess := range s.orderedSessionsLocked() {
@@ -161,6 +172,14 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 
 	srv := NewServer(state.SocketPath)
 	srv.active = state.ActiveSession
+	if state.DaemonID != "" {
+		srv.daemonID = state.DaemonID
+	}
+	if state.LockFd > 0 {
+		// The previous daemon's instance lock survived exec; keep holding
+		// it instead of reacquiring, so there is no unlocked window.
+		srv.lock = recoverSockLock(state.LockFd)
+	}
 
 	for _, us := range state.Sessions {
 		sess := &DaemonSession{

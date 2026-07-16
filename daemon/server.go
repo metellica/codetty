@@ -1,11 +1,14 @@
 package daemon
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -15,6 +18,8 @@ import (
 // Server is the daemon that manages PTY sessions.
 type Server struct {
 	sockPath    string
+	daemonID    string    // unique daemon identity, echoed on subscribe ACKs
+	lock        *sockLock // exclusive daemon-instance lock; nil until Start
 	listener    net.Listener
 	sessions    map[string]*DaemonSession
 	order       []string // session names in display order (authoritative)
@@ -28,16 +33,30 @@ type Server struct {
 
 // NewServer creates a new daemon server listening on the given Unix socket path.
 func NewServer(sockPath string) *Server {
+	idBytes := make([]byte, 8)
+	rand.Read(idBytes)
 	return &Server{
 		sockPath: sockPath,
+		daemonID: hex.EncodeToString(idBytes),
 		sessions: make(map[string]*DaemonSession),
 		done:     make(chan struct{}),
 		stopped:  make(chan struct{}),
 	}
 }
 
-// Start begins listening for client connections.
+// Start begins listening for client connections. The instance lock is
+// taken first: clients racing to auto-start the daemon may spawn several
+// server processes, and only the lock holder may unlink and (re)bind the
+// socket — otherwise a losing daemon's shutdown would remove the socket
+// out from under the winner.
 func (s *Server) Start() error {
+	if s.lock == nil {
+		lock, err := acquireSockLock(s.sockPath)
+		if err != nil {
+			return err
+		}
+		s.lock = lock
+	}
 	os.Remove(s.sockPath)
 
 	ln, err := net.Listen("unix", s.sockPath)
@@ -119,6 +138,10 @@ func (s *Server) Stop() {
 	s.mu.Unlock()
 
 	os.Remove(s.sockPath)
+	if s.lock != nil {
+		s.lock.release()
+		s.lock = nil
+	}
 	close(s.stopped)
 }
 
@@ -175,6 +198,10 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.handleCloseTab(conn, req)
 	case ActionUpgrade:
 		s.handleUpgrade(conn, req)
+	case ActionSendKeys:
+		s.handleSendKeys(conn, req)
+	case ActionCapture:
+		s.handleCapture(conn, req)
 	default:
 		s.sendError(conn, fmt.Sprintf("unknown action: %s", req.Action))
 	}
@@ -510,6 +537,7 @@ func (s *Server) handleSubscribeAll(conn net.Conn, req Request) {
 		Proto:    ProtocolVersion,
 		ProtoMin: MinProtocolVersion,
 		Caps:     ProtocolCaps(),
+		DaemonID: s.daemonID,
 	}))
 	sub.activate()
 	sub.Run(s)
@@ -737,13 +765,6 @@ func (s *Server) handleCreateTab(conn net.Conn, req Request) {
 		return
 	}
 
-	// Also rename the first tab if it's still named "default" and this is the first extra tab
-	sess.mu.Lock()
-	if len(sess.Tabs) == 2 && sess.Tabs[0].Name == "default" {
-		sess.Tabs[0].Name = sess.Tabs[0].Name // keep as-is unless renamed
-	}
-	sess.mu.Unlock()
-
 	// Notify subscribers
 	s.notifySubscribers(SessionEvent{
 		Type:    "tab_created",
@@ -774,6 +795,70 @@ func (s *Server) handleCloseTab(conn net.Conn, req Request) {
 	})
 
 	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
+}
+
+// tabByRef resolves a tab reference within a session: "" = active tab, a
+// number = tab index, anything else = tab name.
+func (s *DaemonSession) tabByRef(ref string) (*SessionTab, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.Tabs) == 0 {
+		return nil, fmt.Errorf("session has no tabs")
+	}
+	if ref == "" {
+		return s.Tabs[s.ActiveTab], nil
+	}
+	if idx, err := strconv.Atoi(ref); err == nil {
+		if idx < 0 || idx >= len(s.Tabs) {
+			return nil, fmt.Errorf("tab index %d out of range (0..%d)", idx, len(s.Tabs)-1)
+		}
+		return s.Tabs[idx], nil
+	}
+	for _, tab := range s.Tabs {
+		if tab.Name == ref {
+			return tab, nil
+		}
+	}
+	return nil, fmt.Errorf("tab %q not found", ref)
+}
+
+// handleSendKeys writes raw bytes to a tab's PTY (tmux send-keys analog;
+// the CLI translates key names to bytes).
+func (s *Server) handleSendKeys(conn net.Conn, req Request) {
+	sess := s.SessionByName(req.Session)
+	if sess == nil {
+		s.sendError(conn, fmt.Sprintf("session %q not found", req.Session))
+		return
+	}
+	tab, err := sess.tabByRef(req.Tab)
+	if err != nil {
+		s.sendError(conn, err.Error())
+		return
+	}
+	if _, err := tab.Terminal.Write(req.Data); err != nil {
+		s.sendError(conn, fmt.Sprintf("write: %v", err))
+		return
+	}
+	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
+}
+
+// handleCapture returns a tab's screen as plain text (tmux capture-pane
+// analog). Rows limits output to the bottom N rows; 0 = whole screen.
+func (s *Server) handleCapture(conn net.Conn, req Request) {
+	sess := s.SessionByName(req.Session)
+	if sess == nil {
+		s.sendError(conn, fmt.Sprintf("session %q not found", req.Session))
+		return
+	}
+	tab, err := sess.tabByRef(req.Tab)
+	if err != nil {
+		s.sendError(conn, err.Error())
+		return
+	}
+	WriteFrame(conn, FrameResponse, MarshalJSON(Response{
+		OK:   true,
+		Text: tab.Screen.TailText(int(req.Rows)),
+	}))
 }
 
 // closeTabForSubscriber closes a tab in a session.

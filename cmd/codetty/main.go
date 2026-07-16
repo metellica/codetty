@@ -63,6 +63,9 @@ Usage:
   codetty ls [-a]                              List active sessions (-a: all instances)
   codetty kill [-s name]                       Kill a session
   codetty kill-server                          Stop the daemon and all sessions
+  codetty send-keys -s name [-t tab] keys...   Send keys to a session's tab (tmux style:
+                                               Enter, C-c, M-x, Up... ; -l = literal)
+  codetty capture -s name [-t tab] [-n rows]   Print a tab's screen as plain text
   codetty upgrade [-r remote|all]              Hot-upgrade daemon binary without killing
                                                sessions (-r: deploy + upgrade a remote)
   codetty version                              Show version and build time
@@ -141,6 +144,10 @@ func main() {
 		cmdKill(args)
 	case "kill-server":
 		cmdKillServer(args)
+	case "send-keys", "send":
+		cmdSendKeys(args)
+	case "capture", "capture-pane":
+		cmdCapture(args)
 	case "upgrade":
 		cmdUpgrade(args)
 	case "reload":

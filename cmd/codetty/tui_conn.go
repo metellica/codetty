@@ -31,6 +31,13 @@ type daemonConn struct {
 	peers   map[string]*daemonPeer
 	peersMu sync.RWMutex
 
+	// peerAliases maps removed duplicate peer IDs to the canonical peer
+	// connected to the same daemon (guarded by peersMu). Two endpoints
+	// can reach one daemon (e.g. an ssh alias and the raw IP of the same
+	// host); the daemon ID on the subscribe ACK exposes that, the losing
+	// peer is dropped and requests targeting it follow the alias.
+	peerAliases map[string]string
+
 	// localID identifies this TUI host inside shadow session names.
 	localID string
 
@@ -39,6 +46,13 @@ type daemonConn struct {
 	composites map[string]*compositeSession // display name -> composite
 	partOwner  map[string]*compositeSession // partKey(peer, name) -> composite
 	queuedTabs map[string][]queuedTab       // partKey -> tabs awaiting container
+
+	// Panel content sizes the TUI last pushed (guarded by compMu):
+	// per-display sizes plus a global fallback. Remote parts joining a
+	// composite later (reconnects, recorded remotes) are re-fitted to
+	// these, since their PTYs keep the size of a previous run.
+	panelSizes    map[string][2]uint16
+	lastPanelSize [2]uint16
 
 	pendingSubs int
 	subMu       sync.Mutex
@@ -81,9 +95,13 @@ type daemonPeer struct {
 
 	// Negotiated protocol state from the subscribe ACK (stateMu). A peer
 	// that rejected the handshake is marked rejected and never reconnected.
-	proto    int
-	caps     map[string]bool
-	rejected bool
+	// A peer that turned out to reach the same daemon as another peer is
+	// marked duplicate, dropped and aliased to the canonical peer.
+	proto     int
+	caps      map[string]bool
+	daemonID  string
+	rejected  bool
+	duplicate bool
 }
 
 // hasCap reports whether the peer advertised a capability; future features
@@ -192,7 +210,20 @@ func (dc *daemonConn) multi() bool {
 func (dc *daemonConn) peer(id string) *daemonPeer {
 	dc.peersMu.RLock()
 	defer dc.peersMu.RUnlock()
-	return dc.peers[id]
+	return dc.peers[dc.resolvePeerIDLocked(id)]
+}
+
+// resolvePeerIDLocked follows duplicate-peer aliases to the canonical peer
+// ID. Caller must hold peersMu (read or write).
+func (dc *daemonConn) resolvePeerIDLocked(id string) string {
+	for i := 0; i < 8; i++ {
+		canon, ok := dc.peerAliases[id]
+		if !ok {
+			return id
+		}
+		id = canon
+	}
+	return id
 }
 
 func (dc *daemonConn) peerList() []*daemonPeer {
@@ -210,18 +241,138 @@ func (dc *daemonConn) HasPeer(id string) bool {
 	return dc.peer(id) != nil
 }
 
+// resolvePeerID follows duplicate-peer aliases to the canonical peer ID.
+func (dc *daemonConn) resolvePeerID(id string) string {
+	dc.peersMu.RLock()
+	defer dc.peersMu.RUnlock()
+	return dc.resolvePeerIDLocked(id)
+}
+
+// knownSessions returns the session names last seen from this peer.
+func (peer *daemonPeer) knownSessions() []string {
+	peer.stateMu.Lock()
+	defer peer.stateMu.Unlock()
+	names := make([]string, 0, len(peer.known))
+	for name := range peer.known {
+		names = append(names, name)
+	}
+	return names
+}
+
+// registerDaemonIdentity records the daemon ID a peer's subscribe ACK
+// carried and detects duplicates: two peers reaching the same daemon
+// (e.g. an ssh alias and the raw IP of one host) must not both merge
+// that daemon's sessions — tabs would show up twice and clicks would
+// land on the wrong copy. The losing peer — the newcomer, unless it is
+// the local daemon — is dropped, aliased to the winner so requests
+// targeting it retarget transparently, and returned for the caller to
+// unwind its merged parts. Returns nil when there is no duplicate.
+func (dc *daemonConn) registerDaemonIdentity(peer *daemonPeer, daemonID string) *daemonPeer {
+	if daemonID == "" {
+		return nil
+	}
+	dc.peersMu.Lock()
+	defer dc.peersMu.Unlock()
+
+	peer.stateMu.Lock()
+	peer.daemonID = daemonID
+	peer.stateMu.Unlock()
+
+	var other *daemonPeer
+	for _, p := range dc.peers {
+		if p == peer {
+			continue
+		}
+		p.stateMu.Lock()
+		match := p.daemonID == daemonID
+		p.stateMu.Unlock()
+		if match {
+			other = p
+			break
+		}
+	}
+	if other == nil {
+		return nil
+	}
+
+	loser, winner := peer, other
+	if peer.id == localPeerID {
+		loser, winner = other, peer
+	}
+	loser.stateMu.Lock()
+	loser.duplicate = true
+	loser.stateMu.Unlock()
+	if dc.peerAliases == nil {
+		dc.peerAliases = make(map[string]string)
+	}
+	dc.peerAliases[loser.id] = winner.id
+	delete(dc.peers, loser.id)
+	_ = loser.conn.Close()
+	return loser
+}
+
 // AddPeer connects to a new daemon endpoint at runtime and subscribes to
-// it, so shadow sessions on it merge into the composite view.
+// it, so shadow sessions on it merge into the composite view. The initial
+// snapshot stream is consumed in the background; callers that need the
+// peer's existing containers visible on return use AddPeerSynced.
 func (dc *daemonConn) AddPeer(id string, endpoint daemonEndpoint) error {
+	peer, err := dc.connectPeer(id, endpoint)
+	if err != nil || peer == nil {
+		return err
+	}
+	go dc.readPeerLoop(peer)
+	return nil
+}
+
+// AddPeerSynced is AddPeer, but consumes the peer's initial snapshot
+// stream before returning (like a reconnect does): callers create tabs
+// right after it returns and must already see the peer's existing shadow
+// containers — otherwise CreateTabOn would issue a create_session for a
+// container that already exists there, and the requested tab (with its
+// name) would be dropped. Blocks on Program.Send, so it must not be called
+// from the Update goroutine.
+func (dc *daemonConn) AddPeerSynced(id string, endpoint daemonEndpoint) error {
+	peer, err := dc.connectPeer(id, endpoint)
+	if err != nil || peer == nil {
+		return err
+	}
+	if err := dc.readPeerUntilSubscribed(peer); err != nil {
+		dc.peersMu.Lock()
+		delete(dc.peers, id)
+		dc.peersMu.Unlock()
+		_ = peer.conn.Close()
+		return err
+	}
+	peer.stateMu.Lock()
+	rejected, duplicate := peer.rejected, peer.duplicate
+	peer.stateMu.Unlock()
+	if duplicate {
+		// This endpoint reaches a daemon we're already connected to;
+		// the peer was dropped and aliased to the canonical one, which
+		// the caller can use transparently.
+		return nil
+	}
+	go dc.readPeerLoop(peer)
+	if rejected {
+		// The peer stays registered (never reconnected), but the caller
+		// must not act on it.
+		return fmt.Errorf("protocol handshake rejected")
+	}
+	return nil
+}
+
+// connectPeer dials and subscribes a new peer. A nil peer with nil error
+// means the peer already exists.
+func (dc *daemonConn) connectPeer(id string, endpoint daemonEndpoint) (*daemonPeer, error) {
 	if !dc.multi() {
-		return fmt.Errorf("not in multi-daemon mode")
+		return nil, fmt.Errorf("not in multi-daemon mode")
 	}
 	if dc.peer(id) != nil {
-		return nil
+		return nil, nil
 	}
 	conn, err := endpoint.Dial()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	peer := &daemonPeer{
 		id:       id,
@@ -233,7 +384,7 @@ func (dc *daemonConn) AddPeer(id string, endpoint daemonEndpoint) error {
 	if _, ok := dc.peers[id]; ok {
 		dc.peersMu.Unlock()
 		_ = conn.Close()
-		return nil
+		return nil, nil
 	}
 	dc.peers[id] = peer
 	dc.peersMu.Unlock()
@@ -243,10 +394,9 @@ func (dc *daemonConn) AddPeer(id string, endpoint daemonEndpoint) error {
 		delete(dc.peers, id)
 		dc.peersMu.Unlock()
 		_ = conn.Close()
-		return err
+		return nil, err
 	}
-	go dc.readPeerLoop(peer)
-	return nil
+	return peer, nil
 }
 
 // reconnectCmd retries dialing the daemon socket for a few seconds. The
@@ -314,9 +464,9 @@ func (dc *daemonConn) readPeerLoop(peer *daemonPeer) {
 	for {
 		_ = dc.readPeer(peer)
 		peer.stateMu.Lock()
-		rejected := peer.rejected
+		gone := peer.rejected || peer.duplicate
 		peer.stateMu.Unlock()
-		if rejected {
+		if gone {
 			_ = peer.conn.Close()
 			return
 		}
@@ -413,6 +563,25 @@ func (dc *daemonConn) handlePeerFrame(peer *daemonPeer, ft daemon.FrameType, pay
 			peer.caps = daemon.IntersectCaps(resp.Caps)
 		}
 		peer.stateMu.Unlock()
+		if respOK && resp.OK {
+			if loser := dc.registerDaemonIdentity(peer, resp.DaemonID); loser != nil {
+				// Unwind everything merged from the duplicate peer;
+				// the canonical peer already carries those sessions.
+				for _, session := range loser.knownSessions() {
+					out, post := dc.removeStalePart(loser.id, session)
+					for _, e := range out {
+						dc.program.Send(daemonSessionEventMsg{Event: e})
+					}
+					for _, fn := range post {
+						fn()
+					}
+				}
+				if dc.program != nil {
+					dc.program.Send(tuiNoticeMsg{text: fmt.Sprintf(
+						"%s: same daemon as %s, merged", loser.id, dc.resolvePeerID(loser.id))})
+				}
+			}
+		}
 		if firstAck {
 			dc.ackPending(peer)
 		}
@@ -699,6 +868,38 @@ func (dc *daemonConn) partsOf(display string) []partRef {
 	return refs
 }
 
+// rememberPanelSize records the content size the TUI pushed for a display
+// session ("" records the global fallback), so remote parts joining that
+// composite later can be re-fitted.
+func (dc *daemonConn) rememberPanelSize(display string, cols, rows uint16) {
+	if cols == 0 || rows == 0 {
+		return
+	}
+	dc.compMu.Lock()
+	defer dc.compMu.Unlock()
+	if display == "" {
+		dc.lastPanelSize = [2]uint16{cols, rows}
+		return
+	}
+	if dc.panelSizes == nil {
+		dc.panelSizes = make(map[string][2]uint16)
+	}
+	dc.panelSizes[display] = [2]uint16{cols, rows}
+	dc.lastPanelSize = [2]uint16{cols, rows}
+}
+
+// desiredPanelSizeLocked returns the content size a display session's parts
+// should have, when known. Callers must hold compMu.
+func (dc *daemonConn) desiredPanelSizeLocked(display string) (cols, rows uint16, ok bool) {
+	if s, found := dc.panelSizes[display]; found {
+		return s[0], s[1], true
+	}
+	if dc.lastPanelSize[0] > 0 && dc.lastPanelSize[1] > 0 {
+		return dc.lastPanelSize[0], dc.lastPanelSize[1], true
+	}
+	return 0, 0, false
+}
+
 func (dc *daemonConn) writeToPeer(peerID string, ft daemon.FrameType, payload []byte) {
 	dc.writePeerFrame(dc.peer(peerID), ft, payload)
 }
@@ -715,6 +916,7 @@ func (dc *daemonConn) SendInput(session string, data []byte) {
 
 // SendResize sends resize to all sessions.
 func (dc *daemonConn) SendResize(cols, rows uint16) {
+	dc.rememberPanelSize("", cols, rows)
 	if dc.multi() {
 		for _, peer := range dc.peerList() {
 			dc.writePeerFrame(peer, daemon.FrameResize, daemon.MarshalJSON(daemon.ResizePayload{
@@ -731,6 +933,7 @@ func (dc *daemonConn) SendResize(cols, rows uint16) {
 // SendResizeSession sends resize to a specific session by name (all of its
 // parts in multi mode, so every container tracks the panel size).
 func (dc *daemonConn) SendResizeSession(name string, cols, rows uint16) {
+	dc.rememberPanelSize(name, cols, rows)
 	if !dc.multi() {
 		_ = daemon.WriteFrame(dc.conn, daemon.FrameResize, daemon.MarshalJSON(daemon.ResizePayload{
 			Cols: cols, Rows: rows, Name: name,

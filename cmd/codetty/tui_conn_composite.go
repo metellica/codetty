@@ -231,7 +231,22 @@ func (dc *daemonConn) mergeEvent(peer *daemonPeer, evt daemon.SessionEvent) (out
 			dc.partOwner[partKey(peer.id, evt.Session)] = c
 		}
 		p.info = evt.Info
-		post = dc.flushQueuedTabsLocked(peer.id, evt.Session)
+		// Remote containers keep the PTY size of a previous run across
+		// TUI restarts and reconnects; re-fit them to the panel size the
+		// TUI last pushed so their content renders (and hit-tests) at
+		// the width actually displayed.
+		if peer.id != localPeerID {
+			if cols, rows, ok := dc.desiredPanelSizeLocked(display); ok &&
+				(evt.Cols != cols || evt.Rows != rows) {
+				peerID, container := peer.id, evt.Session
+				post = append(post, func() {
+					dc.writeToPeer(peerID, daemon.FrameResize, daemon.MarshalJSON(daemon.ResizePayload{
+						Cols: cols, Rows: rows, Name: container,
+					}))
+				})
+			}
+		}
+		post = append(post, dc.flushQueuedTabsLocked(peer.id, evt.Session)...)
 		if isNewComposite {
 			outEvt := evt
 			outEvt.Session = display
@@ -466,6 +481,10 @@ func (dc *daemonConn) CreateTabOn(
 		dc.CreateTab(display, name, command, dir, env)
 		return
 	}
+
+	// The target may be an alias of a peer we already know under another
+	// name (same daemon reachable via two endpoints).
+	peerID = dc.resolvePeerID(peerID)
 
 	container := display
 	if peerID != localPeerID {
