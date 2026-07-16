@@ -66,6 +66,9 @@ Usage:
   codetty send-keys -s name [-t tab] keys...   Send keys to a session's tab (tmux style:
                                                Enter, C-c, M-x, Up... ; -l = literal)
   codetty capture -s name [-t tab] [-n rows]   Print a tab's screen as plain text
+  codetty send-mouse -s name [-t tab] event x y  Send a mouse event at cell x,y (1-based;
+                                               events: click1/2/3, down/up/drag1/2/3,
+                                               move, wheelup, wheeldown)
   codetty upgrade [-r remote|all]              Hot-upgrade daemon binary without killing
                                                sessions (-r: deploy + upgrade a remote)
   codetty version                              Show version and build time
@@ -148,6 +151,8 @@ func main() {
 		cmdSendKeys(args)
 	case "capture", "capture-pane":
 		cmdCapture(args)
+	case "send-mouse":
+		cmdSendMouse(args)
 	case "upgrade":
 		cmdUpgrade(args)
 	case "reload":

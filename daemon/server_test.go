@@ -541,3 +541,81 @@ func TestServer_DaemonIDOnSubscribeAndUpgrade(t *testing.T) {
 		t.Fatalf("daemonID after upgrade = %q, want %q", srv2.daemonID, srv.daemonID)
 	}
 }
+
+// send_mouse must synthesize an event only when the tab's application has
+// enabled mouse reporting, encoded with the protocol it selected (SGR here);
+// otherwise the request must fail rather than write garbage bytes.
+func TestServer_SendMouse(t *testing.T) {
+	dir := t.TempDir()
+	sockPath := filepath.Join(dir, "test.sock")
+	srv := NewServer(sockPath)
+	srv.Start()
+	defer srv.Stop()
+
+	send := func(req Request) Response {
+		t.Helper()
+		c, err := net.Dial("unix", sockPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		WriteFrame(c, FrameRequest, MarshalJSON(req))
+		ft, payload, err := ReadFrame(c)
+		if err != nil || ft != FrameResponse {
+			t.Fatalf("response: ft=%d err=%v", ft, err)
+		}
+		var resp Response
+		json.Unmarshal(payload, &resp)
+		return resp
+	}
+
+	// The session enables SGR mouse reporting, then echoes its input with
+	// control bytes made visible so the capture can assert on them.
+	send(Request{
+		Action: ActionNewSession, Session: "sm",
+		Command: []string{"sh", "-c", `printf '\033[?1000h\033[?1006hREADY\n'; cat -v`},
+		Cols:    80, Rows: 24, NoAttach: true,
+	})
+
+	// Wait until the DECSET reached the screen mirror.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if resp := send(Request{Action: ActionCapture, Session: "sm"}); strings.Contains(resp.Text, "READY") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("session never became ready")
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	if resp := send(Request{Action: ActionSendMouse, Session: "sm", Mouse: "click1", MouseX: 5, MouseY: 3}); !resp.OK {
+		t.Fatalf("send_mouse: %s", resp.Error)
+	}
+
+	// cat -v renders ESC as ^[ ; expect the SGR press+release sequences.
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		resp := send(Request{Action: ActionCapture, Session: "sm"})
+		if strings.Contains(resp.Text, "^[[<0;5;3M^[[<0;5;3m") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("mouse event never echoed; text=%q", resp.Text)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+
+	// A tab without mouse reporting refuses synthetic events.
+	send(Request{
+		Action: ActionNewSession, Session: "plain", Command: []string{"cat"},
+		Cols: 80, Rows: 24, NoAttach: true,
+	})
+	resp := send(Request{Action: ActionSendMouse, Session: "plain", Mouse: "click1", MouseX: 1, MouseY: 1})
+	if resp.OK || !strings.Contains(resp.Error, "mouse reporting not enabled") {
+		t.Fatalf("send_mouse without mouse mode: ok=%v err=%q", resp.OK, resp.Error)
+	}
+	if resp := send(Request{Action: ActionSendMouse, Session: "sm", Mouse: "bogus", MouseX: 1, MouseY: 1}); resp.OK {
+		t.Fatal("unknown mouse event must fail")
+	}
+}

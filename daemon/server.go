@@ -200,6 +200,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		s.handleUpgrade(conn, req)
 	case ActionSendKeys:
 		s.handleSendKeys(conn, req)
+	case ActionSendMouse:
+		s.handleSendMouse(conn, req)
 	case ActionCapture:
 		s.handleCapture(conn, req)
 	default:
@@ -836,6 +838,33 @@ func (s *Server) handleSendKeys(conn net.Conn, req Request) {
 		return
 	}
 	if _, err := tab.Terminal.Write(req.Data); err != nil {
+		s.sendError(conn, fmt.Sprintf("write: %v", err))
+		return
+	}
+	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
+}
+
+// handleSendMouse synthesizes a mouse event for a tab. The event is encoded
+// with the mouse protocol the tab's application enabled (SGR or legacy X10);
+// if the application did not enable mouse reporting, the request fails
+// instead of feeding it garbage bytes.
+func (s *Server) handleSendMouse(conn net.Conn, req Request) {
+	sess := s.SessionByName(req.Session)
+	if sess == nil {
+		s.sendError(conn, fmt.Sprintf("session %q not found", req.Session))
+		return
+	}
+	tab, err := sess.tabByRef(req.Tab)
+	if err != nil {
+		s.sendError(conn, err.Error())
+		return
+	}
+	data, err := terminal.EncodeMouseEvent(tab.Screen.Mode(), req.Mouse, req.MouseX, req.MouseY)
+	if err != nil {
+		s.sendError(conn, err.Error())
+		return
+	}
+	if _, err := tab.Terminal.Write(data); err != nil {
 		s.sendError(conn, fmt.Sprintf("write: %v", err))
 		return
 	}

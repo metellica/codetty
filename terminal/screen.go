@@ -60,6 +60,17 @@ func (s *ScreenMirror) Size() (uint16, uint16) {
 	return uint16(cols), uint16(rows)
 }
 
+// Mode returns the terminal's current mode flags (mouse reporting, alt
+// screen, ...) as tracked from the application's output.
+func (s *ScreenMirror) Mode() vt10x.ModeFlag {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.term.Lock()
+	defer s.term.Unlock()
+	return s.term.Mode()
+}
+
 // TailText returns the bottom n rows of the screen as plain text (lines
 // joined by newlines, trailing spaces trimmed). n <= 0 returns the whole
 // screen. Wide-character continuation cells (NUL) are skipped.

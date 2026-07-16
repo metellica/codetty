@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 
 	"codetty/daemon"
+	"codetty/terminal"
 )
 
 // namedKeys maps tmux-style key names (lower-cased for lookup) to the byte
@@ -154,4 +156,36 @@ func cmdCapture(args []string) {
 		log.Fatalf("capture failed: %s", resp.Error)
 	}
 	fmt.Println(resp.Text)
+}
+
+// cmdSendMouse implements `codetty send-mouse -s session [-t tab] event x y`,
+// synthesizing a mouse event at 1-based cell coordinates. The daemon encodes
+// it with the mouse protocol the tab's application enabled.
+func cmdSendMouse(args []string) {
+	fs := flag.NewFlagSet("send-mouse", flag.ExitOnError)
+	session := fs.String("s", "", "session name")
+	tab := fs.String("t", "", "tab: index or name (default: active tab)")
+	fs.Parse(args)
+
+	if *session == "" || fs.NArg() != 3 {
+		log.Fatal("usage: codetty send-mouse -s NAME [-t TAB] EVENT X Y\n" +
+			"events: " + strings.Join(terminal.MouseEventNames(), " "))
+	}
+	x, errX := strconv.Atoi(fs.Arg(1))
+	y, errY := strconv.Atoi(fs.Arg(2))
+	if errX != nil || errY != nil {
+		log.Fatal("X and Y must be integers (1-based cell coordinates)")
+	}
+
+	resp := sendRequest(daemon.Request{
+		Action:  daemon.ActionSendMouse,
+		Session: *session,
+		Tab:     *tab,
+		Mouse:   fs.Arg(0),
+		MouseX:  x,
+		MouseY:  y,
+	})
+	if !resp.OK {
+		log.Fatalf("send-mouse failed: %s", resp.Error)
+	}
 }

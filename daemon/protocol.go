@@ -122,6 +122,7 @@ const (
 	ActionUpgrade      Action = "upgrade"
 	ActionSendKeys     Action = "send_keys"
 	ActionCapture      Action = "capture"
+	ActionSendMouse    Action = "send_mouse"
 )
 
 // Request is the JSON payload for FrameRequest.
@@ -142,6 +143,13 @@ type Request struct {
 	// tab name. Data carries the raw bytes to write to the tab's PTY.
 	Tab  string `json:"tab,omitempty"`
 	Data []byte `json:"data,omitempty"`
+
+	// send_mouse event: named event ("click1", "wheelup", ...) at
+	// 1-based cell coordinates. Encoded daemon-side using the mouse
+	// protocol the tab's application enabled (SGR or legacy X10).
+	Mouse  string `json:"mouse,omitempty"`
+	MouseX int    `json:"mouse_x,omitempty"`
+	MouseY int    `json:"mouse_y,omitempty"`
 
 	// Protocol hello, sent with subscribe_all. Zero values mean the peer
 	// predates negotiation (treated as version 1 with all current caps).

@@ -4,7 +4,6 @@ package daemon
 
 import (
 	"fmt"
-	"os"
 	"syscall"
 
 	"codetty/terminal"
@@ -15,8 +14,12 @@ import (
 // __server process; only the lock holder may unlink and bind the socket,
 // the rest exit. The lock lives as long as the fd is open, so it also
 // survives hot upgrade via exec when passed through prepareExec.
+//
+// The fd is held raw (not wrapped in os.File): an os.File finalizer would
+// silently close a lock fd shared across an upgrade handoff, and the
+// recycled fd number would later be double-closed under someone else.
 type sockLock struct {
-	f *os.File
+	fd int
 }
 
 // acquireSockLock takes an exclusive non-blocking lock on sockPath+".lock".
@@ -24,32 +27,35 @@ type sockLock struct {
 // file itself is never removed: unlinking it would allow two processes to
 // lock different inodes of the same path.
 func acquireSockLock(sockPath string) (*sockLock, error) {
-	f, err := os.OpenFile(sockPath+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	path := sockPath + ".lock"
+	fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC, 0600)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("daemon already running (lock %s held)", f.Name())
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		syscall.Close(fd)
+		return nil, fmt.Errorf("daemon already running (lock %s held)", path)
 	}
-	return &sockLock{f: f}, nil
+	return &sockLock{fd: fd}, nil
 }
 
 // recoverSockLock wraps a lock fd inherited across a hot-upgrade exec.
 func recoverSockLock(fd int) *sockLock {
-	return &sockLock{f: os.NewFile(uintptr(fd), "")}
+	return &sockLock{fd: fd}
 }
 
 // prepareExec makes the lock fd survive exec and returns it, so the
 // upgraded daemon keeps holding the lock with no window for a racing
 // bridge to start a second daemon.
 func (l *sockLock) prepareExec() int {
-	fd := int(l.f.Fd())
-	terminal.ClearCloseOnExec(fd)
-	return fd
+	terminal.ClearCloseOnExec(l.fd)
+	return l.fd
 }
 
 // release drops the lock. The lock file stays behind (harmless, empty).
 func (l *sockLock) release() {
-	l.f.Close()
+	if l.fd >= 0 {
+		syscall.Close(l.fd)
+		l.fd = -1
+	}
 }
