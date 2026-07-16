@@ -214,8 +214,9 @@ hidden = true                 # 启动时隐藏（可通过 Ctrl+A w 显示）
 远程 PTY、任务和 agent 状态检测继续运行；本地 TUI 会持续重连。
 
 Session 始终是本地概念；`remote` 是 tab 级属性，同一 session 可混合本地与远程
-tab。远程 tab 存放在远程 daemon 上名为 `<session>@@<本机ID>` 的隐藏影子容器中，
-TUI 会把它们合并进同一个 tab 栏（agent 状态显示与本地 tab 一致）。
+tab。远程 tab 存放在远程 daemon 上同名的会话中，按 owner（本机 hostname+uid+
+instance 的哈希）命名空间隔离——不同机器的同名会话互不可见、互不冲突。TUI
+会把它们合并进同一个 tab 栏（agent 状态显示与本地 tab 一致）。
 
 ```toml
 [remote.gpu]
@@ -242,7 +243,7 @@ session 级 `remote` 作为其所有 tab 的默认值（单 tab 写法 `remote =
 `~/.ssh/config` 读取的 Host 别名(默认 `instance = "default"`、`deploy = "auto"`;
 同名时 `[remote.*]` 定义优先)。通过选择器临时创建的远程 tab 会记录到
 `~/.config/codetty/<instance>/remotes.json`,TUI 重启时自动重连这些远程,
-tab 仍在;远程上的 shadow tab 全部关闭后条目自动清除。
+tab 仍在;远程上的对应 tab 全部关闭后条目自动清除。
 
 `deploy = "never"` 可用于已经安装 CodeTTY 的主机，并可通过 `binary` 指定远程路径。
 没有 `remote` 字段时仍在本地运行；`command = ["ssh", "gpu01"]` 始终是普通 raw SSH。

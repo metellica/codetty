@@ -81,6 +81,9 @@ func translateKey(arg string) string {
 
 // sendRequest performs a one-shot request/response against the daemon.
 func sendRequest(req daemon.Request) daemon.Response {
+	if req.Owner == "" {
+		req.Owner = localShadowID()
+	}
 	conn, err := net.Dial("unix", defaultSocketPath())
 	if err != nil {
 		log.Fatal("no daemon running")

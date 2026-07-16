@@ -74,9 +74,8 @@ func TestBuildConfigEndpointsSplitsMixedSessionByTarget(t *testing.T) {
 	if len(containers[0].Tabs) != 1 || containers[0].Tabs[0].Name != "shell" {
 		t.Fatalf("local tabs = %+v", containers[0].Tabs)
 	}
-	wantShadow := shadowSessionName("dev", localShadowID())
-	if containers[1].Container != wantShadow {
-		t.Fatalf("remote container = %q, want %q", containers[1].Container, wantShadow)
+	if containers[1].Container != "dev" {
+		t.Fatalf("remote container = %q, want %q", containers[1].Container, "dev")
 	}
 	if len(containers[1].Tabs) != 2 ||
 		containers[1].Tabs[0].Name != "agent" ||
@@ -94,7 +93,7 @@ func TestNewSSHDaemonEndpointDefaults(t *testing.T) {
 		t.Fatalf("endpoint defaults = instance %q deploy %q", endpoint.instance, endpoint.deploy)
 	}
 	command := endpoint.bridgeCommand()
-	for _, want := range []string{".local/lib/codetty/codetty", "-i 'default' __bridge"} {
+	for _, want := range []string{".local/lib/codetty/versions/codetty-", "-i 'default' __bridge"} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("bridge command %q does not contain %q", command, want)
 		}
@@ -118,7 +117,8 @@ func TestRemoteBinaryQuoting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := auto.remoteBinary(); got != `"$HOME/.local/lib/codetty/codetty"` {
+	// deploy=auto uses a content-addressed path under versions/.
+	if got := auto.remoteBinary(); !strings.HasPrefix(got, `"$HOME/.local/lib/codetty/versions/codetty-`) {
 		t.Fatalf("auto remoteBinary = %q", got)
 	}
 	fixed, err := newSSHDaemonEndpoint("gpu", config.RemoteDef{

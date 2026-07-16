@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -141,9 +140,6 @@ func (cfg *SessionsConfig) Validate() error {
 	for _, sd := range cfg.Session {
 		if sd.Name == "" {
 			return fmt.Errorf("session with empty name")
-		}
-		if strings.Contains(sd.Name, "@@") {
-			return fmt.Errorf("session %q: name must not contain \"@@\" (reserved for remote shadow sessions)", sd.Name)
 		}
 		if seen[sd.Name] {
 			return fmt.Errorf("duplicate session name: %q", sd.Name)

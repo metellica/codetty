@@ -17,8 +17,9 @@ import (
 
 // UpgradeState holds the serialized daemon state for hot restart.
 type UpgradeState struct {
-	SocketPath    string `json:"socket_path"`
-	ActiveSession string `json:"active_session,omitempty"`
+	SocketPath string `json:"socket_path"`
+	// ActiveSessions remembers each owner namespace's active session.
+	ActiveSessions map[string]string `json:"active_sessions,omitempty"`
 	// DaemonID keeps the daemon identity stable across hot upgrades so
 	// connected clients don't see a "new" daemon after exec.
 	DaemonID string `json:"daemon_id,omitempty"`
@@ -32,6 +33,7 @@ type UpgradeState struct {
 // UpgradeSession holds the state of a single session for hot restart.
 type UpgradeSession struct {
 	Name      string       `json:"name"`
+	Owner     string       `json:"owner,omitempty"`
 	Command   []string     `json:"command"`
 	Type      string       `json:"type"`
 	CreatedAt string       `json:"created_at"`
@@ -63,53 +65,59 @@ func (s *Server) PrepareUpgrade() (string, error) {
 	defer s.mu.Unlock()
 
 	state := UpgradeState{
-		SocketPath:    s.sockPath,
-		ActiveSession: s.active,
-		DaemonID:      s.daemonID,
+		SocketPath:     s.sockPath,
+		ActiveSessions: make(map[string]string, len(s.actives)),
+		DaemonID:       s.daemonID,
+	}
+	for owner, name := range s.actives {
+		state.ActiveSessions[owner] = name
 	}
 	if s.lock != nil {
 		state.LockFd = s.lock.prepareExec()
 	}
 
-	for _, sess := range s.orderedSessionsLocked() {
-		us := UpgradeSession{
-			Name:      sess.Name,
-			Command:   sess.Command,
-			Type:      sess.Type,
-			CreatedAt: sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			ActiveTab: sess.ActiveTab,
-		}
-
-		for _, tab := range sess.Tabs {
-			fd := tab.Terminal.Fd()
-			if fd < 0 {
-				return "", fmt.Errorf("session %q tab %q: cannot get fd", sess.Name, tab.Name)
+	for _, owner := range s.ownersLocked() {
+		for _, sess := range s.orderedSessionsLocked(owner) {
+			us := UpgradeSession{
+				Name:      sess.Name,
+				Owner:     sess.Owner,
+				Command:   sess.Command,
+				Type:      sess.Type,
+				CreatedAt: sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+				ActiveTab: sess.ActiveTab,
 			}
 
-			// Record the child PID so the new daemon can Wait/Kill it.
-			// exec keeps the same process, so children survive the upgrade
-			// and remain waitable by the new binary.
-			pid := tab.Terminal.Pid()
+			for _, tab := range sess.Tabs {
+				fd := tab.Terminal.Fd()
+				if fd < 0 {
+					return "", fmt.Errorf("session %q tab %q: cannot get fd", sess.Name, tab.Name)
+				}
 
-			cols, rows := tab.Screen.Size()
+				// Record the child PID so the new daemon can Wait/Kill it.
+				// exec keeps the same process, so children survive the upgrade
+				// and remain waitable by the new binary.
+				pid := tab.Terminal.Pid()
 
-			// Clear close-on-exec so fd survives exec
-			terminal.ClearCloseOnExec(fd)
+				cols, rows := tab.Screen.Size()
 
-			us.Tabs = append(us.Tabs, UpgradeTab{
-				Name:      tab.Name,
-				Command:   tab.Command,
-				Dir:       tab.Dir,
-				Workspace: tab.workspace,
-				Fd:        fd,
-				Pid:       pid,
-				Cols:      cols,
-				Rows:      rows,
-				Snapshot:  tab.Screen.Snapshot(),
-			})
+				// Clear close-on-exec so fd survives exec
+				terminal.ClearCloseOnExec(fd)
+
+				us.Tabs = append(us.Tabs, UpgradeTab{
+					Name:      tab.Name,
+					Command:   tab.Command,
+					Dir:       tab.Dir,
+					Workspace: tab.workspace,
+					Fd:        fd,
+					Pid:       pid,
+					Cols:      cols,
+					Rows:      rows,
+					Snapshot:  tab.Screen.Snapshot(),
+				})
+			}
+
+			state.Sessions = append(state.Sessions, us)
 		}
-
-		state.Sessions = append(state.Sessions, us)
 	}
 
 	// Write state to temp file
@@ -171,7 +179,9 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 	}
 
 	srv := NewServer(state.SocketPath)
-	srv.active = state.ActiveSession
+	for owner, name := range state.ActiveSessions {
+		srv.actives[srv.normalizeOwner(owner)] = name
+	}
 	if state.DaemonID != "" {
 		srv.daemonID = state.DaemonID
 	}
@@ -182,12 +192,14 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 	}
 
 	for _, us := range state.Sessions {
+		owner, name := srv.normalizeOwner(us.Owner), us.Name
 		sess := &DaemonSession{
-			Name:      us.Name,
+			Name:      name,
+			Owner:     owner,
 			Command:   us.Command,
 			Type:      us.Type,
 			ActiveTab: us.ActiveTab,
-			onOutput:  srv.broadcastToSubscribers,
+			onOutput:  srv.ownerBroadcast(owner),
 			doneCh:    make(chan struct{}),
 		}
 
@@ -228,8 +240,7 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 			sess.Screen = sess.Tabs[sess.ActiveTab].Screen
 		}
 
-		srv.sessions[us.Name] = sess
-		srv.order = append(srv.order, us.Name)
+		srv.addSessionLocked(sess)
 		go srv.watchSession(sess)
 	}
 

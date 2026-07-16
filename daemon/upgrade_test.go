@@ -16,7 +16,7 @@ import (
 // the daemon's cwd.
 func TestUpgrade_PersistsTabDir(t *testing.T) {
 	dir := t.TempDir()
-	sess, err := newDaemonSession("upg", []string{"/bin/sleep", "30"}, 80, 24, dir, nil, nil)
+	sess, err := newDaemonSession("", "upg", []string{"/bin/sleep", "30"}, 80, 24, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestUpgrade_PersistsTabDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	recovered := srv2.sessions["upg"]
+	recovered := srv2.sessions[ownerKey("", "upg")]
 	if recovered == nil {
 		t.Fatal("recovered server is missing session 'upg'")
 	}

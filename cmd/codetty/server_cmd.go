@@ -49,7 +49,7 @@ func cmdServerUpgrade(stateFile string) {
 		log.Fatalf("daemon start after upgrade: %v", err)
 	}
 
-	log.Printf("daemon upgraded successfully, recovered %d sessions", len(srv.SessionNames()))
+	log.Printf("daemon upgraded successfully, recovered %d sessions", srv.SessionCount())
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)

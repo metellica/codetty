@@ -333,7 +333,7 @@ func (m *tuiModel) createTabOnTarget(session, name string, target remoteTarget) 
 			if err := target.endpoint.Ensure(); err != nil {
 				return tuiNoticeMsg{text: fmt.Sprintf("remote %s: %v", target.label, err)}
 			}
-			// Synced: the peer's existing shadow containers must be
+			// Synced: the peer's existing containers must be
 			// visible before CreateTabOn decides between creating a
 			// container and adding a tab to an existing one.
 			if err := conn.AddPeerSynced(target.id, target.endpoint); err != nil {

@@ -193,7 +193,7 @@ func TestServer_NewSessionUsesDaemonDefaultShell(t *testing.T) {
 	if !resp.OK {
 		t.Fatalf("new_session failed: %s", resp.Error)
 	}
-	session := srv.SessionByName("shell")
+	session := srv.SessionByName("", "shell")
 	if session == nil || len(session.Command) == 0 {
 		t.Fatalf("session command = %v, want daemon default shell", session)
 	}
@@ -209,7 +209,7 @@ func TestCreateSessionForSubscriberSetsFirstTabName(t *testing.T) {
 		Cols:    80,
 		Rows:    24,
 	})
-	session := srv.SessionByName("configured")
+	session := srv.SessionByName("", "configured")
 	if session == nil {
 		t.Fatal("session was not created")
 	}
@@ -506,7 +506,7 @@ func TestServer_DaemonIDOnSubscribeAndUpgrade(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer conn.Close()
-		WriteFrame(conn, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll}))
+		WriteFrame(conn, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll, Proto: ProtocolVersion, ProtoMin: MinProtocolVersion}))
 		for {
 			ft, payload, err := ReadFrame(conn)
 			if err != nil {

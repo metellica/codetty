@@ -61,7 +61,7 @@ func (m *tuiModel) reloadConfig() {
 					log.Printf("reload: prepare %s: %v", cp.EndpointID, err)
 					continue
 				}
-				// Check for an existing shadow before subscribing: if it
+				// Check for an existing container before subscribing: if it
 				// already exists, adopt it as-is instead of re-creating
 				// its tabs (its state streams in via the subscription).
 				current, err := querySessionsEndpoint(endpoint)

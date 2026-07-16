@@ -28,7 +28,7 @@ type SessionTab struct {
 	exitCode  int
 	closing   bool // set when the tab is being closed deliberately (CloseTab)
 	workspace bool // Dir was explicitly requested (config workspace tab); shell exits respawn instead of auto-closing
-	doneCh   chan struct{}
+	doneCh    chan struct{}
 
 	// Agent detection state (owned by the server's agent poll loop).
 	// contentSeq counts PTY output writes so unchanged screens can skip
@@ -44,6 +44,7 @@ type SessionTab struct {
 // A session contains one or more tabs, each with its own PTY.
 type DaemonSession struct {
 	Name    string
+	Owner   string   // owner namespace ("" = daemon host's own sessions)
 	Command []string // command of the first/default tab
 	Type    string
 
@@ -70,7 +71,7 @@ type DaemonSession struct {
 	doneCh   chan struct{}
 }
 
-func newDaemonSession(name string, command []string, cols, rows uint16, dir string, env []string, onOutput func(session string, data []byte)) (*DaemonSession, error) {
+func newDaemonSession(owner, name string, command []string, cols, rows uint16, dir string, env []string, onOutput func(session string, data []byte)) (*DaemonSession, error) {
 	term, err := terminal.Start(command, cols, rows, dir, env)
 	if err != nil {
 		return nil, err
@@ -89,6 +90,7 @@ func newDaemonSession(name string, command []string, cols, rows uint16, dir stri
 
 	s := &DaemonSession{
 		Name:      name,
+		Owner:     owner,
 		Command:   command,
 		Type:      SessionTypeNative,
 		Terminal:  term,
@@ -622,6 +624,7 @@ func (s *DaemonSession) Info() SessionInfo {
 	}
 	info := SessionInfo{
 		Name:      s.Name,
+		Owner:     s.Owner,
 		Command:   cmd,
 		Type:      s.Type,
 		Attached:  s.clientCount(),
@@ -634,15 +637,16 @@ func (s *DaemonSession) Info() SessionInfo {
 	return info
 }
 
-// autoSessionName generates a unique session name for the given command.
-func autoSessionName(command []string, existing map[string]*DaemonSession) string {
+// autoSessionName generates a unique session name for the given command
+// within an owner namespace. existing is the server's ownerKey-indexed map.
+func autoSessionName(owner string, command []string, existing map[string]*DaemonSession) string {
 	base := "session"
 	if len(command) > 0 {
 		base = command[0]
 	}
 	for i := 0; ; i++ {
 		name := fmt.Sprintf("%s-%d", base, i)
-		if _, exists := existing[name]; !exists {
+		if _, exists := existing[ownerKey(owner, name)]; !exists {
 			return name
 		}
 	}

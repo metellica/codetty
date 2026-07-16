@@ -83,7 +83,7 @@ func (c *Client) switchSession(srv *Server, target string) {
 
 	switch target {
 	case "__next", "__prev":
-		names := srv.SessionNames()
+		names := srv.SessionNames(c.session.Owner)
 		if len(names) < 2 {
 			return
 		}
@@ -102,9 +102,9 @@ func (c *Client) switchSession(srv *Server, target string) {
 		} else {
 			idx = (idx - 1 + len(names)) % len(names)
 		}
-		newSess = srv.SessionByName(names[idx])
+		newSess = srv.SessionByName(c.session.Owner, names[idx])
 	default:
-		newSess = srv.SessionByName(target)
+		newSess = srv.SessionByName(c.session.Owner, target)
 	}
 
 	if newSess == nil || newSess == c.session {

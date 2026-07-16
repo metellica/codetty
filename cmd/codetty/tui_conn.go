@@ -27,7 +27,7 @@ type daemonConn struct {
 	endpoint   daemonEndpoint
 
 	// Multi-peer mode: the local daemon plus remote daemons hosting
-	// shadow container sessions, merged into composite sessions.
+	// remote tab containers, merged into composite sessions.
 	peers   map[string]*daemonPeer
 	peersMu sync.RWMutex
 
@@ -38,7 +38,8 @@ type daemonConn struct {
 	// peer is dropped and requests targeting it follow the alias.
 	peerAliases map[string]string
 
-	// localID identifies this TUI host inside shadow session names.
+	// localID is this TUI host's owner ID, declared to every daemon so
+	// requests resolve inside this host's owner namespace.
 	localID string
 
 	// Composite session state (guarded by compMu).
@@ -312,7 +313,7 @@ func (dc *daemonConn) registerDaemonIdentity(peer *daemonPeer, daemonID string) 
 }
 
 // AddPeer connects to a new daemon endpoint at runtime and subscribes to
-// it, so shadow sessions on it merge into the composite view. The initial
+// it, so this host's sessions on it merge into the composite view. The initial
 // snapshot stream is consumed in the background; callers that need the
 // peer's existing containers visible on return use AddPeerSynced.
 func (dc *daemonConn) AddPeer(id string, endpoint daemonEndpoint) error {
@@ -326,7 +327,7 @@ func (dc *daemonConn) AddPeer(id string, endpoint daemonEndpoint) error {
 
 // AddPeerSynced is AddPeer, but consumes the peer's initial snapshot
 // stream before returning (like a reconnect does): callers create tabs
-// right after it returns and must already see the peer's existing shadow
+// right after it returns and must already see the peer's existing
 // containers — otherwise CreateTabOn would issue a create_session for a
 // container that already exists there, and the requested tab (with its
 // name) would be dropped. Blocks on Program.Send, so it must not be called
@@ -419,6 +420,7 @@ func reconnectCmd(sockPath string) tea.Cmd {
 func helloRequest() daemon.Request {
 	return daemon.Request{
 		Action:   daemon.ActionSubscribeAll,
+		Owner:    localShadowID(),
 		Proto:    daemon.ProtocolVersion,
 		ProtoMin: daemon.MinProtocolVersion,
 		Caps:     daemon.ProtocolCaps(),
@@ -603,9 +605,9 @@ func (dc *daemonConn) ackPending(peer *daemonPeer) {
 }
 
 // persistRemoteParts rewrites the ad-hoc remote registry to the remote
-// endpoints that currently own shadow parts. Seeded entries whose peer never
+// endpoints that currently own remote parts. Seeded entries whose peer never
 // connected this run (e.g. an unreachable or handshake-rejected remote) are
-// preserved so their shadow tabs can still be recovered later.
+// preserved so their remote tabs can still be recovered later.
 func (dc *daemonConn) persistRemoteParts() {
 	if dc.persistRemotes == nil {
 		return
@@ -954,7 +956,7 @@ func (dc *daemonConn) CreateSession(name string, command []string, cols, rows ui
 }
 
 // CreateSessionWithEnv creates a session on the local daemon: sessions are
-// a local concept, remote daemons only ever host shadow tab containers.
+// a local concept, remote daemons only ever host tab containers.
 func (dc *daemonConn) CreateSessionWithEnv(
 	name string,
 	command []string,
@@ -989,7 +991,7 @@ func (dc *daemonConn) KillSession(name string) {
 }
 
 // RenameSession requests the daemon to rename a session. In multi mode all
-// parts are renamed so shadow names stay derived from the display name.
+// parts (one container per peer, all sharing the display name) are renamed.
 func (dc *daemonConn) RenameSession(oldName, newName string) {
 	if !dc.multi() {
 		_ = daemon.WriteFrame(dc.conn, daemon.FrameRenameSession, daemon.MarshalJSON(daemon.RenameSessionRequest{
@@ -998,7 +1000,7 @@ func (dc *daemonConn) RenameSession(oldName, newName string) {
 		}))
 		return
 	}
-	if newName == "" || strings.Contains(newName, shadowSep) {
+	if newName == "" {
 		return
 	}
 	dc.compMu.Lock()
@@ -1007,23 +1009,15 @@ func (dc *daemonConn) RenameSession(oldName, newName string) {
 		dc.compMu.Unlock()
 		return
 	}
-	type renameOp struct {
-		ref partRef
-		to  string
-	}
-	ops := make([]renameOp, 0, len(c.parts))
+	ops := make([]partRef, 0, len(c.parts))
 	for _, p := range c.parts {
-		want := newName
-		if p.peerID != localPeerID {
-			want = shadowSessionName(newName, dc.localID)
-		}
-		ops = append(ops, renameOp{partRef{p.peerID, p.name}, want})
+		ops = append(ops, partRef{p.peerID, p.name})
 	}
 	dc.compMu.Unlock()
-	for _, op := range ops {
-		dc.writeToPeer(op.ref.peerID, daemon.FrameRenameSession, daemon.MarshalJSON(daemon.RenameSessionRequest{
-			OldName: op.ref.name,
-			NewName: op.to,
+	for _, ref := range ops {
+		dc.writeToPeer(ref.peerID, daemon.FrameRenameSession, daemon.MarshalJSON(daemon.RenameSessionRequest{
+			OldName: ref.name,
+			NewName: newName,
 		}))
 	}
 }

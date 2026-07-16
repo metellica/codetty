@@ -55,6 +55,7 @@ func cmdNew(args []string) {
 		Command: command,
 		Cols:    cols,
 		Rows:    rows,
+		Owner:   localShadowID(),
 	}
 	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(req))
 
@@ -106,7 +107,7 @@ func startTUIWithEndpoints(
 		log.Fatalf("connect to daemon: %v", err)
 	}
 
-	// Ad-hoc remote registry: remotes holding shadow tabs from earlier
+	// Ad-hoc remote registry: remotes holding remote tabs from earlier
 	// runs (created via the picker, not config) are reconnected in the
 	// background so their tabs reappear; part changes keep the file
 	// current.
@@ -290,7 +291,7 @@ func listExistingSessions(sockPath string) map[string]bool {
 	}
 	defer conn.Close()
 
-	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionList}))
+	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionList, Owner: localShadowID()}))
 	ft, payload, err := daemon.ReadFrame(conn)
 	if err != nil || ft != daemon.FrameResponse {
 		return nil
@@ -325,6 +326,7 @@ func createDaemonSession(sockPath, name string, cmd []string, cols, rows uint16,
 		Env:      env,
 		NoAttach: true,
 		TabName:  tabName,
+		Owner:    localShadowID(),
 	}
 	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(req))
 
@@ -358,6 +360,7 @@ func createDaemonTab(sockPath, session, tabName string, cmd []string, dir string
 		Command: cmd,
 		Dir:     dir,
 		Env:     env,
+		Owner:   localShadowID(),
 	}
 	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(req))
 
@@ -378,8 +381,8 @@ func createDaemonTab(sockPath, session, tabName string, cmd []string, dir string
 
 func cmdList(args []string) {
 	fs := flag.NewFlagSet("ls", flag.ExitOnError)
-	all := fs.Bool("a", false, "list sessions from all instances on this host")
-	fs.BoolVar(all, "all", false, "list sessions from all instances on this host")
+	all := fs.Bool("a", false, "list sessions from all instances and all owners on this host")
+	fs.BoolVar(all, "all", false, "list sessions from all instances and all owners on this host")
 	fs.Parse(args)
 
 	if *all {
@@ -388,7 +391,7 @@ func cmdList(args []string) {
 	}
 
 	sockPath := defaultSocketPath()
-	sessions, err := querySessions(sockPath)
+	sessions, err := querySessions(sockPath, "")
 	if err != nil {
 		fmt.Println("no daemon running")
 		return
@@ -401,14 +404,20 @@ func cmdList(args []string) {
 }
 
 // querySessions dials the daemon at sockPath and returns its session list.
-func querySessions(sockPath string) ([]daemon.SessionInfo, error) {
+// scope daemon.ScopeAll includes every owner namespace; "" only this
+// client's own sessions.
+func querySessions(sockPath, scope string) ([]daemon.SessionInfo, error) {
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
 
-	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionList}))
+	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{
+		Action: daemon.ActionList,
+		Owner:  localShadowID(),
+		Scope:  scope,
+	}))
 	ft, payload, err := daemon.ReadFrame(conn)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
@@ -425,6 +434,24 @@ func querySessions(sockPath string) ([]daemon.SessionInfo, error) {
 }
 
 func printSessionTable(sessions []daemon.SessionInfo) {
+	owners := false
+	for _, s := range sessions {
+		if s.Owner != "" {
+			owners = true
+			break
+		}
+	}
+	if owners {
+		fmt.Printf("%-16s %-10s %-12s %-8s %s\n", "NAME", "OWNER", "COMMAND", "CLIENTS", "CREATED")
+		for _, s := range sessions {
+			owner := s.Owner
+			if owner == "" {
+				owner = "(local)"
+			}
+			fmt.Printf("%-16s %-10s %-12s %-8d %s\n", s.Name, owner, s.Command, s.Attached, s.CreatedAt)
+		}
+		return
+	}
 	fmt.Printf("%-16s %-12s %-8s %s\n", "NAME", "COMMAND", "CLIENTS", "CREATED")
 	for _, s := range sessions {
 		fmt.Printf("%-16s %-12s %-8d %s\n", s.Name, s.Command, s.Attached, s.CreatedAt)
@@ -454,7 +481,7 @@ func listAllInstances() {
 			continue
 		}
 
-		sessions, err := querySessions(filepath.Join(dir, name))
+		sessions, err := querySessions(filepath.Join(dir, name), daemon.ScopeAll)
 		if err != nil {
 			continue // stale socket or unreachable daemon
 		}
@@ -493,7 +520,7 @@ func cmdKill(args []string) {
 	}
 	defer conn.Close()
 
-	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionKill, Session: *session}))
+	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionKill, Session: *session, Owner: localShadowID()}))
 	ft, payload, _ := daemon.ReadFrame(conn)
 	if ft != daemon.FrameResponse {
 		log.Fatal("unexpected response")
@@ -507,6 +534,10 @@ func cmdKill(args []string) {
 }
 
 func cmdKillServer(args []string) {
+	fs := flag.NewFlagSet("kill-server", flag.ExitOnError)
+	all := fs.Bool("all", false, "also kill sessions owned by other hosts (stops the daemon unconditionally)")
+	fs.Parse(args)
+
 	sockPath := defaultSocketPath()
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
@@ -515,7 +546,15 @@ func cmdKillServer(args []string) {
 	}
 	defer conn.Close()
 
-	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionKillServer}))
+	scope := ""
+	if *all {
+		scope = daemon.ScopeAll
+	}
+	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{
+		Action: daemon.ActionKillServer,
+		Owner:  localShadowID(),
+		Scope:  scope,
+	}))
 	daemon.ReadFrame(conn)
 	fmt.Println("daemon stopped")
 }
@@ -765,7 +804,7 @@ func getSessionTabs(sockPath, sessionName string) []string {
 	}
 	defer conn.Close()
 
-	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionList}))
+	daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{Action: daemon.ActionList, Owner: localShadowID()}))
 	ft, payload, err := daemon.ReadFrame(conn)
 	if err != nil || ft != daemon.FrameResponse {
 		return nil
@@ -800,6 +839,7 @@ func closeTab(sockPath, session string, index int) {
 		Action:   daemon.ActionCloseTab,
 		Session:  session,
 		TabIndex: index,
+		Owner:    localShadowID(),
 	}))
 	daemon.ReadFrame(conn)
 }

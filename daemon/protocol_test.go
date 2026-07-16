@@ -147,13 +147,13 @@ func TestTaggedOutputSessionNameTooLongPanics(t *testing.T) {
 }
 
 func TestNegotiateProto(t *testing.T) {
-	// Legacy peer (no hello) negotiates to version 1.
-	v, ok := NegotiateProto(0, 0)
-	if !ok || v != 1 {
-		t.Fatalf("legacy peer = (%d, %v), want (1, true)", v, ok)
+	// Legacy peer (no hello, treated as version 1) is below our minimum
+	// since owner namespaces (v2) became mandatory: rejected.
+	if _, ok := NegotiateProto(0, 0); ok {
+		t.Fatal("legacy v1 peer should be rejected (MinProtocolVersion = 2)")
 	}
 	// Same version peer.
-	v, ok = NegotiateProto(ProtocolVersion, MinProtocolVersion)
+	v, ok := NegotiateProto(ProtocolVersion, MinProtocolVersion)
 	if !ok || v != ProtocolVersion {
 		t.Fatalf("same version = (%d, %v), want (%d, true)", v, ok, ProtocolVersion)
 	}

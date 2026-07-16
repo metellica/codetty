@@ -18,10 +18,13 @@ type FrameType byte
 // that breaks the framing or the meaning of existing frames does.
 const (
 	// ProtocolVersion is the newest protocol version this build speaks.
-	ProtocolVersion = 1
+	// Version 2 introduced owner namespaces: session names are resolved
+	// within the requesting client's owner namespace, and subscribers only
+	// receive sessions their scope covers.
+	ProtocolVersion = 2
 	// MinProtocolVersion is the oldest protocol version this build still
 	// speaks. Raising it drops compatibility with older peers.
-	MinProtocolVersion = 1
+	MinProtocolVersion = 2
 )
 
 // ProtocolCaps returns the capability names this build supports. Peers use
@@ -35,6 +38,7 @@ func ProtocolCaps() []string {
 		"reorder",     // FrameReorderSess
 		"set_active",  // FrameSetActive
 		"hot_upgrade", // upgrade action
+		"owner",       // owner-namespaced sessions and scoped subscriptions
 	}
 }
 
@@ -151,12 +155,24 @@ type Request struct {
 	MouseX int    `json:"mouse_x,omitempty"`
 	MouseY int    `json:"mouse_y,omitempty"`
 
+	// Owner identifies the client's owner namespace (see LocalOwnerID).
+	// All session names in this request resolve within that namespace.
+	// An owner equal to the daemon host's own ID (or empty) selects the
+	// local namespace.
+	Owner string `json:"owner,omitempty"`
+	// Scope widens visibility for list/subscribe: "" = own namespace,
+	// "all" = every namespace (management views).
+	Scope string `json:"scope,omitempty"`
+
 	// Protocol hello, sent with subscribe_all. Zero values mean the peer
 	// predates negotiation (treated as version 1 with all current caps).
 	Proto    int      `json:"proto,omitempty"`     // newest protocol version the client speaks
 	ProtoMin int      `json:"proto_min,omitempty"` // oldest protocol version the client speaks
 	Caps     []string `json:"caps,omitempty"`      // client capability names
 }
+
+// ScopeAll selects every owner namespace in a list request.
+const ScopeAll = "all"
 
 // Response is the JSON payload for FrameResponse.
 type Response struct {
@@ -182,7 +198,11 @@ type Response struct {
 
 // SessionInfo describes a session in list responses.
 type SessionInfo struct {
-	Name      string    `json:"name"`
+	Name string `json:"name"`
+	// Owner is the session's owner namespace ("" = the daemon host's own
+	// namespace). Only meaningful in scope-all listings; within a single
+	// namespace it is implied by the requester.
+	Owner     string    `json:"owner,omitempty"`
 	Command   string    `json:"command"`
 	Type      string    `json:"type,omitempty"`
 	Tabs      []TabInfo `json:"tabs,omitempty"`
@@ -199,7 +219,7 @@ type TabInfo struct {
 	AgentState string `json:"agent_state,omitempty"` // "idle", "working", "blocked"
 	// Remote names the remote the tab runs on. Never set by the daemon:
 	// the TUI composite layer stamps it on tabs merged from remote
-	// shadow parts so they can be marked in the UI.
+	// parts so they can be marked in the UI.
 	Remote string `json:"remote,omitempty"`
 }
 

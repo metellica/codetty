@@ -23,6 +23,7 @@ type Subscriber struct {
 	// Run starts and read-only afterwards.
 	proto int
 	caps  map[string]bool
+	owner string // normalized owner namespace this subscriber belongs to
 }
 
 func newSubscriber(conn net.Conn) *Subscriber {
@@ -100,7 +101,7 @@ func (s *Subscriber) Run(srv *Server) {
 			if err != nil {
 				continue
 			}
-			if sess := srv.SessionByName(session); sess != nil {
+			if sess := srv.SessionByName(s.owner, session); sess != nil {
 				sess.Terminal.Write(data)
 			}
 
@@ -108,11 +109,11 @@ func (s *Subscriber) Run(srv *Server) {
 			var rp ResizePayload
 			if json.Unmarshal(payload, &rp) == nil {
 				if rp.Name != "" {
-					if sess := srv.SessionByName(rp.Name); sess != nil {
+					if sess := srv.SessionByName(s.owner, rp.Name); sess != nil {
 						sess.Resize(rp.Cols, rp.Rows)
 					}
 				} else {
-					srv.resizeAllSessions(rp.Cols, rp.Rows)
+					srv.resizeAllSessions(s.owner, rp.Cols, rp.Rows)
 				}
 			}
 
@@ -125,13 +126,13 @@ func (s *Subscriber) Run(srv *Server) {
 		case FrameKillSession:
 			var req KillSessionRequest
 			if json.Unmarshal(payload, &req) == nil {
-				srv.killSessionForSubscriber(req)
+				srv.killSessionForSubscriber(s, req)
 			}
 
 		case FrameRenameSession:
 			var req RenameSessionRequest
 			if json.Unmarshal(payload, &req) == nil {
-				srv.renameSessionForSubscriber(req)
+				srv.renameSessionForSubscriber(s, req)
 			}
 
 		case FrameCreateTab:
@@ -161,7 +162,7 @@ func (s *Subscriber) Run(srv *Server) {
 		case FrameSetActive:
 			var req SetActiveSessionRequest
 			if json.Unmarshal(payload, &req) == nil {
-				srv.setActiveSessionForSubscriber(req)
+				srv.setActiveSessionForSubscriber(s, req)
 			}
 
 		case FrameDetach:

@@ -60,7 +60,7 @@ func TestSubscriber_ReceivesAllSessionOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c2.Close()
-	WriteFrame(c2, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll}))
+	WriteFrame(c2, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll, Proto: ProtocolVersion, ProtoMin: MinProtocolVersion}))
 
 	c2.SetReadDeadline(time.Now().Add(2 * time.Second))
 	gotSnapshot := false
@@ -115,7 +115,7 @@ func TestSubscriber_ReceivesLiveOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll}))
+	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll, Proto: ProtocolVersion, ProtoMin: MinProtocolVersion}))
 	sub.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, _, err := ReadFrame(sub); err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ func TestSubscriber_CreateSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll}))
+	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll, Proto: ProtocolVersion, ProtoMin: MinProtocolVersion}))
 	sub.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, _, err := ReadFrame(sub); err != nil {
 		t.Fatal(err)
@@ -254,7 +254,7 @@ func TestSubscriber_CreateSessionRejectsDuplicateName(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll}))
+	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll, Proto: ProtocolVersion, ProtoMin: MinProtocolVersion}))
 	sub.SetReadDeadline(time.Now().Add(2 * time.Second))
 	for {
 		ft, _, err := ReadFrame(sub)
@@ -297,7 +297,7 @@ func TestSubscriber_CreateSessionRejectsDuplicateName(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 	srv.mu.Lock()
-	sess := srv.sessions["dup"]
+	sess := srv.sessions[ownerKey("", "dup")]
 	srv.mu.Unlock()
 	if sess == nil || len(sess.Command) < 3 || sess.Command[2] != "sleep 30" {
 		t.Fatal("duplicate create replaced existing session")
@@ -338,7 +338,7 @@ func TestSubscriber_Detach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll}))
+	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll, Proto: ProtocolVersion, ProtoMin: MinProtocolVersion}))
 	sub.SetReadDeadline(time.Now().Add(2 * time.Second))
 	for {
 		ft, _, err := ReadFrame(sub)
@@ -396,7 +396,7 @@ func TestSubscriber_KillSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll}))
+	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll, Proto: ProtocolVersion, ProtoMin: MinProtocolVersion}))
 	sub.SetReadDeadline(time.Now().Add(2 * time.Second))
 	for {
 		ft, _, err := ReadFrame(sub)
@@ -475,7 +475,7 @@ func TestSubscriber_DisconnectsOnServerStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer sub.Close()
-	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll}))
+	WriteFrame(sub, FrameRequest, MarshalJSON(Request{Action: ActionSubscribeAll, Proto: ProtocolVersion, ProtoMin: MinProtocolVersion}))
 	sub.SetReadDeadline(time.Now().Add(2 * time.Second))
 	for {
 		ft, _, err := ReadFrame(sub)

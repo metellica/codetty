@@ -11,8 +11,9 @@ import (
 )
 
 // containerPlan is one daemon-side container session to create for a config
-// session: either the local part (named after the session) or a remote
-// shadow session (<display>@@<localID>).
+// session: the part of the session living on one daemon. Containers share
+// the session's display name on every daemon; the owner namespace keeps
+// remote containers isolated.
 type containerPlan struct {
 	EndpointID string
 	Container  string
@@ -20,7 +21,7 @@ type containerPlan struct {
 }
 
 // sessionPlan groups one resolved session's tabs by target daemon: the
-// local container first, then remote shadows sorted by endpoint ID.
+// local container first, then remote containers sorted by endpoint ID.
 type sessionPlan struct {
 	Session    config.ResolvedSession
 	Containers []containerPlan
@@ -38,7 +39,6 @@ func buildConfigEndpoints(
 		"local": localDaemonEndpoint{sockPath: sockPath},
 	}
 	remoteByKey := make(map[string]string)
-	shadowID := localShadowID()
 
 	endpointFor := func(sessionName, remoteName string) (string, error) {
 		def, ok := cfg.Remote[remoteName]
@@ -86,7 +86,6 @@ func buildConfigEndpoints(
 				if err != nil {
 					return nil, nil, err
 				}
-				container = shadowSessionName(session.Name, shadowID)
 			}
 			cp, ok := byEndpoint[id]
 			if !ok {
@@ -186,6 +185,7 @@ func querySessionsEndpoint(endpoint daemonEndpoint) ([]daemon.SessionInfo, error
 
 	if err := daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(daemon.Request{
 		Action: daemon.ActionList,
+		Owner:  localShadowID(),
 	})); err != nil {
 		return nil, err
 	}
@@ -246,6 +246,11 @@ func createDaemonTabEndpoint(
 }
 
 func requestEndpoint(endpoint daemonEndpoint, req daemon.Request) error {
+	if req.Owner == "" {
+		// All name-addressed requests resolve inside this client's owner
+		// namespace on the target daemon.
+		req.Owner = localShadowID()
+	}
 	conn, err := endpoint.Dial()
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
@@ -299,6 +304,7 @@ func closeDaemonTabEndpoint(endpoint daemonEndpoint, session string, index int) 
 		Action:   daemon.ActionCloseTab,
 		Session:  session,
 		TabIndex: index,
+		Owner:    localShadowID(),
 	})); err != nil {
 		return err
 	}

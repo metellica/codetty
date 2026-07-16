@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -17,13 +18,18 @@ import (
 
 // Server is the daemon that manages PTY sessions.
 type Server struct {
-	sockPath    string
-	daemonID    string    // unique daemon identity, echoed on subscribe ACKs
-	lock        *sockLock // exclusive daemon-instance lock; nil until Start
-	listener    net.Listener
-	sessions    map[string]*DaemonSession
-	order       []string // session names in display order (authoritative)
-	active      string   // last big-panel session; restored on next attach
+	sockPath  string
+	daemonID  string    // unique daemon identity, echoed on subscribe ACKs
+	hostOwner string    // owner ID of this daemon's host (normalized to "")
+	lock      *sockLock // exclusive daemon-instance lock; nil until Start
+	listener  net.Listener
+	// sessions is keyed by ownerKey(owner, name): every session lives in
+	// an owner namespace ("" = the daemon host's own sessions).
+	sessions map[string]*DaemonSession
+	// orders holds each owner's session display order (authoritative);
+	// actives remembers each owner's last big-panel session.
+	orders      map[string][]string
+	actives     map[string]string
 	subscribers []*Subscriber
 	mu          sync.Mutex
 	done        chan struct{}
@@ -36,11 +42,14 @@ func NewServer(sockPath string) *Server {
 	idBytes := make([]byte, 8)
 	rand.Read(idBytes)
 	return &Server{
-		sockPath: sockPath,
-		daemonID: hex.EncodeToString(idBytes),
-		sessions: make(map[string]*DaemonSession),
-		done:     make(chan struct{}),
-		stopped:  make(chan struct{}),
+		sockPath:  sockPath,
+		daemonID:  hex.EncodeToString(idBytes),
+		hostOwner: LocalOwnerID(),
+		sessions:  make(map[string]*DaemonSession),
+		orders:    make(map[string][]string),
+		actives:   make(map[string]string),
+		done:      make(chan struct{}),
+		stopped:   make(chan struct{}),
 	}
 }
 
@@ -99,7 +108,7 @@ func (s *Server) agentPollLoop() {
 
 			for _, sess := range sessions {
 				if sess.PollAgentStates(now) {
-					s.notifySubscribers(SessionEvent{
+					s.notifyOwner(sess.Owner, SessionEvent{
 						Type:    "agent_state",
 						Session: sess.Name,
 						Info:    sess.Info(),
@@ -185,11 +194,11 @@ func (s *Server) handleConn(conn net.Conn) {
 	case ActionAttach:
 		s.handleAttach(conn, req)
 	case ActionList:
-		s.handleList(conn)
+		s.handleList(conn, req)
 	case ActionKill:
 		s.handleKill(conn, req)
 	case ActionKillServer:
-		s.handleKillServer(conn)
+		s.handleKillServer(conn, req)
 	case ActionSubscribeAll:
 		s.handleSubscribeAll(conn, req)
 	case ActionCreateTab:
@@ -210,6 +219,7 @@ func (s *Server) handleConn(conn net.Conn) {
 }
 
 func (s *Server) handleNewSession(conn net.Conn, req Request) {
+	owner := s.normalizeOwner(req.Owner)
 	cmd := req.Command
 	if len(cmd) == 0 {
 		cmd = []string{terminal.DefaultShell()}
@@ -217,19 +227,19 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 	name := req.Session
 	if name == "" {
 		s.mu.Lock()
-		name = autoSessionName(cmd, s.sessions)
+		name = autoSessionName(owner, cmd, s.sessions)
 		s.mu.Unlock()
 	}
 
 	s.mu.Lock()
-	if _, exists := s.sessions[name]; exists {
+	if _, exists := s.sessions[ownerKey(owner, name)]; exists {
 		s.mu.Unlock()
 		s.sendError(conn, fmt.Sprintf("session %q already exists", name))
 		return
 	}
 	s.mu.Unlock()
 
-	sess, err := newDaemonSession(name, cmd, req.Cols, req.Rows, req.Dir, req.Env, s.broadcastToSubscribers)
+	sess, err := newDaemonSession(owner, name, cmd, req.Cols, req.Rows, req.Dir, req.Env, s.ownerBroadcast(owner))
 	if err != nil {
 		s.sendError(conn, fmt.Sprintf("start session: %v", err))
 		return
@@ -241,7 +251,7 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 	}
 
 	s.mu.Lock()
-	if _, exists := s.sessions[name]; exists {
+	if _, exists := s.sessions[ownerKey(owner, name)]; exists {
 		s.mu.Unlock()
 		sess.Kill()
 		s.sendError(conn, fmt.Sprintf("session %q already exists", name))
@@ -250,7 +260,7 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 	s.addSessionLocked(sess)
 	s.mu.Unlock()
 
-	s.notifySubscribers(SessionEvent{Type: "created", Session: name, Info: sess.Info()})
+	s.notifyOwner(owner, SessionEvent{Type: "created", Session: name, Info: sess.Info()})
 	go s.watchSession(sess)
 
 	resp := Response{OK: true, Session: name}
@@ -262,14 +272,15 @@ func (s *Server) handleNewSession(conn net.Conn, req Request) {
 }
 
 func (s *Server) handleAttach(conn net.Conn, req Request) {
+	owner := s.normalizeOwner(req.Owner)
 	s.mu.Lock()
 	var sess *DaemonSession
 	if req.Session != "" {
-		sess = s.sessions[req.Session]
+		sess = s.sessions[ownerKey(owner, req.Session)]
 	} else {
 		var latest time.Time
 		for _, ss := range s.sessions {
-			if !ss.isExited() && ss.CreatedAt.After(latest) {
+			if ss.Owner == owner && !ss.isExited() && ss.CreatedAt.After(latest) {
 				sess = ss
 				latest = ss.CreatedAt
 			}
@@ -291,11 +302,20 @@ func (s *Server) handleAttach(conn net.Conn, req Request) {
 	s.runAttachedClient(conn, sess)
 }
 
-func (s *Server) handleList(conn net.Conn) {
+func (s *Server) handleList(conn net.Conn, req Request) {
+	owner := s.normalizeOwner(req.Owner)
 	s.mu.Lock()
 	infos := make([]SessionInfo, 0, len(s.sessions))
-	for _, sess := range s.orderedSessionsLocked() {
-		infos = append(infos, sess.Info())
+	if req.Scope == ScopeAll {
+		for _, o := range s.ownersLocked() {
+			for _, sess := range s.orderedSessionsLocked(o) {
+				infos = append(infos, sess.Info())
+			}
+		}
+	} else {
+		for _, sess := range s.orderedSessionsLocked(owner) {
+			infos = append(infos, sess.Info())
+		}
 	}
 	s.mu.Unlock()
 
@@ -304,8 +324,9 @@ func (s *Server) handleList(conn net.Conn) {
 }
 
 func (s *Server) handleKill(conn net.Conn, req Request) {
+	owner := s.normalizeOwner(req.Owner)
 	s.mu.Lock()
-	sess, exists := s.sessions[req.Session]
+	sess, exists := s.sessions[ownerKey(owner, req.Session)]
 	s.mu.Unlock()
 
 	if !exists {
@@ -317,9 +338,34 @@ func (s *Server) handleKill(conn net.Conn, req Request) {
 	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
 }
 
-func (s *Server) handleKillServer(conn net.Conn) {
+// handleKillServer kills the requester's own sessions by default (so one
+// host tearing down its state can't destroy other owners' sessions on a
+// shared daemon); the daemon stops entirely when nothing else is left, or
+// immediately with scope "all".
+func (s *Server) handleKillServer(conn net.Conn, req Request) {
 	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
-	go s.Stop()
+	if req.Scope == ScopeAll {
+		go s.Stop()
+		return
+	}
+	owner := s.normalizeOwner(req.Owner)
+	s.mu.Lock()
+	var mine []*DaemonSession
+	others := 0
+	for _, sess := range s.sessions {
+		if sess.Owner == owner {
+			mine = append(mine, sess)
+		} else {
+			others++
+		}
+	}
+	s.mu.Unlock()
+	for _, sess := range mine {
+		sess.Kill()
+	}
+	if others == 0 {
+		go s.Stop()
+	}
 }
 
 func (s *Server) runAttachedClient(conn net.Conn, sess *DaemonSession) {
@@ -352,29 +398,47 @@ func (s *Server) removeSubscriber(sub *Subscriber) {
 	}
 }
 
-func (s *Server) broadcastToSubscribers(session string, data []byte) {
+// broadcastToSubscribers delivers tagged PTY output for a session in the
+// given owner namespace to that namespace's subscribers only.
+func (s *Server) broadcastToSubscribers(owner, session string, data []byte) {
 	s.mu.Lock()
 	subs := append([]*Subscriber(nil), s.subscribers...)
 	s.mu.Unlock()
 	for _, sub := range subs {
-		sub.SendTaggedOutput(session, data)
+		if sub.owner == owner {
+			sub.SendTaggedOutput(session, data)
+		}
 	}
 }
 
-func (s *Server) notifySubscribers(evt SessionEvent) {
+// ownerBroadcast returns the PTY-output callback for sessions in the given
+// owner namespace.
+func (s *Server) ownerBroadcast(owner string) func(session string, data []byte) {
+	return func(session string, data []byte) {
+		s.broadcastToSubscribers(owner, session, data)
+	}
+}
+
+// notifyOwner sends a session event to the given owner namespace's
+// subscribers only.
+func (s *Server) notifyOwner(owner string, evt SessionEvent) {
 	s.mu.Lock()
 	subs := append([]*Subscriber(nil), s.subscribers...)
 	s.mu.Unlock()
 	for _, sub := range subs {
-		sub.SendSessionEvent(evt)
+		if sub.owner == owner {
+			sub.SendSessionEvent(evt)
+		}
 	}
 }
 
-func (s *Server) resizeAllSessions(cols, rows uint16) {
+func (s *Server) resizeAllSessions(owner string, cols, rows uint16) {
 	s.mu.Lock()
 	sessions := make([]*DaemonSession, 0, len(s.sessions))
 	for _, sess := range s.sessions {
-		sessions = append(sessions, sess)
+		if sess.Owner == owner {
+			sessions = append(sessions, sess)
+		}
 	}
 	s.mu.Unlock()
 	for _, sess := range sessions {
@@ -383,10 +447,11 @@ func (s *Server) resizeAllSessions(cols, rows uint16) {
 }
 
 func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRequest) {
+	owner := sub.owner
 	name := req.Name
 	if name == "" {
 		s.mu.Lock()
-		name = autoSessionName(req.Command, s.sessions)
+		name = autoSessionName(owner, req.Command, s.sessions)
 		s.mu.Unlock()
 	}
 	cmd := req.Command
@@ -394,14 +459,14 @@ func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRe
 		cmd = []string{terminal.DefaultShell()}
 	}
 	s.mu.Lock()
-	if _, exists := s.sessions[name]; exists {
+	if _, exists := s.sessions[ownerKey(owner, name)]; exists {
 		s.mu.Unlock()
 		sub.SendSessionEvent(SessionEvent{Type: "error", Session: name})
 		return
 	}
 	s.mu.Unlock()
 
-	sess, err := newDaemonSession(name, cmd, req.Cols, req.Rows, req.Dir, req.Env, s.broadcastToSubscribers)
+	sess, err := newDaemonSession(owner, name, cmd, req.Cols, req.Rows, req.Dir, req.Env, s.ownerBroadcast(owner))
 	if err != nil {
 		sub.SendSessionEvent(SessionEvent{Type: "error", Session: name})
 		return
@@ -410,7 +475,7 @@ func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRe
 		sess.Tabs[0].Name = req.TabName
 	}
 	s.mu.Lock()
-	if _, exists := s.sessions[name]; exists {
+	if _, exists := s.sessions[ownerKey(owner, name)]; exists {
 		s.mu.Unlock()
 		sess.Kill()
 		sub.SendSessionEvent(SessionEvent{Type: "error", Session: name})
@@ -419,48 +484,50 @@ func (s *Server) createSessionForSubscriber(sub *Subscriber, req CreateSessionRe
 	s.addSessionLocked(sess)
 	s.mu.Unlock()
 	go s.watchSession(sess)
-	s.notifySubscribers(SessionEvent{Type: "created", Session: name, Info: sess.Info()})
+	s.notifyOwner(owner, SessionEvent{Type: "created", Session: name, Info: sess.Info()})
 }
 
-func (s *Server) killSessionForSubscriber(req KillSessionRequest) {
+func (s *Server) killSessionForSubscriber(sub *Subscriber, req KillSessionRequest) {
 	s.mu.Lock()
-	sess, exists := s.sessions[req.Name]
+	sess, exists := s.sessions[ownerKey(sub.owner, req.Name)]
 	s.mu.Unlock()
 	if exists {
 		sess.Kill()
 	}
 }
 
-func (s *Server) renameSessionForSubscriber(req RenameSessionRequest) {
+func (s *Server) renameSessionForSubscriber(sub *Subscriber, req RenameSessionRequest) {
 	if req.OldName == "" || req.NewName == "" || req.OldName == req.NewName {
 		return
 	}
+	owner := sub.owner
 	s.mu.Lock()
-	sess, exists := s.sessions[req.OldName]
+	sess, exists := s.sessions[ownerKey(owner, req.OldName)]
 	if !exists {
 		s.mu.Unlock()
 		return
 	}
-	if _, conflict := s.sessions[req.NewName]; conflict {
+	if _, conflict := s.sessions[ownerKey(owner, req.NewName)]; conflict {
 		s.mu.Unlock()
 		return
 	}
 
-	delete(s.sessions, req.OldName)
+	delete(s.sessions, ownerKey(owner, req.OldName))
 	sess.Name = req.NewName
-	s.sessions[req.NewName] = sess
-	if s.active == req.OldName {
-		s.active = req.NewName
+	s.sessions[ownerKey(owner, req.NewName)] = sess
+	if s.actives[owner] == req.OldName {
+		s.actives[owner] = req.NewName
 	}
-	for i, n := range s.order {
+	order := s.orders[owner]
+	for i, n := range order {
 		if n == req.OldName {
-			s.order[i] = req.NewName
+			order[i] = req.NewName
 			break
 		}
 	}
 	s.mu.Unlock()
 
-	s.notifySubscribers(SessionEvent{
+	s.notifyOwner(owner, SessionEvent{
 		Type:    "renamed",
 		Session: req.OldName,
 		Info:    SessionInfo{Name: req.NewName},
@@ -487,12 +554,13 @@ func (s *Server) handleSubscribeAll(conn net.Conn, req Request) {
 	sub := newSubscriber(conn)
 	sub.proto = proto
 	sub.caps = IntersectCaps(req.Caps)
+	sub.owner = s.normalizeOwner(req.Owner)
 	s.addSubscriber(sub)
 	defer s.removeSubscriber(sub)
 
 	s.mu.Lock()
-	sessions := s.orderedSessionsLocked()
-	activeSess := s.sessions[s.active]
+	sessions := s.orderedSessionsLocked(sub.owner)
+	activeSess := s.sessions[ownerKey(sub.owner, s.actives[sub.owner])]
 	s.mu.Unlock()
 
 	// Announce the remembered big-panel session before the snapshots so
@@ -558,11 +626,11 @@ func (s *Server) watchSession(sess *DaemonSession) {
 	}
 
 	s.mu.Lock()
-	s.removeSessionLocked(sess.Name)
+	s.removeSessionLocked(sess.Owner, sess.Name)
 	remaining := len(s.sessions)
 	s.mu.Unlock()
 
-	s.notifySubscribers(SessionEvent{Type: "exited", Session: sess.Name, ExitCode: sess.exitCode})
+	s.notifyOwner(sess.Owner, SessionEvent{Type: "exited", Session: sess.Name, ExitCode: sess.exitCode})
 
 	if remaining == 0 {
 		go s.Stop()
@@ -573,7 +641,7 @@ func (s *Server) watchSession(sess *DaemonSession) {
 // the daemon (auto-close of an exited shell tab, shell respawn in a tab
 // whose command exited) rather than from a client request.
 func (s *Server) handleTabsAutoChanged(sess *DaemonSession, event string) {
-	s.notifySubscribers(SessionEvent{
+	s.notifyOwner(sess.Owner, SessionEvent{
 		Type:    event,
 		Session: sess.Name,
 		Info:    sess.Info(),
@@ -584,12 +652,7 @@ func (s *Server) handleTabsAutoChanged(sess *DaemonSession, event string) {
 	if event == "tab_closed" {
 		snap := sess.Screen.Snapshot()
 		if len(snap) > 0 {
-			s.mu.Lock()
-			subs := append([]*Subscriber(nil), s.subscribers...)
-			s.mu.Unlock()
-			for _, sub := range subs {
-				sub.SendTaggedOutput(sess.Name, snap)
-			}
+			s.broadcastToSubscribers(sess.Owner, sess.Name, snap)
 		}
 	}
 }
@@ -598,44 +661,71 @@ func (s *Server) sendError(conn net.Conn, msg string) {
 	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: false, Error: msg}))
 }
 
-// SessionByName returns a session by name (for client session switching).
-func (s *Server) SessionByName(name string) *DaemonSession {
+// SessionByName returns a session by name within an owner namespace (for
+// client session switching and name-addressed requests).
+func (s *Server) SessionByName(owner, name string) *DaemonSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.sessions[name]
+	return s.sessions[ownerKey(owner, name)]
 }
 
-// addSessionLocked registers a session and appends it to the display order.
-// Caller must hold s.mu.
+// SessionCount returns the number of sessions across all owner namespaces.
+func (s *Server) SessionCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.sessions)
+}
+
+// addSessionLocked registers a session and appends it to its owner's
+// display order. Caller must hold s.mu.
 func (s *Server) addSessionLocked(sess *DaemonSession) {
-	s.sessions[sess.Name] = sess
-	s.order = append(s.order, sess.Name)
+	s.sessions[ownerKey(sess.Owner, sess.Name)] = sess
+	s.orders[sess.Owner] = append(s.orders[sess.Owner], sess.Name)
 }
 
-// removeSessionLocked unregisters a session and drops it from the display
-// order. Caller must hold s.mu.
-func (s *Server) removeSessionLocked(name string) {
-	delete(s.sessions, name)
-	if s.active == name {
-		s.active = ""
+// removeSessionLocked unregisters a session and drops it from its owner's
+// display order. Caller must hold s.mu.
+func (s *Server) removeSessionLocked(owner, name string) {
+	delete(s.sessions, ownerKey(owner, name))
+	if s.actives[owner] == name {
+		delete(s.actives, owner)
 	}
-	for i, n := range s.order {
+	order := s.orders[owner]
+	for i, n := range order {
 		if n == name {
-			s.order = append(s.order[:i], s.order[i+1:]...)
+			order = append(order[:i], order[i+1:]...)
 			break
 		}
 	}
+	if len(order) == 0 {
+		delete(s.orders, owner)
+	} else {
+		s.orders[owner] = order
+	}
 }
 
-// orderedSessionsLocked returns sessions in display order. Caller must hold s.mu.
-func (s *Server) orderedSessionsLocked() []*DaemonSession {
-	result := make([]*DaemonSession, 0, len(s.order))
-	for _, name := range s.order {
-		if sess, ok := s.sessions[name]; ok {
+// orderedSessionsLocked returns an owner's sessions in display order.
+// Caller must hold s.mu.
+func (s *Server) orderedSessionsLocked(owner string) []*DaemonSession {
+	order := s.orders[owner]
+	result := make([]*DaemonSession, 0, len(order))
+	for _, name := range order {
+		if sess, ok := s.sessions[ownerKey(owner, name)]; ok {
 			result = append(result, sess)
 		}
 	}
 	return result
+}
+
+// ownersLocked returns all owner namespaces that currently have sessions,
+// local namespace ("") first, the rest sorted. Caller must hold s.mu.
+func (s *Server) ownersLocked() []string {
+	owners := make([]string, 0, len(s.orders))
+	for owner := range s.orders {
+		owners = append(owners, owner)
+	}
+	sort.Strings(owners)
+	return owners
 }
 
 // reorderSessionsForSubscriber applies a client-requested display order and
@@ -644,28 +734,30 @@ func (s *Server) orderedSessionsLocked() []*DaemonSession {
 // Unknown names are ignored; sessions missing from the request keep their
 // relative order at the end.
 func (s *Server) reorderSessionsForSubscriber(from *Subscriber, req ReorderSessionsRequest) {
+	owner := from.owner
 	s.mu.Lock()
-	newOrder := make([]string, 0, len(s.order))
-	seen := make(map[string]bool, len(s.order))
+	oldOrder := s.orders[owner]
+	newOrder := make([]string, 0, len(oldOrder))
+	seen := make(map[string]bool, len(oldOrder))
 	for _, name := range req.Order {
-		if _, ok := s.sessions[name]; ok && !seen[name] {
+		if _, ok := s.sessions[ownerKey(owner, name)]; ok && !seen[name] {
 			newOrder = append(newOrder, name)
 			seen[name] = true
 		}
 	}
-	for _, name := range s.order {
+	for _, name := range oldOrder {
 		if !seen[name] {
 			newOrder = append(newOrder, name)
 		}
 	}
-	s.order = newOrder
+	s.orders[owner] = newOrder
 	order := append([]string(nil), newOrder...)
 	subs := append([]*Subscriber(nil), s.subscribers...)
 	s.mu.Unlock()
 
 	evt := SessionEvent{Type: "reordered", Order: order}
 	for _, sub := range subs {
-		if sub != from {
+		if sub != from && sub.owner == owner {
 			sub.SendSessionEvent(evt)
 		}
 	}
@@ -673,24 +765,24 @@ func (s *Server) reorderSessionsForSubscriber(from *Subscriber, req ReorderSessi
 
 // setActiveSessionForSubscriber remembers the client's big-panel session so
 // the next attach restores it. Unknown names are ignored.
-func (s *Server) setActiveSessionForSubscriber(req SetActiveSessionRequest) {
+func (s *Server) setActiveSessionForSubscriber(sub *Subscriber, req SetActiveSessionRequest) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.sessions[req.Session]; ok {
-		s.active = req.Session
+	if _, ok := s.sessions[ownerKey(sub.owner, req.Session)]; ok {
+		s.actives[sub.owner] = req.Session
 	}
 }
 
-// SessionNames returns session names in display order.
-func (s *Server) SessionNames() []string {
+// SessionNames returns an owner's session names in display order.
+func (s *Server) SessionNames(owner string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]string(nil), s.order...)
+	return append([]string(nil), s.orders[owner]...)
 }
 
 // createTabForSubscriber creates a new tab within an existing session.
 func (s *Server) createTabForSubscriber(sub *Subscriber, req CreateTabRequest) {
-	sess := s.SessionByName(req.Session)
+	sess := s.SessionByName(sub.owner, req.Session)
 	if sess == nil {
 		return
 	}
@@ -721,7 +813,7 @@ func (s *Server) createTabForSubscriber(sub *Subscriber, req CreateTabRequest) {
 	}
 
 	// Notify all subscribers about the new tab
-	s.notifySubscribers(SessionEvent{
+	s.notifyOwner(sess.Owner, SessionEvent{
 		Type:    "tab_created",
 		Session: req.Session,
 		Info:    sess.Info(),
@@ -734,7 +826,7 @@ func (s *Server) createTabForSubscriber(sub *Subscriber, req CreateTabRequest) {
 
 // handleCreateTab handles a create_tab request from a non-subscriber connection.
 func (s *Server) handleCreateTab(conn net.Conn, req Request) {
-	sess := s.SessionByName(req.Session)
+	sess := s.SessionByName(s.normalizeOwner(req.Owner), req.Session)
 	if sess == nil {
 		s.sendError(conn, fmt.Sprintf("session %q not found", req.Session))
 		return
@@ -768,7 +860,7 @@ func (s *Server) handleCreateTab(conn net.Conn, req Request) {
 	}
 
 	// Notify subscribers
-	s.notifySubscribers(SessionEvent{
+	s.notifyOwner(sess.Owner, SessionEvent{
 		Type:    "tab_created",
 		Session: sess.Name,
 		Info:    sess.Info(),
@@ -779,7 +871,7 @@ func (s *Server) handleCreateTab(conn net.Conn, req Request) {
 
 // handleCloseTab handles a close_tab request from a non-subscriber connection.
 func (s *Server) handleCloseTab(conn net.Conn, req Request) {
-	sess := s.SessionByName(req.Session)
+	sess := s.SessionByName(s.normalizeOwner(req.Owner), req.Session)
 	if sess == nil {
 		s.sendError(conn, fmt.Sprintf("session %q not found", req.Session))
 		return
@@ -790,7 +882,7 @@ func (s *Server) handleCloseTab(conn net.Conn, req Request) {
 		return
 	}
 
-	s.notifySubscribers(SessionEvent{
+	s.notifyOwner(sess.Owner, SessionEvent{
 		Type:    "tab_closed",
 		Session: sess.Name,
 		Info:    sess.Info(),
@@ -827,7 +919,7 @@ func (s *DaemonSession) tabByRef(ref string) (*SessionTab, error) {
 // handleSendKeys writes raw bytes to a tab's PTY (tmux send-keys analog;
 // the CLI translates key names to bytes).
 func (s *Server) handleSendKeys(conn net.Conn, req Request) {
-	sess := s.SessionByName(req.Session)
+	sess := s.SessionByName(s.normalizeOwner(req.Owner), req.Session)
 	if sess == nil {
 		s.sendError(conn, fmt.Sprintf("session %q not found", req.Session))
 		return
@@ -849,7 +941,7 @@ func (s *Server) handleSendKeys(conn net.Conn, req Request) {
 // if the application did not enable mouse reporting, the request fails
 // instead of feeding it garbage bytes.
 func (s *Server) handleSendMouse(conn net.Conn, req Request) {
-	sess := s.SessionByName(req.Session)
+	sess := s.SessionByName(s.normalizeOwner(req.Owner), req.Session)
 	if sess == nil {
 		s.sendError(conn, fmt.Sprintf("session %q not found", req.Session))
 		return
@@ -874,7 +966,7 @@ func (s *Server) handleSendMouse(conn net.Conn, req Request) {
 // handleCapture returns a tab's screen as plain text (tmux capture-pane
 // analog). Rows limits output to the bottom N rows; 0 = whole screen.
 func (s *Server) handleCapture(conn net.Conn, req Request) {
-	sess := s.SessionByName(req.Session)
+	sess := s.SessionByName(s.normalizeOwner(req.Owner), req.Session)
 	if sess == nil {
 		s.sendError(conn, fmt.Sprintf("session %q not found", req.Session))
 		return
@@ -892,7 +984,7 @@ func (s *Server) handleCapture(conn net.Conn, req Request) {
 
 // closeTabForSubscriber closes a tab in a session.
 func (s *Server) closeTabForSubscriber(sub *Subscriber, req CloseTabRequest) {
-	sess := s.SessionByName(req.Session)
+	sess := s.SessionByName(sub.owner, req.Session)
 	if sess == nil {
 		return
 	}
@@ -901,7 +993,7 @@ func (s *Server) closeTabForSubscriber(sub *Subscriber, req CloseTabRequest) {
 		return
 	}
 
-	s.notifySubscribers(SessionEvent{
+	s.notifyOwner(sess.Owner, SessionEvent{
 		Type:    "tab_closed",
 		Session: req.Session,
 		Info:    sess.Info(),
@@ -913,7 +1005,7 @@ func (s *Server) closeTabForSubscriber(sub *Subscriber, req CloseTabRequest) {
 
 // switchTabForSubscriber switches the active tab in a session.
 func (s *Server) switchTabForSubscriber(sub *Subscriber, req SwitchTabRequest) {
-	sess := s.SessionByName(req.Session)
+	sess := s.SessionByName(sub.owner, req.Session)
 	if sess == nil {
 		return
 	}
@@ -927,7 +1019,7 @@ func (s *Server) switchTabForSubscriber(sub *Subscriber, req SwitchTabRequest) {
 
 // notifyTabSwitch notifies subscribers about a tab switch and sends a snapshot.
 func (s *Server) notifyTabSwitch(sub *Subscriber, sess *DaemonSession, tabIdx int) {
-	s.notifySubscribers(SessionEvent{
+	s.notifyOwner(sess.Owner, SessionEvent{
 		Type:    "tab_switched",
 		Session: sess.Name,
 		Info:    sess.Info(),
@@ -937,15 +1029,11 @@ func (s *Server) notifyTabSwitch(sub *Subscriber, sess *DaemonSession, tabIdx in
 	s.sendTabSnapshot(sub, sess)
 }
 
-// sendTabSnapshot sends the active tab's screen content to all subscribers.
+// sendTabSnapshot sends the active tab's screen content to the session
+// owner's subscribers.
 func (s *Server) sendTabSnapshot(sub *Subscriber, sess *DaemonSession) {
 	snap := sess.Screen.Snapshot()
 	if len(snap) > 0 {
-		s.mu.Lock()
-		subs := append([]*Subscriber(nil), s.subscribers...)
-		s.mu.Unlock()
-		for _, s := range subs {
-			s.SendTaggedOutput(sess.Name, snap)
-		}
+		s.broadcastToSubscribers(sess.Owner, sess.Name, snap)
 	}
 }

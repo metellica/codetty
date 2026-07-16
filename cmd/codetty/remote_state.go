@@ -13,8 +13,8 @@ import (
 
 // Remote tabs created ad-hoc from the TUI picker are not described by any
 // config file, so a restarted TUI would not know to reconnect their remote
-// daemons (the shadow containers keep running there). The registry persists
-// which remote endpoints currently hold shadow parts; startup reconnects
+// daemons (the tab containers keep running there). The registry persists
+// which remote endpoints currently hold remote parts; startup reconnects
 // them and part changes rewrite the file, so dead or emptied remotes drop
 // off automatically.
 
@@ -78,7 +78,7 @@ func saveRecordedRemotes(remotes map[string]config.RemoteDef) {
 }
 
 // reconnectRecordedRemotes dials recorded remotes not already connected
-// (e.g. not referenced by the config), so shadow tabs created ad-hoc in
+// (e.g. not referenced by the config), so remote tabs created ad-hoc in
 // earlier runs reappear. Runs in the background: unreachable remotes must
 // not block TUI startup, and their registry entries are preserved.
 func reconnectRecordedRemotes(conn *daemonConn, p *tea.Program, recorded map[string]config.RemoteDef) {

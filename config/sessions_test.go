@@ -494,12 +494,3 @@ command = ["bash"]
 		t.Fatalf("tab[1].Dir = %q, want ./src", cfg.Session[0].Tab[1].Dir)
 	}
 }
-
-func TestValidate_RejectsShadowSeparatorInName(t *testing.T) {
-	cfg := &SessionsConfig{
-		Session: []SessionDef{{Name: "dev@@abc"}},
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for session name containing @@")
-	}
-}

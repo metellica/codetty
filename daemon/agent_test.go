@@ -10,7 +10,7 @@ import (
 // TestSessionInfo_IncludesTabAgentState verifies TabInfos carries agent
 // detection results and single-tab native sessions expose Tabs in Info.
 func TestSessionInfo_IncludesTabAgentState(t *testing.T) {
-	sess, err := newDaemonSession("agent-info", []string{"cat"}, 80, 24, "", nil, nil)
+	sess, err := newDaemonSession("", "agent-info", []string{"cat"}, 80, 24, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestSessionInfo_IncludesTabAgentState(t *testing.T) {
 // TestPollAgentStates_ShellIsUnknown verifies a plain shell tab publishes
 // no agent and polling reports no change on a steady state.
 func TestPollAgentStates_ShellIsUnknown(t *testing.T) {
-	sess, err := newDaemonSession("agent-shell", []string{"cat"}, 80, 24, "", nil, nil)
+	sess, err := newDaemonSession("", "agent-shell", []string{"cat"}, 80, 24, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

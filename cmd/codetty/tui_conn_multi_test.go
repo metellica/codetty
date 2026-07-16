@@ -109,8 +109,11 @@ func newTestCompositeConn(peerIDs ...string) *daemonConn {
 	return dc
 }
 
+// testShadow returns the container name for a display name on a remote
+// daemon. With owner namespaces the daemon stores sessions under their
+// plain display name, so this is the identity.
 func (dc *daemonConn) testShadow(display string) string {
-	return shadowSessionName(display, dc.localID)
+	return display
 }
 
 // mergeAndRun feeds an event through mergeEvent and runs the deferred writes.
@@ -120,20 +123,6 @@ func (dc *daemonConn) mergeAndRun(peer *daemonPeer, evt daemon.SessionEvent) []d
 		fn()
 	}
 	return out
-}
-
-func TestShadowSessionNameRoundTrip(t *testing.T) {
-	name := shadowSessionName("dev", "cafe0123")
-	display, id, ok := parseShadowSessionName(name)
-	if !ok || display != "dev" || id != "cafe0123" {
-		t.Fatalf("parse(%q) = %q %q %v", name, display, id, ok)
-	}
-	if _, _, ok := parseShadowSessionName("plain"); ok {
-		t.Fatal("plain name parsed as shadow")
-	}
-	if _, _, ok := parseShadowSessionName("@@id"); ok {
-		t.Fatal("empty display parsed as shadow")
-	}
 }
 
 func TestCompositeMergesShadowIntoLocalSession(t *testing.T) {
@@ -168,21 +157,6 @@ func TestCompositeMergesShadowIntoLocalSession(t *testing.T) {
 	}
 	if info.ActiveTab != 1 {
 		t.Fatalf("merged active tab = %d, want local part's tab 1", info.ActiveTab)
-	}
-}
-
-func TestCompositeFiltersForeignRemoteSessions(t *testing.T) {
-	dc := newTestCompositeConn("local", "remote:gpu")
-	remote := dc.peers["remote:gpu"]
-
-	for _, name := range []string{"plain", "dev@@deadbeef"} {
-		out := dc.mergeAndRun(remote, daemon.SessionEvent{
-			Type: "snapshot", Session: name,
-			Info: daemon.SessionInfo{Name: name},
-		})
-		if len(out) != 0 {
-			t.Fatalf("foreign session %q leaked: %+v", name, out)
-		}
 	}
 }
 
@@ -384,11 +358,6 @@ func TestCompositeRenameRenamesAllParts(t *testing.T) {
 		Type: "snapshot", Session: shadow,
 		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}},
 	})
-
-	dc.RenameSession("dev", "bad@@name")
-	if frames := dc.peers["local"].conn.(*recordingConn).frames(t); len(frames) != 0 {
-		t.Fatalf("rename with @@ was sent: %+v", frames)
-	}
 
 	dc.RenameSession("dev", "prod")
 	lframes := dc.peers["local"].conn.(*recordingConn).frames(t)
@@ -689,7 +658,7 @@ func TestMultiDaemonConnMergesPeersOverPipes(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(dc.closePeers)
-	shadow := shadowSessionName("dev", dc.localID)
+	shadow := "dev"
 
 	serve := func(conn net.Conn, events []daemon.SessionEvent, input chan<- string) {
 		ft, _, err := daemon.ReadFrame(conn)
@@ -717,7 +686,6 @@ func TestMultiDaemonConnMergesPeersOverPipes(t *testing.T) {
 	}, localInput)
 	go serve(remoteServer, []daemon.SessionEvent{
 		{Type: "snapshot", Session: shadow, Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}}},
-		{Type: "snapshot", Session: "foreign", Info: daemon.SessionInfo{Name: "foreign"}},
 	}, remoteInput)
 
 	program, messages := startTestProgram(t)
@@ -736,9 +704,6 @@ func TestMultiDaemonConnMergesPeersOverPipes(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("timed out waiting for snapshots: %v", seen)
 		}
-	}
-	if seen["foreign"] || seen[shadow] {
-		t.Fatalf("foreign or raw shadow name leaked: %v", seen)
 	}
 	if !seen["work"] || !seen["dev"] {
 		t.Fatalf("unexpected snapshots: %v", seen)

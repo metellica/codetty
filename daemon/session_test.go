@@ -67,7 +67,7 @@ func (r *tabEventRecorder) wait(t *testing.T, want string) {
 // command exits gets the default shell respawned in place.
 func TestTabExit_NonShellCommandRespawnsShell(t *testing.T) {
 	rec := newTabEventRecorder()
-	sess, err := newDaemonSession("respawn", []string{"/bin/sleep", "0.2"}, 80, 24, "", nil, nil)
+	sess, err := newDaemonSession("", "respawn", []string{"/bin/sleep", "0.2"}, 80, 24, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestTabExit_NonShellCommandRespawnsShell(t *testing.T) {
 // from a multi-tab session and the remaining tab becomes active.
 func TestTabExit_ShellTabAutoCloses(t *testing.T) {
 	rec := newTabEventRecorder()
-	sess, err := newDaemonSession("autoclose", []string{"cat"}, 80, 24, "", nil, nil)
+	sess, err := newDaemonSession("", "autoclose", []string{"cat"}, 80, 24, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestTabExit_ShellTabAutoCloses(t *testing.T) {
 // ends the whole session instead of auto-closing or respawning.
 func TestTabExit_LastShellTabEndsSession(t *testing.T) {
 	rec := newTabEventRecorder()
-	sess, err := newDaemonSession("last-shell", []string{"sh", "-c", "exit 0"}, 80, 24, "", nil, nil)
+	sess, err := newDaemonSession("", "last-shell", []string{"sh", "-c", "exit 0"}, 80, 24, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestTabExit_LastShellTabEndsSession(t *testing.T) {
 // respawn logic even for non-shell tabs.
 func TestTabExit_KilledSessionDoesNotRespawn(t *testing.T) {
 	rec := newTabEventRecorder()
-	sess, err := newDaemonSession("killed", []string{"/bin/sleep", "30"}, 80, 24, "", nil, nil)
+	sess, err := newDaemonSession("", "killed", []string{"/bin/sleep", "30"}, 80, 24, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestTabExit_KilledSessionDoesNotRespawn(t *testing.T) {
 // tab removes it without triggering a respawn.
 func TestCloseTab_DoesNotRespawn(t *testing.T) {
 	rec := newTabEventRecorder()
-	sess, err := newDaemonSession("closetab", []string{"cat"}, 80, 24, "", nil, nil)
+	sess, err := newDaemonSession("", "closetab", []string{"cat"}, 80, 24, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,7 +216,7 @@ func TestCloseTab_DoesNotRespawn(t *testing.T) {
 // dir respawns in that directory instead of auto-closing.
 func TestTabExit_ShellWithDirRespawns(t *testing.T) {
 	rec := newTabEventRecorder()
-	sess, err := newDaemonSession("shell-dir", []string{"cat"}, 80, 24, "", nil, nil)
+	sess, err := newDaemonSession("", "shell-dir", []string{"cat"}, 80, 24, "", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestTabExit_ShellWithDirRespawns(t *testing.T) {
 // daemon's cwd.
 func TestAddTab_InheritsDirFromActiveTab(t *testing.T) {
 	dir := t.TempDir()
-	sess, err := newDaemonSession("inherit", []string{"/bin/sleep", "30"}, 80, 24, dir, nil, nil)
+	sess, err := newDaemonSession("", "inherit", []string{"/bin/sleep", "30"}, 80, 24, dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestAddTab_InheritsDirFromActiveTab(t *testing.T) {
 // instead of respawning like a workspace tab.
 func TestAddTab_InheritedDirShellAutoCloses(t *testing.T) {
 	rec := newTabEventRecorder()
-	sess, err := newDaemonSession("inherit-close", []string{"cat"}, 80, 24, "/tmp", nil, nil)
+	sess, err := newDaemonSession("", "inherit-close", []string{"cat"}, 80, 24, "/tmp", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

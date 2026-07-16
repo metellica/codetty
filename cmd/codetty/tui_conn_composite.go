@@ -9,13 +9,15 @@ import (
 
 // Composite sessions: the TUI always shows sessions as a local concept, but
 // individual tabs may run on remote daemons. Each remote daemon holds those
-// tabs in a hidden "shadow" container session named <display>@@<localID>.
-// The connection layer merges the local session and its shadow parts into a
-// single composite session, rewriting events, output and tab indices so the
-// TUI only ever sees the display name and one concatenated tab list.
+// tabs in a container session that shares the display name; the daemon's
+// owner namespace (keyed by this host's owner ID) keeps it isolated from
+// the remote host's own sessions and from other clients'. The connection
+// layer merges the local session and its remote parts into a single
+// composite session, rewriting events, output and tab indices so the TUI
+// only ever sees the display name and one concatenated tab list.
 
 // compositePart is one daemon-side container of a composite session: either
-// the local session itself or a shadow session on a remote daemon.
+// the local session itself or a container session on a remote daemon.
 type compositePart struct {
 	peerID string
 	name   string             // session name on the owning daemon
@@ -23,7 +25,7 @@ type compositePart struct {
 	info   daemon.SessionInfo // last-known info from that daemon
 }
 
-// compositeSession merges a local session and its remote shadow parts into
+// compositeSession merges a local session and its remote parts into
 // the single session the TUI displays.
 type compositeSession struct {
 	display string
@@ -167,17 +169,11 @@ func peerRemoteLabel(peer *daemonPeer) string {
 }
 
 // displayForName maps a peer-side session name to a composite display name.
-// Local sessions map to themselves; remote sessions are accepted only when
-// they are shadow sessions owned by this TUI host.
+// Session names map to themselves: the daemon scopes each subscription to
+// its owner namespace, so every session a peer delivers belongs to this
+// TUI host already.
 func (dc *daemonConn) displayForName(peerID, session string) (string, bool) {
-	if peerID == localPeerID {
-		return session, true
-	}
-	display, id, ok := parseShadowSessionName(session)
-	if !ok || id != dc.localID {
-		return "", false
-	}
-	return display, true
+	return session, true
 }
 
 // mapOutput resolves tagged output from a peer to the display session it
@@ -201,7 +197,7 @@ func (dc *daemonConn) mergeEvent(peer *daemonPeer, evt daemon.SessionEvent) (out
 	switch evt.Type {
 	case "reordered", "active":
 		// Session order and big-panel selection are owned by the local
-		// daemon; remote daemons only ever host shadow containers.
+		// daemon; remote daemons only ever host tab containers.
 		if local {
 			return []daemon.SessionEvent{evt}, nil
 		}
@@ -317,7 +313,7 @@ func (dc *daemonConn) mergeEvent(peer *daemonPeer, evt daemon.SessionEvent) (out
 
 // mergeRenamed handles a rename on one part: it re-keys the part, renames
 // the composite when the display name changed, and asks the other parts to
-// follow so shadow names stay derived from the display name.
+// follow so every container keeps the display name.
 func (dc *daemonConn) mergeRenamed(peer *daemonPeer, evt daemon.SessionEvent) (out []daemon.SessionEvent, post []func()) {
 	newName := evt.Info.Name
 	if newName == "" {
@@ -337,18 +333,7 @@ func (dc *daemonConn) mergeRenamed(peer *daemonPeer, evt daemon.SessionEvent) (o
 	p.name = newName
 	p.info.Name = newName
 
-	var newDisplay string
-	if peer.id == localPeerID {
-		newDisplay = newName
-	} else {
-		display, id, ok := parseShadowSessionName(newName)
-		if !ok || id != dc.localID {
-			// The shadow left our namespace; treat it as gone.
-			delete(dc.partOwner, partKey(peer.id, newName))
-			return dc.removePartLocked(c, p, 0)
-		}
-		newDisplay = display
-	}
+	newDisplay := newName
 	if newDisplay == c.display {
 		return nil, nil
 	}
@@ -383,9 +368,6 @@ func (dc *daemonConn) mergeRenamed(peer *daemonPeer, evt daemon.SessionEvent) (o
 			continue
 		}
 		want := newDisplay
-		if q.peerID != localPeerID {
-			want = shadowSessionName(newDisplay, dc.localID)
-		}
 		if q.name == want {
 			continue
 		}
@@ -467,7 +449,7 @@ func (dc *daemonConn) flushQueuedTabsLocked(peerID, container string) []func() {
 }
 
 // CreateTabOn ensures a tab exists in the display session on the given peer,
-// creating the container session (the local session or the remote shadow)
+// creating the container session (the local session or the remote container)
 // when the target has no part there yet. Tabs requested while the container
 // is in flight are queued and created once it appears.
 func (dc *daemonConn) CreateTabOn(
@@ -487,9 +469,6 @@ func (dc *daemonConn) CreateTabOn(
 	peerID = dc.resolvePeerID(peerID)
 
 	container := display
-	if peerID != localPeerID {
-		container = shadowSessionName(display, dc.localID)
-	}
 
 	dc.compMu.Lock()
 	var target *compositePart
@@ -620,7 +599,7 @@ func (dc *daemonConn) ContainerPeers(display string) []string {
 }
 
 // KillContainerOn kills the display session's container on the given peer
-// (the local session itself or a remote shadow session).
+// (the local session itself or a remote container session).
 func (dc *daemonConn) KillContainerOn(display, peerID string) {
 	if !dc.multi() {
 		return

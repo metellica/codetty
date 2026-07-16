@@ -112,6 +112,19 @@ func (e *sshDaemonEndpoint) Ensure() error {
 		return nil
 	}
 
+	// Content-addressed deploy: the binary installs under a name derived
+	// from its own hash, so concurrent clients running different local
+	// versions never overwrite each other's deployed binary — each
+	// bridge/upgrade references its exact version path.
+	hash, err := localBinaryHash()
+	if err != nil {
+		return fmt.Errorf("remote %q: hash local CodeTTY binary: %w", e.name, err)
+	}
+	check := fmt.Sprintf(`test -x "$HOME/.local/lib/codetty/versions/codetty-%s"`, hash)
+	if _, err := e.runSSH(30*time.Second, nil, check); err == nil {
+		return nil
+	}
+
 	if err := e.checkMachine(); err != nil {
 		return err
 	}
@@ -124,37 +137,62 @@ func (e *sshDaemonEndpoint) Ensure() error {
 	if err != nil {
 		return fmt.Errorf("remote %q: read local CodeTTY binary: %w", e.name, err)
 	}
-	sum := sha256.Sum256(data)
-	want := hex.EncodeToString(sum[:])
 
-	check := `
-path="$HOME/.local/lib/codetty/codetty"
-if test -x "$path"; then
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$path" | awk '{print $1}'
-  elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$path" | awk '{print $1}'
-  fi
-fi`
-	if output, err := e.runSSH(30*time.Second, nil, check); err == nil && strings.TrimSpace(string(output)) == want {
-		return nil
-	}
-
-	install := `
+	// Install the exact version, refresh the convenience symlink, and
+	// garbage-collect all but the most recent versions (keeping a few so
+	// other hosts' concurrently-used versions aren't yanked from under
+	// their next bridge exec).
+	install := fmt.Sprintf(`
 set -eu
 dir="$HOME/.local/lib/codetty"
-path="$dir/codetty"
-tmp="$dir/.codetty.tmp.$$"
-mkdir -p "$dir"
+vdir="$dir/versions"
+path="$vdir/codetty-%[1]s"
+tmp="$vdir/.codetty.tmp.$$"
+mkdir -p "$vdir"
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 cat >"$tmp"
 chmod 700 "$tmp"
 mv -f "$tmp" "$path"
-trap - EXIT HUP INT TERM`
+trap - EXIT HUP INT TERM
+ln -sfn "$path" "$dir/codetty"
+ls -1t "$vdir" 2>/dev/null | grep '^codetty-' | tail -n +4 | while read -r old; do
+  [ "$old" = "codetty-%[1]s" ] || rm -f "$vdir/$old"
+done`, hash)
 	if _, err := e.runSSH(5*time.Minute, bytes.NewReader(data), install); err != nil {
 		return fmt.Errorf("remote %q: deploy CodeTTY: %w", e.name, err)
 	}
 	return nil
+}
+
+// localBinaryHash returns a short content hash of the running executable,
+// used as the content-addressed deploy name (computed once).
+var (
+	localBinaryHashOnce sync.Once
+	localBinaryHashVal  string
+	localBinaryHashErr  error
+)
+
+func localBinaryHash() (string, error) {
+	localBinaryHashOnce.Do(func() {
+		exe, err := os.Executable()
+		if err != nil {
+			localBinaryHashErr = err
+			return
+		}
+		f, err := os.Open(exe)
+		if err != nil {
+			localBinaryHashErr = err
+			return
+		}
+		defer f.Close()
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			localBinaryHashErr = err
+			return
+		}
+		localBinaryHashVal = hex.EncodeToString(h.Sum(nil))[:12]
+	})
+	return localBinaryHashVal, localBinaryHashErr
 }
 
 func (e *sshDaemonEndpoint) checkMachine() error {
@@ -212,9 +250,15 @@ func (e *sshDaemonEndpoint) bridgeCommand() string {
 	return fmt.Sprintf("exec %s -i %s __bridge", e.remoteBinary(), shellQuote(e.instance))
 }
 
-// remoteBinary returns the shell-quoted remote binary path.
+// remoteBinary returns the shell-quoted remote binary path. Auto-deployed
+// binaries are addressed by their exact content hash so concurrent clients
+// with different versions each exec the binary they deployed; the legacy
+// symlink is the fallback when the local hash can't be computed.
 func (e *sshDaemonEndpoint) remoteBinary() string {
 	if e.deploy == "auto" {
+		if hash, err := localBinaryHash(); err == nil {
+			return fmt.Sprintf(`"$HOME/.local/lib/codetty/versions/codetty-%s"`, hash)
+		}
 		return `"$HOME/.local/lib/codetty/codetty"`
 	}
 	return shellQuote(e.binary)

@@ -170,7 +170,7 @@ func TestClient_Resize(t *testing.T) {
 	}
 	// The screen mirror should have been resized
 	srv.mu.Lock()
-	sess := srv.sessions["resize-sess"]
+	sess := srv.sessions[ownerKey("", "resize-sess")]
 	srv.mu.Unlock()
 	if sess == nil {
 		t.Fatal("session not found")
