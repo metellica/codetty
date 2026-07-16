@@ -121,6 +121,12 @@ func TestRemoteBinaryQuoting(t *testing.T) {
 	if got := auto.remoteBinary(); !strings.HasPrefix(got, `"$HOME/.local/lib/codetty/versions/codetty-`) {
 		t.Fatalf("auto remoteBinary = %q", got)
 	}
+	// A cross-platform client that couldn't deploy itself uses the
+	// stable symlink of the preinstalled binary.
+	auto.preinstalled = true
+	if got := auto.remoteBinary(); got != `"$HOME/.local/lib/codetty/codetty"` {
+		t.Fatalf("preinstalled remoteBinary = %q", got)
+	}
 	fixed, err := newSSHDaemonEndpoint("gpu", config.RemoteDef{
 		Host: "gpu01", Deploy: "never", Binary: "/opt/code tty/codetty",
 	})

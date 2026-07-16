@@ -246,6 +246,8 @@ session 级 `remote` 作为其所有 tab 的默认值（单 tab 写法 `remote =
 tab 仍在;远程上的对应 tab 全部关闭后条目自动清除。
 
 `deploy = "never"` 可用于已经安装 CodeTTY 的主机，并可通过 `binary` 指定远程路径。
+`deploy = "auto"` 需要本地与远程平台一致(部署的是当前运行的二进制);平台不一致时
+(如 Windows 客户端连 Linux 远程)自动回退使用远程已部署的二进制,不存在才报错。
 没有 `remote` 字段时仍在本地运行；`command = ["ssh", "gpu01"]` 始终是普通 raw SSH。
 多个 session/tab 指向同一 `host + instance` 时共享一条 TUI bridge 连接。
 远程 tab 在 tab 栏和 list 侧栏中带 `@<remote>` 标记(如 `2:agent@gpu2`),

@@ -45,6 +45,10 @@ type sshDaemonEndpoint struct {
 	instance string
 	deploy   string
 	binary   string
+	// preinstalled is set by Ensure when auto-deploy cannot run (e.g. a
+	// Windows client and a Linux remote) but a previously deployed remote
+	// binary exists: bridge/upgrade then use the stable symlink path.
+	preinstalled bool
 }
 
 func newSSHDaemonEndpoint(name string, def config.RemoteDef) (*sshDaemonEndpoint, error) {
@@ -126,7 +130,15 @@ func (e *sshDaemonEndpoint) Ensure() error {
 	}
 
 	if err := e.checkMachine(); err != nil {
-		return err
+		// The local binary cannot run on the remote platform (e.g. a
+		// Windows client and a Linux remote). Fall back to a binary
+		// previously deployed by a matching-platform client.
+		symlink := `test -x "$HOME/.local/lib/codetty/codetty"`
+		if _, symErr := e.runSSH(30*time.Second, nil, symlink); symErr == nil {
+			e.preinstalled = true
+			return nil
+		}
+		return fmt.Errorf("%w (and no previously deployed binary found; run `codetty upgrade -r %s` from a matching host or set deploy = \"never\" with a binary path)", err, e.name)
 	}
 
 	exe, err := os.Executable()
@@ -252,11 +264,12 @@ func (e *sshDaemonEndpoint) bridgeCommand() string {
 
 // remoteBinary returns the shell-quoted remote binary path. Auto-deployed
 // binaries are addressed by their exact content hash so concurrent clients
-// with different versions each exec the binary they deployed; the legacy
-// symlink is the fallback when the local hash can't be computed.
+// with different versions each exec the binary they deployed; the stable
+// symlink is used when this client couldn't deploy itself (cross-platform
+// client relying on a preinstalled binary) or the local hash is unknown.
 func (e *sshDaemonEndpoint) remoteBinary() string {
 	if e.deploy == "auto" {
-		if hash, err := localBinaryHash(); err == nil {
+		if hash, err := localBinaryHash(); err == nil && !e.preinstalled {
 			return fmt.Sprintf(`"$HOME/.local/lib/codetty/versions/codetty-%s"`, hash)
 		}
 		return `"$HOME/.local/lib/codetty/codetty"`
