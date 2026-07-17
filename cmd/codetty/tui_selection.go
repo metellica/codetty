@@ -113,10 +113,11 @@ func (m *tuiModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
 				m.focusCursor = -1
 			}
 
-			// Ctrl+Click: promote panel to big (switch m.selected)
+			// Ctrl+Click: promote panel to big (switch m.selected),
+			// activating its priority tab (blocked > done > active).
 			if msg.Ctrl {
 				if idx := m.hitTest(msg.X, msg.Y); idx >= 0 {
-					m.selected = idx
+					m.promoteToBig(idx)
 				}
 				m.sel = textSelection{}
 				return nil

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"strings"
 	"testing"
 
@@ -402,5 +403,96 @@ func TestHandleSessionEventAgentState(t *testing.T) {
 
 	if len(sess.Tabs) != 1 || sess.Tabs[0].AgentState != "blocked" {
 		t.Fatalf("agent_state event not applied: %+v", sess.Tabs)
+	}
+}
+
+// newAgentNavTestModel builds a three-session model where "beta" has a
+// blocked agent on a background tab, plus a drained pipe conn so tab-switch
+// requests can be observed via pendingTabAck.
+func newAgentNavTestModel(t *testing.T, mode layoutMode) *tuiModel {
+	t.Helper()
+	client, server := net.Pipe()
+	t.Cleanup(func() { client.Close(); server.Close() })
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			if _, err := server.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	m := newTUIModel(&daemonConn{conn: client}, "", nil)
+	m.width, m.height = 120, 40
+	m.sessions = []*tuiSession{
+		newTUISession("alpha", "bash", 80, 24),
+		newTUISession("beta", "bash", 80, 24),
+		newTUISession("gamma", "bash", 80, 24),
+	}
+	m.order = []string{"alpha", "beta", "gamma"}
+	m.mode = mode
+	m.selected = 0
+	m.sessions[1].Tabs = []tuiTab{
+		{Name: "sh"},
+		{Name: "cp", Agent: "copilot", AgentState: "blocked"},
+	}
+	m.sessions[1].ActiveTab = 0
+	return m
+}
+
+// TestSessionCycleActivatesPriorityTab verifies that cycling to a session
+// with a pending agent event (prefix + n) switches to that agent tab in
+// list, focus-big and tabs modes.
+func TestSessionCycleActivatesPriorityTab(t *testing.T) {
+	for _, mode := range []layoutMode{modeList, modeFocusBig, modeTabs} {
+		m := newAgentNavTestModel(t, mode)
+		m.prefix = true
+		m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+		if m.selected != 1 {
+			t.Fatalf("mode %d: selected = %d, want 1", mode, m.selected)
+		}
+		if !m.pendingTabAck["beta"] {
+			t.Fatalf("mode %d: cycling to a session with a blocked agent must request a tab switch", mode)
+		}
+	}
+}
+
+// TestNumberKeyActivatesPriorityTab verifies that selecting a session by
+// number (prefix + 2) switches to its pending agent tab, except in
+// fullscreen mode.
+func TestNumberKeyActivatesPriorityTab(t *testing.T) {
+	for _, mode := range []layoutMode{modeList, modeFocusBig, modeTabs} {
+		m := newAgentNavTestModel(t, mode)
+		m.prefix = true
+		m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+		if m.selected != 1 {
+			t.Fatalf("mode %d: selected = %d, want 1", mode, m.selected)
+		}
+		if !m.pendingTabAck["beta"] {
+			t.Fatalf("mode %d: number-key activation with a blocked agent must request a tab switch", mode)
+		}
+	}
+
+	m := newAgentNavTestModel(t, modeFullscreen)
+	m.prefix = true
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if m.selected != 1 {
+		t.Fatalf("fullscreen: selected = %d, want 1", m.selected)
+	}
+	if m.pendingTabAck["beta"] {
+		t.Fatal("fullscreen: number-key activation must not switch tabs")
+	}
+}
+
+// TestTabsModeShiftTabActivatesPriorityTab verifies that Shift+Tab session
+// cycling in tabs mode switches to the pending agent tab.
+func TestTabsModeShiftTabActivatesPriorityTab(t *testing.T) {
+	m := newAgentNavTestModel(t, modeTabs)
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.selected != 1 {
+		t.Fatalf("selected = %d, want 1", m.selected)
+	}
+	if !m.pendingTabAck["beta"] {
+		t.Fatal("Shift+Tab to a session with a blocked agent must request a tab switch")
 	}
 }

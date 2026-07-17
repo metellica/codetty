@@ -491,7 +491,12 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 		case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 			idx := int(msg.Runes[0]-'0') - 1
 			if idx < len(m.visibleSessions()) {
-				m.selected = idx
+				if m.mode == modeFullscreen {
+					m.selected = idx
+				} else {
+					// Activate the priority tab (blocked > done > active).
+					m.promoteToBig(idx)
+				}
 				m.listCursor = idx
 				m.listCursorTab = -1
 				m.focusCursor = -1
@@ -537,7 +542,14 @@ func (m *tuiModel) selectDelta(delta int) {
 	if len(visible) == 0 {
 		return
 	}
-	m.selected = ((m.selected+delta)%len(visible) + len(visible)) % len(visible)
+	idx := ((m.selected+delta)%len(visible) + len(visible)) % len(visible)
+	if m.mode == modeFullscreen {
+		m.selected = idx
+		return
+	}
+	// List/focus-big/tabs: activate the priority tab (blocked > done >
+	// active) so a session with a pending agent event opens on that tab.
+	m.promoteToBig(idx)
 }
 
 // promoteToBig makes the given visible session the big panel and activates
