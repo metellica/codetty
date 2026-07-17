@@ -323,7 +323,7 @@ func (s *DaemonSession) readLoopForTab(tab *SessionTab, term terminal.Session) {
 
 			// Only broadcast output if this is the active tab
 			s.mu.Lock()
-			isActive := s.Tabs[s.ActiveTab] == tab
+			isActive := s.ActiveTab >= 0 && s.ActiveTab < len(s.Tabs) && s.Tabs[s.ActiveTab] == tab
 			s.mu.Unlock()
 
 			if isActive {

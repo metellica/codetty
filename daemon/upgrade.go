@@ -226,18 +226,24 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 			}
 
 			sess.Tabs = append(sess.Tabs, tab)
-
-			// Start read/wait loops for recovered tabs
-			go sess.readLoopForTab(tab, term)
-			go sess.waitLoopForTab(tab, term)
 		}
 
 		if len(sess.Tabs) > 0 {
-			if sess.ActiveTab >= len(sess.Tabs) {
+			if sess.ActiveTab < 0 || sess.ActiveTab >= len(sess.Tabs) {
 				sess.ActiveTab = 0
 			}
 			sess.Terminal = sess.Tabs[sess.ActiveTab].Terminal
 			sess.Screen = sess.Tabs[sess.ActiveTab].Screen
+		}
+
+		// Start read/wait loops only after all tabs are registered and
+		// ActiveTab is clamped: a recovered pty with buffered output
+		// makes readLoopForTab index s.Tabs[s.ActiveTab] immediately,
+		// which panicked (killing the whole daemon and every session's
+		// children) while the tab slice was still partially built.
+		for _, tab := range sess.Tabs {
+			go sess.readLoopForTab(tab, tab.Terminal)
+			go sess.waitLoopForTab(tab, tab.Terminal)
 		}
 
 		srv.addSessionLocked(sess)
