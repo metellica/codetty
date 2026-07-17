@@ -933,6 +933,14 @@ func (m *tuiModel) openFloating(visIdx int) {
 	}
 	m.pushMode()
 	m.floatingIdx = orderIdx
+	// Activate the priority tab (blocked > done > active) so a session
+	// with a pending agent event opens on that tab, matching promoteToBig.
+	if ordered := m.orderedSessions(); orderIdx < len(ordered) {
+		sess := ordered[orderIdx]
+		if targetTab := sessionPriorityTab(sess); targetTab >= 0 && targetTab != sess.ActiveTab {
+			m.requestTabSwitch(sess.Name, targetTab)
+		}
+	}
 	// Resize the floating session to match the floating window content area
 	if m.conn != nil && orderIdx >= 0 && orderIdx < len(m.orderedSessions()) {
 		_, _, cw, ch := m.floatingContentRect()

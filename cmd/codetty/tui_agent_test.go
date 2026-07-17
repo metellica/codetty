@@ -496,3 +496,17 @@ func TestTabsModeShiftTabActivatesPriorityTab(t *testing.T) {
 		t.Fatal("Shift+Tab to a session with a blocked agent must request a tab switch")
 	}
 }
+
+// TestOpenFloatingActivatesPriorityTab verifies that opening a session in a
+// floating window (plain click / Enter on a focus-big side panel) switches
+// to the pending agent tab.
+func TestOpenFloatingActivatesPriorityTab(t *testing.T) {
+	m := newAgentNavTestModel(t, modeFocusBig)
+	m.openFloating(1)
+	if m.floatingIdx != 1 {
+		t.Fatalf("floatingIdx = %d, want 1", m.floatingIdx)
+	}
+	if !m.pendingTabAck["beta"] {
+		t.Fatal("opening a floating window on a session with a blocked agent must request a tab switch")
+	}
+}
