@@ -26,6 +26,9 @@ type startupConfig struct {
 	order       []string        // desired session display order
 	hidden      map[string]bool // sessions hidden on startup
 	autoCreate  []string        // command to auto-create if no sessions exist
+	// remoteJobs are remote containers from the config, connected in the
+	// background once the TUI is up (shown as connecting meanwhile).
+	remoteJobs []remoteConnectJob
 }
 
 func cmdNew(args []string) {
@@ -122,6 +125,7 @@ func startTUIWithEndpoints(
 	conn.persistRemotes = saveRecordedRemotes
 
 	model := newTUIModel(conn, sc.focusTarget, sc.autoCreate)
+	model.startupRemoteJobs = sc.remoteJobs
 
 	// Apply startup layout mode (default is modeFocusBig).
 	switch sc.layout {
@@ -156,7 +160,14 @@ func startTUIWithEndpoints(
 		log.Fatalf("subscribe: %v", err)
 	}
 
-	reconnectRecordedRemotes(conn, p, recorded)
+	// Recorded remotes covered by a startup job are skipped: the job's
+	// synced connect adopts their containers, and both flows would
+	// otherwise race the same endpoint.
+	jobEndpoints := make(map[string]bool, len(sc.remoteJobs))
+	for _, job := range sc.remoteJobs {
+		jobEndpoints[job.id] = true
+	}
+	reconnectRecordedRemotes(conn, p, recorded, jobEndpoints)
 
 	err = runWithAutowrapDisabled(os.Stdout, func() error {
 		_, runErr := p.Run()
@@ -198,45 +209,65 @@ func cmdUp(args []string) {
 	if err != nil {
 		log.Fatalf("resolve endpoints: %v", err)
 	}
-	if err := ensureEndpoints(endpoints); err != nil {
+	localEndpoint := endpoints[localPeerID]
+	if err := localEndpoint.Ensure(); err != nil {
 		log.Fatalf("prepare daemon: %v", err)
 	}
 
-	existingByEndpoint := make(map[string]map[string]bool, len(endpoints))
-	for id, endpoint := range endpoints {
-		current, err := querySessionsEndpoint(endpoint)
-		if err != nil {
-			log.Fatalf("list sessions on %s: %v", id, err)
-		}
-		existingByEndpoint[id] = endpointSessionNames(current)
+	current, err := querySessionsEndpoint(localEndpoint)
+	if err != nil {
+		log.Fatalf("list sessions: %v", err)
 	}
+	existingLocal := endpointSessionNames(current)
 	cols, rows := terminalSize()
 
+	// Local containers are created before the TUI starts (fast, local
+	// daemon). Remote containers are deferred to background jobs inside
+	// the TUI: SSH deploy checks and subscribe handshakes must not block
+	// the UI, which shows the remotes as connecting meanwhile.
+	remoteJobs := make(map[string]*remoteConnectJob)
+	var jobOrder []string
 	for _, plan := range plans {
 		for _, cp := range plan.Containers {
-			endpoint := endpoints[cp.EndpointID]
-			if existingByEndpoint[cp.EndpointID][cp.Container] {
-				fmt.Fprintf(os.Stderr, "session %q already exists on %s, skipping\n", plan.Session.Name, cp.EndpointID)
+			if cp.EndpointID != localPeerID {
+				job := remoteJobs[cp.EndpointID]
+				if job == nil {
+					endpoint := endpoints[cp.EndpointID]
+					job = &remoteConnectJob{
+						id:       cp.EndpointID,
+						label:    endpointLabel(endpoint),
+						endpoint: endpoint,
+					}
+					remoteJobs[cp.EndpointID] = job
+					jobOrder = append(jobOrder, cp.EndpointID)
+				}
+				job.containers = append(job.containers, remoteContainerSpec{
+					display: plan.Session.Name, cp: cp,
+				})
+				continue
+			}
+			if existingLocal[cp.Container] {
+				fmt.Fprintf(os.Stderr, "session %q already exists, skipping\n", plan.Session.Name)
 				continue
 			}
 
 			first := cp.Tabs[0]
 			cmd := first.Command
 			if err := createDaemonSessionEndpoint(
-				endpoint, cp.Container, cmd, cols, rows, first.Dir, envToSlice(first.Env), first.Name,
+				localEndpoint, cp.Container, cmd, cols, rows, first.Dir, envToSlice(first.Env), first.Name,
 			); err != nil {
-				log.Printf("create session %q on %s: %v", plan.Session.Name, cp.EndpointID, err)
+				log.Printf("create session %q: %v", plan.Session.Name, err)
 				continue
 			}
-			existingByEndpoint[cp.EndpointID][cp.Container] = true
-			fmt.Fprintf(os.Stderr, "created session %q on %s\n", plan.Session.Name, cp.EndpointID)
+			existingLocal[cp.Container] = true
+			fmt.Fprintf(os.Stderr, "created session %q\n", plan.Session.Name)
 
 			for _, tab := range cp.Tabs[1:] {
 				tabCmd := tab.Command
 				if len(tabCmd) == 0 {
 					tabCmd = cmd
 				}
-				if err := createDaemonTabEndpoint(endpoint, cp.Container, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
+				if err := createDaemonTabEndpoint(localEndpoint, cp.Container, tab.Name, tabCmd, tab.Dir, envToSlice(tab.Env)); err != nil {
 					log.Printf("create tab %q in session %q: %v", tab.Name, plan.Session.Name, err)
 				} else {
 					fmt.Fprintf(os.Stderr, "  created tab %q\n", tab.Name)
@@ -262,8 +293,11 @@ func cmdUp(args []string) {
 	if sc.focusTarget == "" && len(sessions) > 0 {
 		sc.focusTarget = sessions[0].Name
 	}
+	for _, id := range jobOrder {
+		sc.remoteJobs = append(sc.remoteJobs, *remoteJobs[id])
+	}
 
-	startTUIWithEndpoints(endpoints, sc)
+	startTUIWithEndpoints(map[string]daemonEndpoint{localPeerID: localEndpoint}, sc)
 }
 
 // envToSlice converts an env map to sorted "KEY=value" entries.

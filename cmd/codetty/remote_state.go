@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -79,22 +78,27 @@ func saveRecordedRemotes(remotes map[string]config.RemoteDef) {
 
 // reconnectRecordedRemotes dials recorded remotes not already connected
 // (e.g. not referenced by the config), so remote tabs created ad-hoc in
-// earlier runs reappear. Runs in the background: unreachable remotes must
-// not block TUI startup, and their registry entries are preserved.
-func reconnectRecordedRemotes(conn *daemonConn, p *tea.Program, recorded map[string]config.RemoteDef) {
+// earlier runs reappear. Endpoints in skip are covered by a startup remote
+// job, whose AddPeerSynced adopts the recorded containers anyway — dialing
+// them here too would only duplicate the SSH work. Runs in the background:
+// unreachable remotes must not block TUI startup, and their registry
+// entries are preserved.
+func reconnectRecordedRemotes(conn *daemonConn, p *tea.Program, recorded map[string]config.RemoteDef, skip map[string]bool) {
 	for name, def := range recorded {
 		endpoint, err := newSSHDaemonEndpoint(name, def)
-		if err != nil || conn.HasPeer(endpoint.ID()) {
+		if err != nil || skip[endpoint.ID()] || conn.HasPeer(endpoint.ID()) {
 			continue
 		}
 		go func(name string, endpoint *sshDaemonEndpoint) {
+			p.Send(remoteConnectingMsg{id: endpoint.ID(), label: name})
 			if err := endpoint.Ensure(); err != nil {
-				p.Send(tuiNoticeMsg{text: fmt.Sprintf("remote %s: %v", name, err)})
+				p.Send(remoteConnectDoneMsg{id: endpoint.ID(), label: name, err: err})
 				return
 			}
-			if err := conn.AddPeer(endpoint.ID(), endpoint); err != nil {
-				p.Send(tuiNoticeMsg{text: fmt.Sprintf("remote %s: %v", name, err)})
-			}
+			// Synced: the connecting indicator stays up until the
+			// remote's containers (and thus its tabs) are visible.
+			err := conn.AddPeerSynced(endpoint.ID(), endpoint)
+			p.Send(remoteConnectDoneMsg{id: endpoint.ID(), label: name, err: err})
 		}(name, endpoint)
 	}
 }

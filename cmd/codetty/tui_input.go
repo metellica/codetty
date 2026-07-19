@@ -328,20 +328,27 @@ func (m *tuiModel) createTabOnTarget(session, name string, target remoteTarget) 
 		return nil
 	}
 	cols, rows := m.focusedContentSize()
+	if !conn.PeerSynced(target.id) {
+		// The handshake (and possibly a deploy) runs in the background;
+		// the status bar shows the remote as connecting meanwhile.
+		m.markRemoteConnecting(target.id, target.label)
+	}
 	return func() tea.Msg {
 		if !conn.HasPeer(target.id) {
 			if err := target.endpoint.Ensure(); err != nil {
-				return tuiNoticeMsg{text: fmt.Sprintf("remote %s: %v", target.label, err)}
-			}
-			// Synced: the peer's existing containers must be
-			// visible before CreateTabOn decides between creating a
-			// container and adding a tab to an existing one.
-			if err := conn.AddPeerSynced(target.id, target.endpoint); err != nil {
-				return tuiNoticeMsg{text: fmt.Sprintf("remote %s: %v", target.label, err)}
+				return remoteConnectDoneMsg{id: target.id, label: target.label, err: err}
 			}
 		}
+		// Synced (and idempotent): the peer's existing containers must
+		// be visible — even when a concurrent connect to the same
+		// endpoint is still handshaking — before CreateTabOn decides
+		// between creating a container and adding a tab to an existing
+		// one.
+		if err := conn.AddPeerSynced(target.id, target.endpoint); err != nil {
+			return remoteConnectDoneMsg{id: target.id, label: target.label, err: err}
+		}
 		conn.CreateTabOn(session, target.id, name, nil, "", nil, uint16(cols), uint16(rows))
-		return nil
+		return remoteConnectDoneMsg{id: target.id, label: target.label}
 	}
 }
 
@@ -453,8 +460,7 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return nil
 		case 'R':
-			m.reloadConfig()
-			return nil
+			return m.reloadConfig()
 		case 't':
 			// Create a new tab in the focused session (prompt for name).
 			// In floating mode, target the floating session.
@@ -577,6 +583,9 @@ func (m *tuiModel) moveOrder(delta int) {
 	target := ((m.selected+delta)%n + n) % n
 	// Use reorderByVisibleIdx to swap positions in m.order
 	m.reorderByVisibleIdx(m.selected, target)
+	// A manual reorder wins over any config order still pending on
+	// remote sessions that have not arrived yet.
+	m.desiredOrder = nil
 	m.pushOrderToDaemon()
 }
 

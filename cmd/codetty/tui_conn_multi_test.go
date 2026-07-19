@@ -534,6 +534,73 @@ func TestAddPeerWaitsForInitialSnapshot(t *testing.T) {
 	}
 }
 
+// A second AddPeerSynced for the same endpoint while the first one is
+// still handshaking must wait for that sync (not return early), so its
+// caller also sees existing containers before deciding to create tabs.
+func TestAddPeerSyncedConcurrentWaitsForOwner(t *testing.T) {
+	prog, _ := startTestProgram(t)
+	dc := newTestCompositeConn("local")
+	dc.program = prog
+	shadow := dc.testShadow("dev")
+
+	client, server := net.Pipe()
+	endpoint := &singleConnEndpoint{id: "remote:gpu", conn: client}
+
+	helloRead := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		if _, _, err := daemon.ReadFrame(server); err != nil {
+			return // hello request
+		}
+		close(helloRead)
+		<-release
+		daemon.WriteFrame(server, daemon.FrameSessionEvent, daemon.MarshalJSON(daemon.SessionEvent{
+			Type: "snapshot", Session: shadow,
+			Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "old"}}},
+			Cols: 100, Rows: 30,
+		}))
+		daemon.WriteFrame(server, daemon.FrameResponse, daemon.MarshalJSON(daemon.Response{OK: true}))
+		for {
+			if _, _, err := daemon.ReadFrame(server); err != nil {
+				return
+			}
+		}
+	}()
+
+	errA := make(chan error, 1)
+	go func() { errA <- dc.AddPeerSynced("remote:gpu", endpoint) }()
+	<-helloRead // peer is registered and owned by the first caller
+
+	errB := make(chan error, 1)
+	go func() { errB <- dc.AddPeerSynced("remote:gpu", endpoint) }()
+
+	select {
+	case err := <-errB:
+		t.Fatalf("second AddPeerSynced returned before sync settled: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	for _, ch := range []chan error{errA, errB} {
+		select {
+		case err := <-ch:
+			if err != nil {
+				t.Fatalf("AddPeerSynced: %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("AddPeerSynced did not return after sync settled")
+		}
+	}
+	t.Cleanup(func() {
+		close(dc.closed)
+		server.Close()
+	})
+
+	if dc.composites["dev"] == nil || dc.composites["dev"].part("remote:gpu") == nil {
+		t.Fatal("existing shadow container not visible after concurrent AddPeerSynced")
+	}
+}
+
 // Remote containers keep the PTY size of a previous run; when one joins a
 // composite it must be re-fitted to the panel size the TUI last pushed.
 func TestRemotePartJoinRefitsStaleContainer(t *testing.T) {

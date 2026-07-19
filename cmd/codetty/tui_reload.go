@@ -7,76 +7,77 @@ import (
 	"path/filepath"
 
 	"codetty/config"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // reloadConfig hot-reloads the .codetty.toml config file, adding/removing
 // tabs (local and remote) to match the desired state without restarting
-// existing processes.
-func (m *tuiModel) reloadConfig() {
+// existing processes. Remote daemons that are not connected yet are dialed
+// in the background (the status bar shows them as connecting); the returned
+// command carries those connection jobs.
+func (m *tuiModel) reloadConfig() tea.Cmd {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return
+		return nil
 	}
 
 	cfg, cfgPath, err := config.LoadSessions("", cwd)
 	if err != nil {
 		log.Printf("reload: %v", err)
-		return
+		return nil
 	}
 	if err := cfg.Validate(); err != nil {
 		log.Printf("reload: invalid config: %v", err)
-		return
+		return nil
 	}
 
 	configDir := filepath.Dir(cfgPath)
 	sessions, err := cfg.Resolve(configDir)
 	if err != nil {
 		log.Printf("reload: resolve: %v", err)
-		return
+		return nil
 	}
 
 	if m.conn == nil {
-		return
+		return nil
 	}
 	endpoints, plans, err := buildConfigEndpoints(cfg, sessions, defaultSocketPath())
 	if err != nil {
 		log.Printf("reload: endpoints: %v", err)
-		return
+		return nil
 	}
 
 	if !m.conn.multi() {
 		m.reloadLocalOnly(plans)
-		return
+		return nil
 	}
 
 	cols, rows := m.focusedContentSize()
+	// Unconnected remote endpoints are handled by background jobs, one
+	// per endpoint (a single handshake serves every session using it).
+	pendingJobs := make(map[string]*remoteConnectJob)
+	var jobOrder []string
 	for _, plan := range plans {
 		display := plan.Session.Name
 		desiredPeers := make(map[string]bool, len(plan.Containers))
 		for _, cp := range plan.Containers {
 			desiredPeers[cp.EndpointID] = true
-			if cp.EndpointID != localPeerID && !m.conn.HasPeer(cp.EndpointID) {
-				endpoint := endpoints[cp.EndpointID]
-				if err := endpoint.Ensure(); err != nil {
-					log.Printf("reload: prepare %s: %v", cp.EndpointID, err)
-					continue
+			if cp.EndpointID != localPeerID && !m.conn.PeerSynced(cp.EndpointID) {
+				job := pendingJobs[cp.EndpointID]
+				if job == nil {
+					endpoint := endpoints[cp.EndpointID]
+					job = &remoteConnectJob{
+						id:       cp.EndpointID,
+						label:    endpointLabel(endpoint),
+						endpoint: endpoint,
+					}
+					pendingJobs[cp.EndpointID] = job
+					jobOrder = append(jobOrder, cp.EndpointID)
 				}
-				// Check for an existing container before subscribing: if it
-				// already exists, adopt it as-is instead of re-creating
-				// its tabs (its state streams in via the subscription).
-				current, err := querySessionsEndpoint(endpoint)
-				if err != nil {
-					log.Printf("reload: query %s: %v", cp.EndpointID, err)
-					continue
-				}
-				exists := endpointSessionNames(current)[cp.Container]
-				if err := m.conn.AddPeer(cp.EndpointID, endpoint); err != nil {
-					log.Printf("reload: connect %s: %v", cp.EndpointID, err)
-					continue
-				}
-				if !exists {
-					m.createContainerTabs(display, cp, uint16(cols), uint16(rows))
-				}
+				job.containers = append(job.containers, remoteContainerSpec{
+					display: display, cp: cp,
+				})
 				continue
 			}
 
@@ -125,6 +126,14 @@ func (m *tuiModel) reloadConfig() {
 			}
 		}
 	}
+
+	var cmds []tea.Cmd
+	for _, id := range jobOrder {
+		job := pendingJobs[id]
+		m.markRemoteConnecting(job.id, job.label)
+		cmds = append(cmds, connectRemoteJobCmd(m.conn, *job, uint16(cols), uint16(rows)))
+	}
+	return tea.Batch(cmds...)
 }
 
 // createContainerTabs creates every desired tab of a container; the first

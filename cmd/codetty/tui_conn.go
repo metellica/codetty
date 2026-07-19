@@ -94,6 +94,14 @@ type daemonPeer struct {
 	reconcile  bool
 	initialAck bool
 
+	// subscribed is closed once the initial subscribe attempt settled
+	// (ACK consumed, handshake rejected, or the connection failed), so
+	// concurrent AddPeerSynced callers can wait for the first caller's
+	// snapshot sync instead of returning before existing containers are
+	// visible. May be nil for test-constructed peers (treated as synced).
+	subscribed chan struct{}
+	subOnce    sync.Once
+
 	// Negotiated protocol state from the subscribe ACK (stateMu). A peer
 	// that rejected the handshake is marked rejected and never reconnected.
 	// A peer that turned out to reach the same daemon as another peer is
@@ -103,6 +111,29 @@ type daemonPeer struct {
 	daemonID  string
 	rejected  bool
 	duplicate bool
+}
+
+// markSubscribed settles the peer's initial subscribe attempt, waking any
+// AddPeerSynced callers waiting on it. Safe to call multiple times.
+func (peer *daemonPeer) markSubscribed() {
+	if peer.subscribed == nil {
+		return
+	}
+	peer.subOnce.Do(func() { close(peer.subscribed) })
+}
+
+// waitSubscribed blocks until the peer's initial subscribe attempt settled
+// or the connection is torn down.
+func (peer *daemonPeer) waitSubscribed(closed <-chan struct{}) error {
+	if peer.subscribed == nil {
+		return nil
+	}
+	select {
+	case <-peer.subscribed:
+		return nil
+	case <-closed:
+		return fmt.Errorf("connection closed")
+	}
 }
 
 // hasCap reports whether the peer advertised a capability; future features
@@ -194,10 +225,11 @@ func newMultiDaemonConn(endpoints map[string]daemonEndpoint) (*daemonConn, error
 			return nil, fmt.Errorf("connect %s: %w", id, err)
 		}
 		dc.peers[id] = &daemonPeer{
-			id:       id,
-			endpoint: endpoint,
-			conn:     conn,
-			known:    make(map[string]bool),
+			id:         id,
+			endpoint:   endpoint,
+			conn:       conn,
+			known:      make(map[string]bool),
+			subscribed: make(chan struct{}),
 		}
 	}
 	return dc, nil
@@ -312,36 +344,31 @@ func (dc *daemonConn) registerDaemonIdentity(peer *daemonPeer, daemonID string) 
 	return loser
 }
 
-// AddPeer connects to a new daemon endpoint at runtime and subscribes to
-// it, so this host's sessions on it merge into the composite view. The initial
-// snapshot stream is consumed in the background; callers that need the
-// peer's existing containers visible on return use AddPeerSynced.
-func (dc *daemonConn) AddPeer(id string, endpoint daemonEndpoint) error {
-	peer, err := dc.connectPeer(id, endpoint)
-	if err != nil || peer == nil {
-		return err
-	}
-	go dc.readPeerLoop(peer)
-	return nil
-}
-
-// AddPeerSynced is AddPeer, but consumes the peer's initial snapshot
-// stream before returning (like a reconnect does): callers create tabs
-// right after it returns and must already see the peer's existing
-// containers — otherwise CreateTabOn would issue a create_session for a
-// container that already exists there, and the requested tab (with its
-// name) would be dropped. Blocks on Program.Send, so it must not be called
-// from the Update goroutine.
+// AddPeerSynced connects to a new daemon endpoint at runtime and
+// subscribes to it, so this host's sessions on it merge into the composite
+// view. It consumes the peer's initial snapshot stream before returning
+// (like a reconnect does): callers create tabs right after it returns and
+// must already see the peer's existing containers — otherwise CreateTabOn
+// would issue a create_session for a container that already exists there,
+// and the requested tab (with its name) would be dropped. Blocks on
+// Program.Send, so it must not be called from the Update goroutine.
 func (dc *daemonConn) AddPeerSynced(id string, endpoint daemonEndpoint) error {
 	peer, err := dc.connectPeer(id, endpoint)
-	if err != nil || peer == nil {
+	if err != nil {
 		return err
+	}
+	if peer == nil {
+		// Another caller owns (or owned) the connection to this
+		// endpoint. Wait until its initial snapshot sync settled so
+		// this caller sees existing containers too.
+		return dc.awaitPeerSynced(id)
 	}
 	if err := dc.readPeerUntilSubscribed(peer); err != nil {
 		dc.peersMu.Lock()
 		delete(dc.peers, id)
 		dc.peersMu.Unlock()
 		_ = peer.conn.Close()
+		peer.markSubscribed() // wake concurrent callers; the peer is gone
 		return err
 	}
 	peer.stateMu.Lock()
@@ -376,10 +403,11 @@ func (dc *daemonConn) connectPeer(id string, endpoint daemonEndpoint) (*daemonPe
 		return nil, err
 	}
 	peer := &daemonPeer{
-		id:       id,
-		endpoint: endpoint,
-		conn:     conn,
-		known:    make(map[string]bool),
+		id:         id,
+		endpoint:   endpoint,
+		conn:       conn,
+		known:      make(map[string]bool),
+		subscribed: make(chan struct{}),
 	}
 	dc.peersMu.Lock()
 	if _, ok := dc.peers[id]; ok {
@@ -395,9 +423,49 @@ func (dc *daemonConn) connectPeer(id string, endpoint daemonEndpoint) (*daemonPe
 		delete(dc.peers, id)
 		dc.peersMu.Unlock()
 		_ = conn.Close()
+		peer.markSubscribed() // wake concurrent callers; the peer is gone
 		return nil, err
 	}
 	return peer, nil
+}
+
+// awaitPeerSynced waits for the initial subscribe attempt of an existing
+// peer (owned by a concurrent AddPeerSynced caller) to settle, and reports
+// the same outcome that caller saw.
+func (dc *daemonConn) awaitPeerSynced(id string) error {
+	peer := dc.peer(id)
+	if peer == nil {
+		return fmt.Errorf("connect %s: concurrent connection attempt failed", id)
+	}
+	if err := peer.waitSubscribed(dc.closed); err != nil {
+		return err
+	}
+	// The owning caller removes failed peers after settling.
+	if dc.peer(id) == nil {
+		return fmt.Errorf("connect %s: concurrent connection attempt failed", id)
+	}
+	peer.stateMu.Lock()
+	rejected := peer.rejected
+	peer.stateMu.Unlock()
+	if rejected {
+		return fmt.Errorf("protocol handshake rejected")
+	}
+	return nil
+}
+
+// PeerSynced reports whether the peer is connected and its initial
+// subscribe snapshot stream has been consumed. Peers that are absent,
+// still handshaking or handshake-rejected report false: their container
+// state is not trustworthy yet, so callers must go through AddPeerSynced
+// (in the background) before creating tabs.
+func (dc *daemonConn) PeerSynced(id string) bool {
+	peer := dc.peer(id)
+	if peer == nil {
+		return false
+	}
+	peer.stateMu.Lock()
+	defer peer.stateMu.Unlock()
+	return peer.initialAck && !peer.rejected
 }
 
 // reconnectCmd retries dialing the daemon socket for a few seconds. The
@@ -539,6 +607,7 @@ func (dc *daemonConn) handlePeerFrame(peer *daemonPeer, ft daemon.FrameType, pay
 			peer.rejected = true
 			peer.initialAck = true
 			peer.stateMu.Unlock()
+			peer.markSubscribed()
 			dc.ackPending(peer)
 			if dc.program != nil {
 				dc.program.Send(tuiNoticeMsg{text: fmt.Sprintf("%s: %s", peer.id, resp.Error)})
@@ -584,6 +653,10 @@ func (dc *daemonConn) handlePeerFrame(peer *daemonPeer, ft daemon.FrameType, pay
 				}
 			}
 		}
+		// Settle after duplicate handling so waiters that re-resolve the
+		// peer already see the alias. Frames are handled in order, so the
+		// initial snapshots were merged before this ACK.
+		peer.markSubscribed()
 		if firstAck {
 			dc.ackPending(peer)
 		}

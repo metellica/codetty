@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"time"
 
 	"codetty/config"
@@ -97,6 +98,17 @@ type tuiModel struct {
 	// Transient status-bar notice (e.g. remote connect failures), cleared
 	// on the next key press.
 	notice string
+
+	// connectingRemotes tracks remote daemons whose connection handshake
+	// is running in the background; the status bar shows them until the
+	// matching done messages arrive. Reference-counted per endpoint:
+	// several flows (startup job, reload, picker, recorded registry) may
+	// connect the same endpoint concurrently.
+	connectingRemotes map[string]*connectingRemoteState
+
+	// startupRemoteJobs are remote containers from the startup config,
+	// connected in the background once the local subscription is up.
+	startupRemoteJobs []remoteConnectJob
 
 	// Text selection
 	sel textSelection
@@ -295,15 +307,49 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Event.Type == "created" {
 			m.resizeSessionPTYs()
 		}
+		// Sessions arriving from pending remote connections (startup
+		// config jobs) must still slot into the configured order.
+		if m.subscribed && len(m.desiredOrder) > 0 {
+			switch msg.Event.Type {
+			case "created", "snapshot":
+				m.applyDesiredOrder()
+			}
+		}
 		return m, tea.ClearScreen
 
 	case tuiNoticeMsg:
 		m.notice = msg.text
 		return m, nil
 
+	case remoteConnectingMsg:
+		m.markRemoteConnecting(msg.id, msg.label)
+		return m, nil
+
+	case remoteConnectDoneMsg:
+		if st := m.connectingRemotes[msg.id]; st != nil {
+			if st.refs--; st.refs <= 0 {
+				delete(m.connectingRemotes, msg.id)
+			}
+		}
+		if msg.err != nil {
+			m.notice = fmt.Sprintf("remote %s: %v", msg.label, msg.err)
+		}
+		// Slot any sessions that appeared meanwhile into the config
+		// order (created events may still trail this message; the
+		// session-event handler re-applies for those).
+		if len(m.connectingRemotes) == 0 {
+			m.applyDesiredOrder()
+		}
+		return m, nil
+
 	case daemonSubscribedMsg:
 		m.subscribed = true
 		m.maybeAutoCreate()
+		// Remote tabs from the startup config connect in the background
+		// now that the local sessions are known. Launched before the
+		// order is applied so pending connections keep it alive for the
+		// remote-only sessions still to come.
+		cmd := m.startupRemoteJobCmds()
 		m.applyDesiredOrder()
 		// Initial snapshots arrive with the daemon-side (stale) session sizes.
 		// Resize everything to the actual panel content size now that all
@@ -311,6 +357,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.sessions) > 0 && m.width > 0 && m.height > 0 {
 			m.resizeSessionPTYs()
 		}
+		return m, cmd
 
 	case daemonDisconnectedMsg:
 		// The daemon dropped us — during a hot upgrade it closes all
@@ -338,6 +385,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.listScroll = 0
 		m.focusCursor = -1
 		m.sel = textSelection{}
+		m.connectingRemotes = nil
 		if prog == nil || m.conn.Subscribe(prog) != nil {
 			return m, tea.Quit
 		}
@@ -397,8 +445,15 @@ func (m *tuiModel) View() string {
 	var base string
 	if len(m.sessions) == 0 {
 		hint := "No sessions. Creating one..."
-		if m.autoCreate == nil {
+		if labels := m.connectingLabel(); labels != "" {
+			// codetty up with remote-only tabs: no local session yet,
+			// the remote connections are still handshaking.
+			hint = "Connecting to " + labels + "..."
+		} else if m.autoCreate == nil {
 			hint = "No sessions. Press " + m.prefixLabel + " c to create one."
+		}
+		if m.notice != "" {
+			hint += "\n\n" + m.notice
 		}
 		// Only show the status bar when in an interactive overlay state
 		// that still uses the bottom bar (renaming, prefix help).
@@ -841,14 +896,27 @@ func (m *tuiModel) maybeAutoCreate() {
 }
 
 // applyDesiredOrder reorders m.order to match the config-specified order.
-// Called once after all initial session snapshots have arrived. The result
-// is pushed to the daemon so the order sticks across re-attach.
+// Called after the initial session snapshots have arrived, and re-applied
+// as sessions from background remote connections trickle in: their created
+// events trail the connection's done message (CreateTabOn only sends the
+// frames), so the order stays pending until every named session exists.
+// A manual reorder (h/l) clears it instead — the user wins.
+// The result is pushed to the daemon so the order sticks across re-attach.
 func (m *tuiModel) applyDesiredOrder() {
 	if len(m.desiredOrder) == 0 {
 		return
 	}
 	m.applyOrderNames(m.desiredOrder)
-	m.desiredOrder = nil
+	complete := true
+	for _, name := range m.desiredOrder {
+		if m.sessionByName(name) == nil {
+			complete = false
+			break
+		}
+	}
+	if complete {
+		m.desiredOrder = nil
+	}
 	m.pushOrderToDaemon()
 }
 

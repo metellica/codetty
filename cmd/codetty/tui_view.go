@@ -908,6 +908,9 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	left := fmt.Sprintf(" [%s] %d/%d", name, m.selected+1, len(m.visibleSessions()))
+	if connecting := m.connectingLabel(); connecting != "" {
+		left += "  ⇄ connecting: " + connecting + "…"
+	}
 	modeName := "list"
 	switch m.mode {
 	case modeFullscreen:
