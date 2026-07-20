@@ -832,13 +832,19 @@ func (m *tuiModel) extractSelectedText() string {
 		}
 
 		var sb strings.Builder
+		prevWide := false
 		for x := sx; x <= ex; x++ {
 			g := sess.term.Cell(x, row)
 			ch := g.Char
 			if ch == 0 {
-				// Skip NUL continuation cells placed after wide characters
-				continue
+				if prevWide {
+					// Skip NUL continuation cells placed after wide characters
+					prevWide = false
+					continue
+				}
+				ch = ' ' // orphan NUL: keep column alignment
 			}
+			prevWide = runewidth.RuneWidth(ch) == 2
 			sb.WriteRune(ch)
 		}
 		line := strings.TrimRight(sb.String(), " ")

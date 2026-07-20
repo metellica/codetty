@@ -345,6 +345,11 @@ func (t *State) defaultCursor() Cursor {
 }
 
 func (t *State) reset() {
+	// RIS always lands on the primary screen: swap back first so t.lines
+	// stays aligned with the ModeAltScreen flag cleared below.
+	if t.mode&ModeAltScreen != 0 {
+		t.swapScreen()
+	}
 	t.cur = t.defaultCursor()
 	t.saveCursor()
 	for i := range t.tabs {
@@ -356,7 +361,7 @@ func (t *State) reset() {
 	t.top = 0
 	t.bottom = t.rows - 1
 	t.mode = ModeWrap
-	t.clear(0, 0, t.rows-1, t.cols-1)
+	t.clearAll()
 	t.moveTo(0, 0)
 }
 
@@ -433,6 +438,10 @@ func (t *State) clear(x0, y0, x1, y1 int) {
 	t.changed |= ChangedScreen
 	for y := y0; y <= y1; y++ {
 		t.dirty[y] = true
+		// Blank the surviving half of any wide-char pair straddling the
+		// region boundary so no orphaned lead/continuation cell remains.
+		t.cleanWide(x0, y)
+		t.cleanWide(x1, y)
 		for x := x0; x <= x1; x++ {
 			t.lines[y][x] = t.cur.Attr
 			t.lines[y][x].Char = ' '
@@ -788,6 +797,16 @@ func (t *State) insertBlanks(n int) {
 	if dst >= t.cols {
 		t.clear(t.cur.X, t.cur.Y, t.cols-1, t.cur.Y)
 	} else {
+		// If the insert point is a continuation cell, the pair straddles
+		// it: the lead stays put while the continuation shifts. Blank both
+		// halves so no orphan remains.
+		if t.lines[t.cur.Y][src].Char == 0 {
+			t.cleanWide(src, t.cur.Y)
+			t.lines[t.cur.Y][src].Char = ' '
+		}
+		// A pair straddling the truncation point loses its continuation;
+		// blank the lead so it isn't copied orphaned into the last column.
+		t.cleanWide(src+size, t.cur.Y)
 		copy(t.lines[t.cur.Y][dst:dst+size], t.lines[t.cur.Y][src:src+size])
 		t.clear(src, t.cur.Y, dst-1, t.cur.Y)
 	}
@@ -817,6 +836,13 @@ func (t *State) deleteChars(n int) {
 	if src >= t.cols {
 		t.clear(t.cur.X, t.cur.Y, t.cols-1, t.cur.Y)
 	} else {
+		// Blank the surviving lead of a pair straddling the delete start,
+		// and the continuation of a pair whose lead is being deleted, so
+		// the shift leaves no orphan half of a wide character.
+		t.cleanWide(dst, t.cur.Y)
+		if t.lines[t.cur.Y][src].Char == 0 {
+			t.lines[t.cur.Y][src].Char = ' '
+		}
 		copy(t.lines[t.cur.Y][dst:dst+size], t.lines[t.cur.Y][src:src+size])
 		t.clear(t.cols-n, t.cur.Y, t.cols-1, t.cur.Y)
 	}

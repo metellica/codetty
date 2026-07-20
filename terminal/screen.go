@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mattn/go-runewidth"
+
 	"codetty/vt10x"
 )
 
@@ -130,11 +132,17 @@ func (s *ScreenMirror) extractText(start, end, cols int) string {
 	for y := start; y < end; y++ {
 		line.Reset()
 		line.Grow(cols)
+		prevWide := false
 		for x := 0; x < cols; x++ {
 			g := s.term.Cell(x, y)
 			if g.Char == 0 {
-				continue // wide-char continuation cell
+				if prevWide {
+					prevWide = false
+					continue // wide-char continuation cell
+				}
+				g.Char = ' ' // orphan NUL: keep column alignment
 			}
+			prevWide = runewidth.RuneWidth(g.Char) == 2
 			line.WriteRune(g.Char)
 		}
 		lines = append(lines, strings.TrimRight(line.String(), " "))
@@ -191,11 +199,17 @@ func (s *ScreenMirror) Snapshot() []byte {
 
 	for y := 0; y < rows; y++ {
 		fmt.Fprintf(&b, "\033[%d;1H", y+1)
+		prevWide := false
 		for x := 0; x < cols; x++ {
 			g := s.term.Cell(x, y)
 			if g.Char == 0 {
-				continue // skip wide-char continuation cell
+				if prevWide {
+					prevWide = false
+					continue // skip wide-char continuation cell
+				}
+				g.Char = ' ' // orphan NUL: keep column alignment on replay
 			}
+			prevWide = runewidth.RuneWidth(g.Char) == 2
 
 			if g.FG != prevFG || g.BG != prevBG || g.Mode != prevMode || (needReset && (g.FG != vt10x.DefaultFG || g.BG != vt10x.DefaultBG || g.Mode != 0)) {
 				b.WriteString(ansiAttrs(g.FG, g.BG, g.Mode))
@@ -236,11 +250,17 @@ func writeGlyphRow(b *strings.Builder, row []vt10x.Glyph) {
 	}
 	var prevFG, prevBG vt10x.Color = vt10x.DefaultFG, vt10x.DefaultBG
 	var prevMode int16
+	prevWide := false
 	for x := 0; x < end; x++ {
 		g := row[x]
 		if g.Char == 0 {
-			continue // wide-char continuation cell
+			if prevWide {
+				prevWide = false
+				continue // wide-char continuation cell
+			}
+			g.Char = ' ' // orphan NUL: keep column alignment on replay
 		}
+		prevWide = runewidth.RuneWidth(g.Char) == 2
 		if g.FG != prevFG || g.BG != prevBG || g.Mode != prevMode {
 			b.WriteString(ansiAttrs(g.FG, g.BG, g.Mode))
 			prevFG, prevBG, prevMode = g.FG, g.BG, g.Mode

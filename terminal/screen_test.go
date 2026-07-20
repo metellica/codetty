@@ -181,3 +181,22 @@ func TestScreenMirror_SnapshotReplaysScrollback(t *testing.T) {
 		t.Fatalf("screen mismatch after replay:\ngot:  %q\nwant: %q", got, want)
 	}
 }
+
+func TestScreenMirror_SnapshotAlignmentAfterWideCharEdit(t *testing.T) {
+	// Regression: editing operations (DCH) that touch wide chars must not
+	// shift subsequent columns when the snapshot is replayed.
+	sm := NewScreenMirror(20, 4)
+	sm.Write([]byte("你好abc"))
+	sm.Write([]byte("\x1b[1;1H\x1b[2P")) // delete 你 (both cells)
+
+	sm2 := NewScreenMirror(20, 4)
+	sm2.Write(sm.Snapshot())
+
+	src, dst := sm.TailText(0), sm2.TailText(0)
+	if src != dst {
+		t.Errorf("snapshot replay changed screen text: src=%q dst=%q", src, dst)
+	}
+	if !strings.Contains(dst, "好abc") {
+		t.Errorf("expected 好abc shifted to column 0 after delete, got %q", dst)
+	}
+}
