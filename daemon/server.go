@@ -375,7 +375,7 @@ func (s *Server) runAttachedClient(conn net.Conn, sess *DaemonSession) {
 
 	// Send screen snapshot for immediate restore
 	if snap := sess.Screen.Snapshot(); len(snap) > 0 {
-		WriteFrame(conn, FrameOutput, snap)
+		WriteFrameChunked(conn, FrameOutput, snap)
 	}
 
 	client.Run(s)
@@ -597,7 +597,7 @@ func (s *Server) handleSubscribeAll(conn net.Conn, req Request) {
 				Rows:    rows,
 			}))
 			if len(snap) > 0 {
-				sub.sendFrameDirect(FrameTaggedOutput, EncodeTaggedOutput(sess.Name, snap))
+				sub.sendTaggedOutputDirect(sess.Name, snap)
 			}
 		}
 	}
@@ -798,14 +798,14 @@ func (s *Server) createTabForSubscriber(sub *Subscriber, req CreateTabRequest) {
 	}
 
 	// Use the active tab's screen size for the new tab
-	s.mu.Lock()
+	sess.mu.Lock()
 	var cols, rows uint16
 	if len(sess.Tabs) > 0 {
 		cols, rows = sess.Tabs[sess.ActiveTab].Screen.Size()
 	} else {
 		cols, rows = 80, 24
 	}
-	s.mu.Unlock()
+	sess.mu.Unlock()
 
 	idx, err := sess.AddTab(name, cmd, cols, rows, req.Dir, req.Env)
 	if err != nil {

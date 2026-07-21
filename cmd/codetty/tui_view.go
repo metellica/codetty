@@ -47,8 +47,12 @@ func (m *tuiModel) fullscreenView() string {
 		lines := sess.RenderANSIWithSelection(m.width, contentH, selFn)
 		content = strings.Join(lines, "\n")
 	} else {
-		lines, _, _ := sess.RenderANSI(m.width, contentH)
+		lines, curX, curY := sess.RenderANSI(m.width, contentH)
 		content = strings.Join(lines, "\n")
+		if curX >= 0 && curY >= 0 {
+			m.lastCurScreenRow = curY + 1
+			m.lastCurScreenCol = curX + 1
+		}
 	}
 
 	return content + "\n" + m.bottomInfoLine(sess, m.width)
@@ -136,11 +140,13 @@ func (m *tuiModel) focusBigView() string {
 	primary := sessions[m.selected]
 	if n == 1 {
 		panel := m.renderBigPanelNoTitle(primary, m.width, availH, true)
+		m.stashBigPanelCursor(primary, 0, 0, m.width, availH)
 		return lipgloss.JoinVertical(lipgloss.Left, panel, status)
 	}
 
 	mainW, sideW := m.focusBigLayoutWidths()
 	mainPanel := m.renderBigPanelNoTitle(primary, mainW, availH, true)
+	m.stashBigPanelCursor(primary, 0, 0, mainW, availH)
 
 	slotH, visible := focusBigSideSlots(n-1, availH)
 	var sides []string
@@ -793,6 +799,11 @@ func (m *tuiModel) overlayFloating(base string) string {
 	sessInfo := fmt.Sprintf("[%d] %s  (^A q close)", m.floatingIdx+1, sess.Name)
 	floatPanel := m.renderBigPanelFrame(sess, fw, fh, true, sessInfo)
 
+	// Floating window overrides the cursor position for IME.
+	panelTopRow := (m.height - fh) / 2
+	panelLeftCol := (m.width - fw) / 2
+	m.stashBigPanelCursor(sess, panelLeftCol, panelTopRow, fw, fh)
+
 	// Center the floating panel over the base
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
 		floatPanel,
@@ -1033,6 +1044,24 @@ func (m *tuiModel) hitTest(x, y int) int {
 	return -1
 }
 
+// stashBigPanelCursor reads the last cursor position cached by RenderANSI
+// for sess and converts it to absolute screen coordinates given the panel's
+// position (panelLeft, panelTop) and dimensions (panelW, panelH).  The big
+// panel frame layout is: 1-cell border on each side, no title row, and a
+// 1-row bottom info line, so the inner content origin is at (panelLeft+1,
+// panelTop+1) with size (panelW-2, panelH-3).
+func (m *tuiModel) stashBigPanelCursor(sess *tuiSession, panelLeft, panelTop, panelW, panelH int) {
+	sess.mu.Lock()
+	curX, curY := sess.LastCursorPos()
+	sess.mu.Unlock()
+	if curX < 0 || curY < 0 {
+		return
+	}
+	// +1 for the border, +1 to convert 0-based to 1-based screen coords.
+	m.lastCurScreenRow = panelTop + 1 + curY + 1
+	m.lastCurScreenCol = panelLeft + 1 + curX + 1
+}
+
 // imeCursorSeq returns an ANSI CUP sequence that moves the real terminal
 // cursor to the focused session's cursor position.  Appending this to the
 // View() output lets Windows Terminal (and other terminals) anchor the IME
@@ -1046,106 +1075,8 @@ func (m *tuiModel) imeCursorSeq() string {
 		m.confirmKill || m.renaming || m.creating || m.creatingTab {
 		return ""
 	}
-
-	// Floating window: compute centered panel position and use that session.
-	if m.floatingIdx >= 0 {
-		ordered := m.orderedSessions()
-		if m.floatingIdx >= len(ordered) {
-			return ""
-		}
-		sess := ordered[m.floatingIdx]
-
-		fw := m.width * 8 / 10
-		fh := m.height * 8 / 10
-		if fw < 40 {
-			fw = min(40, m.width)
-		}
-		if fh < 10 {
-			fh = min(10, m.height)
-		}
-		// lipgloss.Place centers the panel; compute top-left offset.
-		panelTopRow := (m.height - fh) / 2
-		panelLeftCol := (m.width - fw) / 2
-		innerW := fw - 2
-		innerH := fh - 3 // borders + bottom info line
-		if innerW < 1 || innerH < 1 {
-			return ""
-		}
-		_, curX, curY := sess.RenderANSI(innerW, innerH)
-		if curX < 0 || curY < 0 {
-			return ""
-		}
-		return fmt.Sprintf("\x1b[%d;%dH", panelTopRow+1+curY+1, panelLeftCol+1+curX+1)
-	}
-
-	sessions := m.visibleSessions()
-	n := len(sessions)
-	if n == 0 || m.selected >= n {
-		return ""
-	}
-	sess := sessions[m.selected]
-
-	status := m.statusBar()
-	statusH := lipgloss.Height(status)
-	availH := m.height - statusH
-	if availH < 1 {
-		return ""
-	}
-
-	switch m.mode {
-	case modeFullscreen:
-		_, curX, curY := sess.RenderANSI(m.width, m.height-1)
-		if curX < 0 || curY < 0 {
-			return ""
-		}
-		return fmt.Sprintf("\x1b[%d;%dH", curY+1, curX+1)
-
-	case modeTabs:
-		contentH := m.height - 2 // top session tab bar + bottom info line
-		if contentH < 1 {
-			return ""
-		}
-		_, curX, curY := sess.RenderANSI(m.width, contentH)
-		if curX < 0 || curY < 0 {
-			return ""
-		}
-		// Content starts on the second screen row (below the tab bar).
-		return fmt.Sprintf("\x1b[%d;%dH", curY+2, curX+1)
-
-	case modeList:
-		mainW, sideW := m.listLayoutWidths()
-		innerW := mainW - 2
-		innerH := availH - 3 // borders + bottom info line
-		if innerW < 1 || innerH < 1 {
-			return ""
-		}
-		_, curX, curY := sess.RenderANSI(innerW, innerH)
-		if curX < 0 || curY < 0 {
-			return ""
-		}
-		// top border only (no title row): +1 for border
-		absRow := 1 + curY
-		absCol := sideW + 1 + curX
-		return fmt.Sprintf("\x1b[%d;%dH", absRow+1, absCol+1)
-
-	case modeFocusBig:
-		mainW := m.width
-		if n > 1 {
-			mainW, _ = m.focusBigLayoutWidths()
-		}
-		innerW := mainW - 2
-		innerH := availH - 3 // borders + bottom info line
-		if innerW < 1 || innerH < 1 {
-			return ""
-		}
-		_, curX, curY := sess.RenderANSI(innerW, innerH)
-		if curX < 0 || curY < 0 {
-			return ""
-		}
-		// Big panel at the left edge, top border only (no title row).
-		absRow := 1 + curY
-		absCol := 1 + curX
-		return fmt.Sprintf("\x1b[%d;%dH", absRow+1, absCol+1)
+	if m.lastCurScreenRow > 0 && m.lastCurScreenCol > 0 {
+		return fmt.Sprintf("\x1b[%d;%dH", m.lastCurScreenRow, m.lastCurScreenCol)
 	}
 	return ""
 }

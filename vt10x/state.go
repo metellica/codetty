@@ -400,11 +400,11 @@ func (t *State) resize(cols, rows int) bool {
 	copy(t.tabs, tabs)
 	if cols > t.cols {
 		i := t.cols - 1
-		for i > 0 && !tabs[i] {
+		for i > 0 && !t.tabs[i] {
 			i--
 		}
-		for i += tabspaces; i < len(tabs); i += tabspaces {
-			tabs[i] = true
+		for i += tabspaces; i < cols; i += tabspaces {
+			t.tabs[i] = true
 		}
 	}
 

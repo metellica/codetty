@@ -52,6 +52,11 @@ type tuiSession struct {
 	cachedCurRow int
 	cachedCurVis bool
 
+	// Last cursor position returned by RenderANSI, viewport-relative.
+	// Used by the IME cursor positioning to avoid re-rendering.
+	lastRenderCurX int // -1 = unknown
+	lastRenderCurY int // -1 = unknown
+
 	// Dimmed line cache for side panel rendering
 	dimLines  []string
 	dimCacheW int
@@ -75,11 +80,13 @@ type tuiTab struct {
 func newTUISession(name, command string, cols, rows uint16) *tuiSession {
 	term := vt10x.New(vt10x.WithSize(int(cols), int(rows)), vt10x.WithWriter(io.Discard))
 	return &tuiSession{
-		Name:    name,
-		Command: command,
-		Cols:    cols,
-		Rows:    rows,
-		term:    term,
+		Name:           name,
+		Command:        command,
+		Cols:           cols,
+		Rows:           rows,
+		term:           term,
+		lastRenderCurX: -1,
+		lastRenderCurY: -1,
 	}
 }
 
@@ -180,7 +187,10 @@ func (s *tuiSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 
 	// When scrolled back into the scrollback buffer, use a dedicated path.
 	if s.scrollOffset > 0 {
-		return s.renderScrollback(w, h)
+		lines, curX, curY := s.renderScrollback(w, h)
+		s.lastRenderCurX = curX
+		s.lastRenderCurY = curY
+		return lines, curX, curY
 	}
 
 	cols, rows := s.term.Size()
@@ -246,7 +256,16 @@ func (s *tuiSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 		}
 		lines[displayRow] = s.lineCache[srcRow]
 	}
+	s.lastRenderCurX = curX
+	s.lastRenderCurY = curY
 	return lines, curX, curY
+}
+
+// LastCursorPos returns the viewport-relative cursor position from the
+// most recent RenderANSI call. Returns (-1, -1) if the cursor was hidden
+// or no render has occurred. Caller must hold s.mu.
+func (s *tuiSession) LastCursorPos() (curX, curY int) {
+	return s.lastRenderCurX, s.lastRenderCurY
 }
 
 // renderScrollback renders the combined scrollback + visible buffer at the

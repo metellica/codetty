@@ -197,13 +197,14 @@ func (t *State) osc4ColorResponse(j int) {
 		return
 	}
 
+	idx := j // preserve original palette index for the response
 	k, ok := t.colorOverride[Color(j)]
 	if ok {
 		j = int(k)
 	}
 
 	r, g, b := rgb(j)
-	t.w.Write([]byte(fmt.Sprintf("\033]4;%d;rgb:%02x%02x/%02x%02x/%02x%02x\007", j, r, r, g, g, b, b)))
+	t.w.Write([]byte(fmt.Sprintf("\033]4;%d;rgb:%02x%02x/%02x%02x/%02x%02x\007", idx, r, r, g, g, b, b)))
 }
 
 func rgb(j int) (r, g, b int) {

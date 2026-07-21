@@ -547,6 +547,18 @@ func (s *DaemonSession) waitLoop() {
 	close(s.doneCh)
 }
 
+// WriteToActiveTerminal writes data to the session's active tab terminal,
+// safely acquiring the session mutex to avoid a data race on the Terminal
+// interface field (which is updated by SwitchTab/CloseTab/respawnTabShell).
+func (s *DaemonSession) WriteToActiveTerminal(data []byte) {
+	s.mu.Lock()
+	term := s.Terminal
+	s.mu.Unlock()
+	if term != nil {
+		term.Write(data)
+	}
+}
+
 // setTabsChangedCallback installs the daemon-side tab change notifier.
 func (s *DaemonSession) setTabsChangedCallback(fn func(sess *DaemonSession, event string)) {
 	s.mu.Lock()
@@ -622,18 +634,33 @@ func (s *DaemonSession) Info() SessionInfo {
 	if len(s.Command) > 0 {
 		cmd = s.Command[0]
 	}
+	s.mu.Lock()
 	info := SessionInfo{
 		Name:      s.Name,
 		Owner:     s.Owner,
 		Command:   cmd,
 		Type:      s.Type,
-		Attached:  s.clientCount(),
+		Attached:  len(s.clients),
 		CreatedAt: s.CreatedAt.Format(time.RFC3339),
 	}
 	if len(s.Tabs) >= 1 {
-		info.Tabs = s.TabInfos()
-		info.ActiveTab = s.GetActiveTab()
+		infos := make([]TabInfo, len(s.Tabs))
+		for i, tab := range s.Tabs {
+			tcmd := ""
+			if len(tab.Command) > 0 {
+				tcmd = tab.Command[0]
+			}
+			infos[i] = TabInfo{
+				Name:       tab.Name,
+				Command:    tcmd,
+				Agent:      tab.agent,
+				AgentState: string(tab.agentState),
+			}
+		}
+		info.Tabs = infos
+		info.ActiveTab = s.ActiveTab
 	}
+	s.mu.Unlock()
 	return info
 }
 

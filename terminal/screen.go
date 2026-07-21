@@ -339,7 +339,10 @@ func fgColor(c vt10x.Color) string {
 	if c < 16 {
 		return fmt.Sprintf("%d", 90+c-8)
 	}
-	return fmt.Sprintf("38;5;%d", c)
+	if c <= 255 {
+		return fmt.Sprintf("38;5;%d", c)
+	}
+	return fmt.Sprintf("38;2;%d;%d;%d", (c>>16)&0xff, (c>>8)&0xff, c&0xff)
 }
 
 func bgColor(c vt10x.Color) string {
@@ -349,7 +352,10 @@ func bgColor(c vt10x.Color) string {
 	if c < 16 {
 		return fmt.Sprintf("%d", 100+c-8)
 	}
-	return fmt.Sprintf("48;5;%d", c)
+	if c <= 255 {
+		return fmt.Sprintf("48;5;%d", c)
+	}
+	return fmt.Sprintf("48;2;%d;%d;%d", (c>>16)&0xff, (c>>8)&0xff, c&0xff)
 }
 
 func clampInt(v, lo, hi int) int {

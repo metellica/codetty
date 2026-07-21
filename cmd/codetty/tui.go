@@ -121,6 +121,11 @@ type tuiModel struct {
 	selFlushPending bool // a trailing selFlushMsg tick is scheduled
 	lastView        string
 
+	// Cached cursor position from the last render pass, used by
+	// imeCursorSeq to avoid a redundant re-render.
+	lastCurScreenRow int // 1-based screen row, 0 = unknown
+	lastCurScreenCol int // 1-based screen col, 0 = unknown
+
 	// blinkPending is true while an agentBlinkMsg tick is scheduled. The
 	// tick self-perpetuates only while some agent is working.
 	blinkPending bool
@@ -441,6 +446,11 @@ func (m *tuiModel) View() string {
 			return m.lastView
 		}
 	}
+
+	// Reset cached cursor position; the mode-specific render will stash
+	// a fresh value if the focused session's cursor is visible.
+	m.lastCurScreenRow = 0
+	m.lastCurScreenCol = 0
 
 	var base string
 	if len(m.sessions) == 0 {
@@ -978,6 +988,16 @@ func (m *tuiModel) resizeSessionPTYs() {
 		}
 		sess.Resize(uint16(cols), uint16(r))
 		m.conn.SendResizeSession(sess.Name, uint16(cols), uint16(r))
+	}
+	// The floating window has different dimensions than the main panel;
+	// re-resize the floating session to its actual content area.
+	if m.floatingIdx >= 0 {
+		if ordered := m.orderedSessions(); m.floatingIdx < len(ordered) {
+			_, _, cw, ch := m.floatingContentRect()
+			if cw > 0 && ch > 0 {
+				m.resizeSessionPTY(ordered[m.floatingIdx], cw, ch)
+			}
+		}
 	}
 }
 

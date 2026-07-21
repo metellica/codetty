@@ -84,9 +84,16 @@ type recordedRemote struct {
 }
 
 type daemonPeer struct {
-	id         string
-	endpoint   daemonEndpoint
-	conn       io.ReadWriteCloser
+	id       string
+	endpoint daemonEndpoint
+
+	// conn is guarded by connMu, which is held only to read or swap the
+	// field pointer, never across I/O. writeMu serializes frame writes
+	// on a snapshotted conn; it does not guard the field itself, so
+	// closing a peer never blocks behind a stalled in-flight write.
+	conn   io.ReadWriteCloser
+	connMu sync.Mutex
+
 	writeMu    sync.Mutex
 	stateMu    sync.Mutex
 	known      map[string]bool
@@ -340,7 +347,13 @@ func (dc *daemonConn) registerDaemonIdentity(peer *daemonPeer, daemonID string) 
 	}
 	dc.peerAliases[loser.id] = winner.id
 	delete(dc.peers, loser.id)
-	_ = loser.conn.Close()
+	loser.connMu.Lock()
+	c := loser.conn
+	loser.conn = nil
+	loser.connMu.Unlock()
+	if c != nil {
+		_ = c.Close()
+	}
 	return loser
 }
 
@@ -367,7 +380,13 @@ func (dc *daemonConn) AddPeerSynced(id string, endpoint daemonEndpoint) error {
 		dc.peersMu.Lock()
 		delete(dc.peers, id)
 		dc.peersMu.Unlock()
-		_ = peer.conn.Close()
+		peer.connMu.Lock()
+		c := peer.conn
+		peer.conn = nil
+		peer.connMu.Unlock()
+		if c != nil {
+			_ = c.Close()
+		}
 		peer.markSubscribed() // wake concurrent callers; the peer is gone
 		return err
 	}
@@ -522,9 +541,15 @@ func (dc *daemonConn) Subscribe(p *tea.Program) error {
 }
 
 func (dc *daemonConn) subscribePeer(peer *daemonPeer) error {
+	peer.connMu.Lock()
+	c := peer.conn
+	peer.connMu.Unlock()
+	if c == nil {
+		return fmt.Errorf("subscribe %s: connection closed", peer.id)
+	}
 	peer.writeMu.Lock()
 	defer peer.writeMu.Unlock()
-	if err := daemon.WriteFrame(peer.conn, daemon.FrameRequest, daemon.MarshalJSON(helloRequest())); err != nil {
+	if err := daemon.WriteFrame(c, daemon.FrameRequest, daemon.MarshalJSON(helloRequest())); err != nil {
 		return fmt.Errorf("subscribe %s: %w", peer.id, err)
 	}
 	return nil
@@ -537,7 +562,13 @@ func (dc *daemonConn) readPeerLoop(peer *daemonPeer) {
 		gone := peer.rejected || peer.duplicate
 		peer.stateMu.Unlock()
 		if gone {
-			_ = peer.conn.Close()
+			peer.connMu.Lock()
+			c := peer.conn
+			peer.conn = nil
+			peer.connMu.Unlock()
+			if c != nil {
+				_ = c.Close()
+			}
 			return
 		}
 		select {
@@ -552,8 +583,14 @@ func (dc *daemonConn) readPeerLoop(peer *daemonPeer) {
 }
 
 func (dc *daemonConn) readPeer(peer *daemonPeer) error {
+	peer.connMu.Lock()
+	c := peer.conn
+	peer.connMu.Unlock()
+	if c == nil {
+		return io.EOF
+	}
 	for {
-		ft, payload, err := daemon.ReadFrame(peer.conn)
+		ft, payload, err := daemon.ReadFrame(c)
 		if err != nil {
 			return err
 		}
@@ -562,8 +599,14 @@ func (dc *daemonConn) readPeer(peer *daemonPeer) error {
 }
 
 func (dc *daemonConn) readPeerUntilSubscribed(peer *daemonPeer) error {
+	peer.connMu.Lock()
+	c := peer.conn
+	peer.connMu.Unlock()
+	if c == nil {
+		return io.EOF
+	}
 	for {
-		ft, payload, err := daemon.ReadFrame(peer.conn)
+		ft, payload, err := daemon.ReadFrame(c)
 		if err != nil {
 			return err
 		}
@@ -810,20 +853,28 @@ func (dc *daemonConn) reconnectPeer(peer *daemonPeer) error {
 		peer.seen = make(map[string]bool)
 		peer.stateMu.Unlock()
 
-		peer.writeMu.Lock()
-		old := peer.conn
+		// The new conn is unpublished, so the hello frame is written
+		// before any concurrent writer can snapshot it.
 		if err := daemon.WriteFrame(conn, daemon.FrameRequest, daemon.MarshalJSON(helloRequest())); err != nil {
-			peer.writeMu.Unlock()
 			_ = conn.Close()
 			if delay < 10*time.Second {
 				delay *= 2
 			}
 			continue
 		}
+		peer.connMu.Lock()
+		old := peer.conn
 		peer.conn = conn
-		peer.writeMu.Unlock()
-		_ = old.Close()
+		peer.connMu.Unlock()
+		if old != nil {
+			_ = old.Close()
+		}
 		if err := dc.readPeerUntilSubscribed(peer); err != nil {
+			// Revert peer.conn so concurrent writers don't target a
+			// closed connection during the retry backoff.
+			peer.connMu.Lock()
+			peer.conn = nil
+			peer.connMu.Unlock()
 			_ = conn.Close()
 			if delay < 10*time.Second {
 				delay *= 2
@@ -1225,9 +1276,15 @@ func (dc *daemonConn) writePeerFrame(peer *daemonPeer, ft daemon.FrameType, payl
 	if peer == nil {
 		return
 	}
+	peer.connMu.Lock()
+	c := peer.conn
+	peer.connMu.Unlock()
+	if c == nil {
+		return
+	}
 	peer.writeMu.Lock()
 	defer peer.writeMu.Unlock()
-	_ = daemon.WriteFrame(peer.conn, ft, payload)
+	_ = daemon.WriteFrame(c, ft, payload)
 }
 
 func (dc *daemonConn) closePeers() {
@@ -1236,7 +1293,17 @@ func (dc *daemonConn) closePeers() {
 			close(dc.closed)
 		}
 		for _, peer := range dc.peerList() {
-			_ = peer.conn.Close()
+			// Swap the conn to nil under connMu, then close outside any
+			// lock: connMu is never held across I/O, so this can't block
+			// behind a stalled in-flight write holding writeMu, and
+			// Close interrupts that write's blocked I/O.
+			peer.connMu.Lock()
+			c := peer.conn
+			peer.conn = nil
+			peer.connMu.Unlock()
+			if c != nil {
+				_ = c.Close()
+			}
 		}
 	})
 }

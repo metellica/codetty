@@ -51,8 +51,13 @@ func (m *tuiModel) tabsView() string {
 		lines := sess.RenderANSIWithSelection(m.width, contentH, selFn)
 		content = strings.Join(lines, "\n")
 	} else {
-		lines, _, _ := sess.RenderANSI(m.width, contentH)
+		lines, curX, curY := sess.RenderANSI(m.width, contentH)
 		content = strings.Join(lines, "\n")
+		if curX >= 0 && curY >= 0 {
+			// Content starts on the second screen row (below the tab bar).
+			m.lastCurScreenRow = curY + 2
+			m.lastCurScreenCol = curX + 1
+		}
 	}
 
 	return topBar + "\n" + content + "\n" + m.bottomInfoLine(sess, m.width)

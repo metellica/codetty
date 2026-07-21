@@ -30,9 +30,22 @@ func newSubscriber(conn net.Conn) *Subscriber {
 	return &Subscriber{conn: conn}
 }
 
-// SendTaggedOutput sends session-tagged output to the subscriber.
+// SendTaggedOutput sends session-tagged output to the subscriber,
+// chunking large payloads to stay under the ReadFrame size limit.
 func (s *Subscriber) SendTaggedOutput(session string, data []byte) {
-	s.sendFrame(FrameTaggedOutput, EncodeTaggedOutput(session, data))
+	nameOverhead := 1 + len(session)
+	chunkData := maxOutputChunk - nameOverhead
+	if chunkData < 1 {
+		chunkData = 1
+	}
+	for len(data) > 0 {
+		n := len(data)
+		if n > chunkData {
+			n = chunkData
+		}
+		s.sendFrame(FrameTaggedOutput, EncodeTaggedOutput(session, data[:n]))
+		data = data[n:]
+	}
 }
 
 // SendSessionEvent sends a session lifecycle event.
@@ -62,6 +75,24 @@ func (s *Subscriber) sendFrameDirect(ft FrameType, payload []byte) {
 		return
 	}
 	WriteFrame(s.conn, ft, payload)
+}
+
+// sendTaggedOutputDirect sends session-tagged output directly (bypassing
+// the pending queue), chunking large payloads like SendTaggedOutput.
+func (s *Subscriber) sendTaggedOutputDirect(session string, data []byte) {
+	nameOverhead := 1 + len(session)
+	chunkData := maxOutputChunk - nameOverhead
+	if chunkData < 1 {
+		chunkData = 1
+	}
+	for len(data) > 0 {
+		n := len(data)
+		if n > chunkData {
+			n = chunkData
+		}
+		s.sendFrameDirect(FrameTaggedOutput, EncodeTaggedOutput(session, data[:n]))
+		data = data[n:]
+	}
 }
 
 func (s *Subscriber) activate() {
@@ -102,7 +133,7 @@ func (s *Subscriber) Run(srv *Server) {
 				continue
 			}
 			if sess := srv.SessionByName(s.owner, session); sess != nil {
-				sess.Terminal.Write(data)
+				sess.WriteToActiveTerminal(data)
 			}
 
 		case FrameResize:

@@ -26,7 +26,7 @@ func (c *Client) SendOutput(data []byte) {
 	if c.closed {
 		return
 	}
-	WriteFrame(c.conn, FrameOutput, data)
+	WriteFrameChunked(c.conn, FrameOutput, data)
 }
 
 // SendNotification sends a notification to the client.
@@ -58,7 +58,7 @@ func (c *Client) Run(srv *Server) {
 
 		switch ft {
 		case FrameInput:
-			c.session.Terminal.Write(payload)
+			c.session.WriteToActiveTerminal(payload)
 
 		case FrameResize:
 			var rp ResizePayload

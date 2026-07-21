@@ -378,6 +378,33 @@ func WriteFrame(w io.Writer, ft FrameType, payload []byte) error {
 	return nil
 }
 
+// maxFrameSize is the maximum allowed frame payload size (16 MB). Frames
+// exceeding this are rejected to prevent memory exhaustion from malicious
+// or buggy peers.
+const maxFrameSize = 16 * 1024 * 1024
+
+// maxOutputChunk is the maximum payload data size for a single output
+// frame. Kept well under maxFrameSize to leave room for the frame header
+// and tagged-output session name prefix.
+const maxOutputChunk = 4 * 1024 * 1024
+
+// WriteFrameChunked writes data as one or more frames, splitting into
+// chunks of at most maxOutputChunk bytes to stay under the ReadFrame
+// size limit. For small data this is equivalent to a single WriteFrame.
+func WriteFrameChunked(w io.Writer, ft FrameType, data []byte) error {
+	for len(data) > 0 {
+		n := len(data)
+		if n > maxOutputChunk {
+			n = maxOutputChunk
+		}
+		if err := WriteFrame(w, ft, data[:n]); err != nil {
+			return err
+		}
+		data = data[n:]
+	}
+	return nil
+}
+
 // ReadFrame reads a single frame from r.
 func ReadFrame(r io.Reader) (FrameType, []byte, error) {
 	var length uint32
@@ -386,6 +413,9 @@ func ReadFrame(r io.Reader) (FrameType, []byte, error) {
 	}
 	if length == 0 {
 		return 0, nil, fmt.Errorf("empty frame")
+	}
+	if length > maxFrameSize {
+		return 0, nil, fmt.Errorf("frame too large: %d bytes (max %d)", length, maxFrameSize)
 	}
 	buf := make([]byte, length)
 	if _, err := io.ReadFull(r, buf); err != nil {
