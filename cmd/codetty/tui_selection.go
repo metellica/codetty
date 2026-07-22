@@ -788,6 +788,9 @@ func (m *tuiModel) listPanelRegions(availH int) []panelRegion {
 }
 
 // extractSelectedText reads the selected text from the vt10x terminal buffer.
+// Selection coordinates are viewport rows; lastViewStart maps them back into
+// the combined scrollback + screen buffer so the text matches what was on
+// screen, including while scrolled back into history.
 func (m *tuiModel) extractSelectedText() string {
 	sess := m.sessionByName(m.sel.session)
 	if sess == nil {
@@ -809,12 +812,22 @@ func (m *tuiModel) extractSelectedText() string {
 	defer sess.term.Unlock()
 
 	cols, rows := sess.term.Size()
-	_ = rows
+	sbLen := sess.term.ScrollbackLen()
+	totalLines := sbLen + rows
 
 	var lines []string
 	for row := startY; row <= endY; row++ {
-		if row >= rows {
+		idx := sess.lastViewStart + row
+		if idx >= totalLines {
 			break
+		}
+		var glyphs []vt10x.Glyph
+		if idx >= 0 {
+			if idx < sbLen {
+				glyphs = sess.term.ScrollbackRow(idx)
+			} else {
+				glyphs = sess.term.Row(idx - sbLen)
+			}
 		}
 		sx := 0
 		ex := cols - 1
@@ -833,8 +846,8 @@ func (m *tuiModel) extractSelectedText() string {
 
 		var sb strings.Builder
 		prevWide := false
-		for x := sx; x <= ex; x++ {
-			g := sess.term.Cell(x, row)
+		for x := sx; x <= ex && x < len(glyphs); x++ {
+			g := glyphs[x]
 			ch := g.Char
 			if ch == 0 {
 				if prevWide {
@@ -916,15 +929,127 @@ func (m *tuiModel) selectionCovers(sessionName string, col, row int) bool {
 }
 
 // RenderANSIWithSelection renders terminal content with selection highlighting.
+// It honors the scrollback offset so dragging a selection while scrolled back
+// keeps showing the scrollback view instead of snapping to the live screen.
 func (s *tuiSession) RenderANSIWithSelection(w, h int, selFn func(col, row int) bool) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.term.Lock()
 	defer s.term.Unlock()
-	return renderTerminalANSIWithSelection(s.term, w, h, selFn)
+	if s.scrollOffset > 0 {
+		return s.renderScrollbackWithSelection(w, h, selFn)
+	}
+	lines, startRow := renderTerminalANSIWithSelection(s.term, w, h, selFn)
+	s.lastViewStart = s.term.ScrollbackLen() + startRow
+	return lines
 }
 
-func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(col, row int) bool) []string {
+// renderScrollbackWithSelection mirrors renderScrollback with the selection
+// highlight applied. Called with both mu and term locks held. No cursor is
+// shown while scrolled back.
+func (s *tuiSession) renderScrollbackWithSelection(w, h int, selFn func(col, row int) bool) []string {
+	_, rows := s.term.Size()
+	sbLen := s.term.ScrollbackLen()
+	if s.scrollOffset > sbLen {
+		s.scrollOffset = sbLen
+	}
+
+	totalLines := sbLen + rows
+	endIdx := totalLines - s.scrollOffset
+	startIdx := endIdx - h
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	s.lastViewStart = startIdx
+
+	// Consume dirty flags so they don't accumulate.
+	s.term.ResetDirty()
+
+	lines := make([]string, h)
+	for displayRow := 0; displayRow < h; displayRow++ {
+		idx := startIdx + displayRow
+		if idx < 0 || idx >= totalLines {
+			lines[displayRow] = renderRowANSIWithSelection(nil, w, displayRow, -1, selFn)
+			continue
+		}
+		var row []vt10x.Glyph
+		if idx < sbLen {
+			row = s.term.ScrollbackRow(idx)
+		} else {
+			row = s.term.Row(idx - sbLen)
+		}
+		lines[displayRow] = renderRowANSIWithSelection(row, w, displayRow, -1, selFn)
+	}
+	return lines
+}
+
+// renderRowANSIWithSelection renders a glyph row to exactly w visual columns,
+// drawing selected cells in reverse video. cursorX is the terminal column of
+// the cursor on this row (-1 if absent); displayRow is the viewport row passed
+// to selFn. A nil row renders as blanks (still honoring the selection).
+func renderRowANSIWithSelection(row []vt10x.Glyph, w, displayRow, cursorX int, selFn func(col, row int) bool) string {
+	var sb strings.Builder
+	sb.Grow(w * 4)
+
+	visualCol := 0
+	skipNext := false
+	for x := 0; x < len(row) && visualCol < w; x++ {
+		if skipNext {
+			skipNext = false
+			continue
+		}
+		g := row[x]
+		ch := g.Char
+		if ch == 0 {
+			ch = ' '
+		}
+		cw := runewidth.RuneWidth(ch)
+		if cw == 0 {
+			ch = ' '
+			cw = 1
+		}
+		if visualCol+cw > w {
+			break
+		}
+
+		// A wide glyph owns the following NUL continuation cell. Detect that
+		// up front so we can both skip the continuation cell and treat the
+		// cursor as resting on the wide glyph when it sits on that cell.
+		nextIsCont := cw > 1 && x+1 < len(row) && row[x+1].Char == 0
+
+		isCursor := x == cursorX || (nextIsCont && cursorX == x+1)
+		isSelected := selFn != nil && selFn(visualCol, displayRow)
+
+		if isSelected {
+			sb.WriteString("\x1b[7m")
+			sb.WriteRune(ch)
+			sb.WriteString("\x1b[0m")
+		} else {
+			ansiStart, ansiEnd := glyphANSI(g, isCursor)
+			sb.WriteString(ansiStart)
+			sb.WriteRune(ch)
+			sb.WriteString(ansiEnd)
+		}
+		visualCol += cw
+		if nextIsCont {
+			skipNext = true
+		}
+	}
+	for visualCol < w {
+		if selFn != nil && selFn(visualCol, displayRow) {
+			sb.WriteString("\x1b[7m \x1b[0m")
+		} else {
+			sb.WriteByte(' ')
+		}
+		visualCol++
+	}
+	return sb.String()
+}
+
+// renderTerminalANSIWithSelection renders the live screen with selection
+// highlighting. Also returns the source row of the first displayed line so
+// callers can record the viewport position.
+func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(col, row int) bool) ([]string, int) {
 	cols, rows := term.Size()
 	cursor := term.Cursor()
 	curVisible := term.CursorVisible()
@@ -938,73 +1063,19 @@ func renderTerminalANSIWithSelection(term vt10x.Terminal, w, h int, selFn func(c
 	}
 
 	lines := make([]string, h)
-	var sb strings.Builder
-	sb.Grow(w * 4)
-
 	for displayRow := 0; displayRow < h; displayRow++ {
 		srcRow := startRow + displayRow
 		if srcRow >= rows {
-			lines[displayRow] = strings.Repeat(" ", w)
+			lines[displayRow] = renderRowANSIWithSelection(nil, w, displayRow, -1, selFn)
 			continue
 		}
-
-		sb.Reset()
-		visualCol := 0
-		skipNext := false
-		for x := 0; x < cols && visualCol < w; x++ {
-			if skipNext {
-				skipNext = false
-				continue
-			}
-			g := term.Cell(x, srcRow)
-			ch := g.Char
-			if ch == 0 {
-				ch = ' '
-			}
-			cw := runewidth.RuneWidth(ch)
-			if cw == 0 {
-				ch = ' '
-				cw = 1
-			}
-			if visualCol+cw > w {
-				break
-			}
-
-			// A wide glyph owns the following NUL continuation cell. Detect that
-			// up front so we can both skip the continuation cell and treat the
-			// cursor as resting on the wide glyph when it sits on that cell.
-			nextIsCont := cw > 1 && x+1 < cols && term.Cell(x+1, srcRow).Char == 0
-
-			isCursor := curVisible && srcRow == cursor.Y &&
-				(x == cursor.X || (nextIsCont && cursor.X == x+1))
-			isSelected := selFn != nil && selFn(visualCol, displayRow)
-
-			if isSelected {
-				sb.WriteString("\x1b[7m")
-				sb.WriteRune(ch)
-				sb.WriteString("\x1b[0m")
-			} else {
-				ansiStart, ansiEnd := glyphANSI(g, isCursor)
-				sb.WriteString(ansiStart)
-				sb.WriteRune(ch)
-				sb.WriteString(ansiEnd)
-			}
-			visualCol += cw
-			if nextIsCont {
-				skipNext = true
-			}
+		cx := -1
+		if curVisible && srcRow == cursor.Y {
+			cx = cursor.X
 		}
-		for visualCol < w {
-			if selFn != nil && selFn(visualCol, displayRow) {
-				sb.WriteString("\x1b[7m \x1b[0m")
-			} else {
-				sb.WriteByte(' ')
-			}
-			visualCol++
-		}
-		lines[displayRow] = sb.String()
+		lines[displayRow] = renderRowANSIWithSelection(term.Row(srcRow), w, displayRow, cx, selFn)
 	}
-	return lines
+	return lines, startRow
 }
 
 func clamp(v, lo, hi int) int {

@@ -40,6 +40,12 @@ type tuiSession struct {
 	// Scrollback view offset: 0 = live view, >0 = scrolled back into history.
 	scrollOffset int
 
+	// Index into the combined buffer (scrollback + screen) of the first
+	// row shown by the most recent render. Selection extraction uses it to
+	// map viewport rows back to the content the user actually saw,
+	// regardless of the scroll position.
+	lastViewStart int
+
 	// Per-source-row line cache for incremental rendering. lineCache is
 	// indexed by terminal row; lineValid marks entries that are up to date.
 	// The cache consumes the terminal's dirty-line flags (via ResetDirty),
@@ -229,6 +235,7 @@ func (s *tuiSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 	if contentRows := findLastVisibleRow(s.term, cols, rows) + 1; contentRows > h {
 		startRow = contentRows - h
 	}
+	s.lastViewStart = s.term.ScrollbackLen() + startRow
 
 	lines = make([]string, h)
 	curX, curY = -1, -1
@@ -288,6 +295,7 @@ func (s *tuiSession) renderScrollback(w, h int) ([]string, int, int) {
 	if startIdx < 0 {
 		startIdx = 0
 	}
+	s.lastViewStart = startIdx
 
 	// Consume dirty flags so they don't accumulate.
 	s.term.ResetDirty()
