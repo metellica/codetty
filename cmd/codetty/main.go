@@ -12,6 +12,7 @@ import (
 
 	"codetty/config"
 	"codetty/terminal"
+	"github.com/mattn/go-runewidth"
 )
 
 // Build metadata, stamped via -ldflags by build.sh; plain `go build`
@@ -108,7 +109,22 @@ func usageText() string {
 	return fmt.Sprintf(usageTemplate, label)
 }
 
+// normalizeRuneWidth pins ambiguous-width characters (·, box drawing, …) to
+// narrow, matching how Windows Terminal, ConPTY and lipgloss measure them.
+// go-runewidth's automatic East Asian detection (Windows console codepage
+// 932/936/949/950, CJK locales on Unix) would otherwise make vt10x advance
+// the cursor two cells for such characters, corrupting layout and cursor
+// position for CJK-locale users. An explicit RUNEWIDTH_EASTASIAN=1 in the
+// environment still forces wide handling.
+func normalizeRuneWidth() {
+	if os.Getenv("RUNEWIDTH_EASTASIAN") == "" {
+		runewidth.EastAsianWidth = false
+		runewidth.DefaultCondition.EastAsianWidth = false
+	}
+}
+
 func main() {
+	normalizeRuneWidth()
 	rest, name, err := extractInstanceArgs(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
