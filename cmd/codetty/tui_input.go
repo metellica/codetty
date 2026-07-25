@@ -534,7 +534,13 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 // session (prefix+[ or prefix+PgUp), paging one screen up immediately.
 // Needed on links that never deliver mouse wheel events (e.g. SSH into a
 // Windows 10 host, where ConPTY drops all VT mouse input).
+// Ignored while a floating window is open: the float's key branch returns
+// before the scroll-key dispatch, so scroll mode would target the occluded
+// background session and become impossible to leave via q/Esc.
 func (m *tuiModel) enterScrollMode() {
+	if m.floatingIdx >= 0 {
+		return
+	}
 	sess := m.focusedSession()
 	if sess == nil {
 		return

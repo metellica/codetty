@@ -129,6 +129,27 @@ func TestScrollMode_OtherKeyExitsAndSnapsLive(t *testing.T) {
 	}
 }
 
+func TestScrollMode_IgnoredWhileFloatingWindowOpen(t *testing.T) {
+	m := newScrollTestModel(t)
+	sess := m.sessions[0]
+	m.floatingIdx = 0
+
+	m.prefix = true
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'['}})
+	if m.scrolling {
+		t.Fatal("scroll mode must not start while a floating window is open")
+	}
+	if sess.IsScrolledBack() {
+		t.Fatal("background session must not be scrolled while a floating window is open")
+	}
+
+	m.prefix = true
+	m.handleKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	if m.scrolling {
+		t.Fatal("prefix+PgUp must not start scroll mode while a floating window is open")
+	}
+}
+
 func TestScrollMode_StatusBarShowsIndicator(t *testing.T) {
 	m := newScrollTestModel(t)
 	m.prefix = true
