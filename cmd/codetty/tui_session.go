@@ -143,6 +143,16 @@ func (s *tuiSession) IsScrolledBack() bool {
 	return s.scrollOffset > 0
 }
 
+// ScrollPos returns the current scrollback view offset and the total number
+// of scrollback lines (for the status bar scroll indicator).
+func (s *tuiSession) ScrollPos() (offset, total int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.term.Lock()
+	defer s.term.Unlock()
+	return s.scrollOffset, s.term.ScrollbackLen()
+}
+
 // HasScrollback returns true if there are lines in the scrollback buffer.
 func (s *tuiSession) HasScrollback() bool {
 	s.mu.Lock()

@@ -81,6 +81,7 @@ TUI Keys (%s prefix):
   r       Rename focused session
   w       Session manager (hide/show/kill)
   n/p     Next/previous session
+  [       Scroll history (also PgUp; then ↑↓/jk/PgUp/PgDn/u/d/g/G, q/Esc back to live)
   f       Toggle fullscreen (no borders/status)
   T       Tab mode (session tabs on top row)
   h/l     Move session order left/right

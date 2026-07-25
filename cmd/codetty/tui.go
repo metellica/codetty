@@ -99,6 +99,11 @@ type tuiModel struct {
 	// on the next key press.
 	notice string
 
+	// Keyboard scrollback mode (prefix+[ or prefix+PgUp): navigation keys
+	// scroll the focused session's history instead of forwarding to the
+	// PTY. Any non-scroll key exits and snaps back to the live view.
+	scrolling bool
+
 	// connectingRemotes tracks remote daemons whose connection handshake
 	// is running in the background; the status bar shows them until the
 	// matching done messages arrive. Reference-counted per endpoint:
@@ -629,6 +634,8 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 				sess.ResetMouseMode()
 				if sel := m.selectedSession(); sel != nil && sel.Name == evt.Session {
 					m.mouseFwdDown = false
+					// The new tab starts at the live view.
+					m.scrolling = false
 				}
 			}
 			// A tab switch this client requested means the user navigated

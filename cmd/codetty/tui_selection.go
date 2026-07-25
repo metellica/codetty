@@ -725,6 +725,10 @@ func (m *tuiModel) handleSessionScroll(sess *tuiSession, up bool) {
 		sess.ScrollUp(scrollLinesPerTick)
 	} else {
 		sess.ScrollDown(scrollLinesPerTick)
+		if m.scrolling && !sess.IsScrolledBack() {
+			// Wheel reached the live view: leave keyboard scroll mode too.
+			m.scrolling = false
+		}
 	}
 }
 

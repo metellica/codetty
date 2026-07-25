@@ -109,6 +109,16 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
+	// Keyboard scrollback mode: navigation keys scroll the focused
+	// session's history. Any other key exits, snaps back to the live
+	// view, and is then processed normally.
+	if m.scrolling {
+		if m.handleScrollKey(msg) {
+			return nil
+		}
+		m.exitScrollMode()
+	}
+
 	if msg.Type == tea.KeyShiftTab {
 		switch m.mode {
 		case modeList:
@@ -353,8 +363,15 @@ func (m *tuiModel) createTabOnTarget(session, name string, target remoteTarget) 
 }
 
 func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
+	if msg.Type == tea.KeyPgUp {
+		m.enterScrollMode()
+		return nil
+	}
 	if msg.Type == tea.KeyRunes && len(msg.Runes) == 1 {
 		switch msg.Runes[0] {
+		case '[':
+			m.enterScrollMode()
+			return nil
 		case 'd':
 			if m.conn != nil {
 				m.conn.Detach()
@@ -511,6 +528,99 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// enterScrollMode starts keyboard scrollback navigation on the focused
+// session (prefix+[ or prefix+PgUp), paging one screen up immediately.
+// Needed on links that never deliver mouse wheel events (e.g. SSH into a
+// Windows 10 host, where ConPTY drops all VT mouse input).
+func (m *tuiModel) enterScrollMode() {
+	sess := m.focusedSession()
+	if sess == nil {
+		return
+	}
+	if !sess.HasScrollback() {
+		m.notice = "no scrollback"
+		return
+	}
+	m.scrolling = true
+	sess.ScrollUp(m.scrollPage(sess))
+}
+
+// exitScrollMode leaves keyboard scrollback mode and snaps the focused
+// session back to the live view.
+func (m *tuiModel) exitScrollMode() {
+	m.scrolling = false
+	if sess := m.focusedSession(); sess != nil {
+		sess.ScrollDown(1 << 30)
+	}
+}
+
+// scrollPage returns the page size (in lines) for scrollback navigation.
+func (m *tuiModel) scrollPage(sess *tuiSession) int {
+	if r := int(sess.Rows) - 1; r > 1 {
+		return r
+	}
+	return 1
+}
+
+// handleScrollKey processes one key in scrollback mode. Returns false for
+// non-scroll keys; the caller then exits scroll mode and processes the key
+// normally (tmux copy-mode analog).
+func (m *tuiModel) handleScrollKey(msg tea.KeyMsg) bool {
+	sess := m.focusedSession()
+	if sess == nil {
+		return false
+	}
+	page := m.scrollPage(sess)
+	down := func(n int) {
+		sess.ScrollDown(n)
+		if !sess.IsScrolledBack() {
+			// Reached the live view: leave scroll mode.
+			m.scrolling = false
+		}
+	}
+	switch msg.Type {
+	case tea.KeyUp:
+		sess.ScrollUp(1)
+	case tea.KeyDown:
+		down(1)
+	case tea.KeyPgUp:
+		sess.ScrollUp(page)
+	case tea.KeyPgDown:
+		down(page)
+	case tea.KeyHome:
+		sess.ScrollUp(1 << 30)
+	case tea.KeyEnd, tea.KeyEscape, tea.KeyEnter:
+		m.exitScrollMode()
+	case tea.KeyRunes:
+		if len(msg.Runes) != 1 {
+			return false
+		}
+		switch msg.Runes[0] {
+		case 'k':
+			sess.ScrollUp(1)
+		case 'j':
+			down(1)
+		case 'u':
+			sess.ScrollUp(max(1, page/2))
+		case 'd':
+			down(max(1, page/2))
+		case 'b':
+			sess.ScrollUp(page)
+		case 'f':
+			down(page)
+		case 'g':
+			sess.ScrollUp(1 << 30)
+		case 'G', 'q':
+			m.exitScrollMode()
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+	return true
 }
 
 func (m *tuiModel) forwardKey(msg tea.KeyMsg) {

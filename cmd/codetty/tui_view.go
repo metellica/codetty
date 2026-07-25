@@ -907,6 +907,16 @@ func (m *tuiModel) statusBar() string {
 		return tuiStatusStyle.Width(m.width).Render(" " + m.notice)
 	}
 
+	if m.scrolling {
+		var offset, total int
+		if sess := m.focusedSession(); sess != nil {
+			offset, total = sess.ScrollPos()
+		}
+		help := fmt.Sprintf(" [scroll %d/%d]  ↑↓/jk line · PgUp/PgDn or b/f page · u/d half · g/G top/bottom · q/Esc live",
+			offset, total)
+		return tuiStatusStyle.Width(m.width).Render(help)
+	}
+
 	sess := m.focusedSession()
 	var name string
 	if sess != nil {
@@ -914,7 +924,7 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	if m.prefix {
-		help := m.prefixLabel + ": d detach  c new  t tab  x kill  X close-tab  r rename  R reload  n/p nav  s list  b big  f full  T tabs  w manager  Shift+←→ tabs"
+		help := m.prefixLabel + ": d detach  c new  t tab  x kill  X close-tab  r rename  R reload  n/p nav  [ scroll  s list  b big  f full  T tabs  w manager  Shift+←→ tabs"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 
