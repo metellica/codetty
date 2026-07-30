@@ -1,106 +1,120 @@
-# CodeTTY 用户手册
+# CodeTTY User Manual
 
-## 目录
+## Table of contents
 
-- [概述](#概述)
-- [安装](#安装)
-- [基本概念](#基本概念)
-- [命令行用法](#命令行用法)
-- [Session 配置文件](#session-配置文件)
-- [TUI 界面](#tui-界面)
-- [快捷键参考](#快捷键参考)
-- [鼠标操作](#鼠标操作)
-- [布局模式](#布局模式)
-- [Session 管理](#session-管理)
-- [Tmux 集成](#tmux-集成)
-- [浮动窗口](#浮动窗口)
-- [文本选择与复制](#文本选择与复制)
-- [工作流示例](#工作流示例)
-- [故障排除](#故障排除)
-
----
-
-## 概述
-
-CodeTTY 是一个本地终端多路复用器，提供类似 tmux/screen 的持久会话管理功能。它
-由两个组件构成：
-
-1. **Daemon（后台进程）** — 管理多个 PTY 会话，会话在 daemon 中持续运行
-2. **TUI（前端界面）** — 基于 Bubble Tea 的交互式终端界面
-
-特点：
-
-- 关闭 TUI 后会话继续运行（detach/attach 模式）
-- SSH 断开后重连即可恢复工作现场
-- 支持同时管理多个终端会话
-- 可加载已有 tmux 会话统一管理
-- 鼠标拖拽重排面板、按钮操作
-- 文本选择与 OSC 52 剪贴板复制
+- [Overview](#overview)
+- [Installation](#installation)
+- [Basic concepts](#basic-concepts)
+- [Command-line usage](#command-line-usage)
+- [Session config files](#session-config-files)
+- [The TUI](#the-tui)
+- [Key reference](#key-reference)
+- [Mouse operations](#mouse-operations)
+- [Layout modes](#layout-modes)
+- [Session management](#session-management)
+- [Floating windows](#floating-windows)
+- [Scrollback](#scrollback)
+- [Text selection and copy](#text-selection-and-copy)
+- [AI agent state detection](#ai-agent-state-detection)
+- [Scripting sessions](#scripting-sessions)
+- [Hot upgrade](#hot-upgrade)
+- [Workflow examples](#workflow-examples)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
-## 安装
+## Overview
 
-### 从源码构建
+CodeTTY is a local terminal multiplexer providing persistent session
+management like tmux/screen. It consists of two components:
+
+1. **Daemon (background process)** — manages PTY sessions; sessions keep
+   running inside the daemon
+2. **TUI (frontend)** — an interactive terminal UI built on Bubble Tea
+
+Highlights:
+
+- Sessions keep running after the TUI closes (detach/attach)
+- Reconnect after an SSH drop and pick up right where you left off
+- Manage many terminal sessions at once; a session can hold multiple tabs
+- AI coding agents inside tabs are detected automatically with
+  idle/working/blocked state display
+- Managed remote tabs: connect to a remote CodeTTY daemon over OpenSSH;
+  network drops don't interrupt remote tasks
+- Mouse drag to reorder panels, title-bar buttons
+- Text selection with OSC 52 clipboard copy
+
+---
+
+## Installation
+
+### Build from source
 
 ```bash
 git clone <repo-url> && cd codetty
-./build.sh install    # Linux/macOS: 构建并安装到 /usr/local/bin
+./build.sh install    # Linux/macOS: build and install to /usr/local/bin
 ```
 
 Windows:
 
 ```powershell
-.\build.bat           # 生成 codetty.exe
+.\build.bat           # produces codetty.exe
 ```
 
-### 依赖
+### Requirements
 
 - Go 1.25+
-- Linux/macOS 或 Windows 10 1809+
+- Linux/macOS, or Windows 10 1809+
 
 ---
 
-## 基本概念
+## Basic concepts
 
-### 前缀键
+### The prefix key
 
-CodeTTY 默认使用 **Ctrl+A** 作为命令前缀键（类似 tmux 的 Ctrl+B），可在
-`~/.config/codetty/config.toml` 中通过 `keybindings.prefix` 自定义（详见
-[README「配置」章节](../README.md#配置)）。本手册后续内容均以默认的
-`Ctrl+A` 为例，如果你配置了其他前缀键，请自行替换。
+CodeTTY uses **Ctrl+A** as the command prefix by default (like tmux's
+Ctrl+B). It can be customized via `keybindings.prefix` in
+`~/.config/codetty/config.toml` (see the
+[README "Configuration" section](../README.md#configuration)). This manual
+uses the default `Ctrl+A` throughout; substitute your own prefix if you
+changed it.
 
-操作方式：先按 Ctrl+A 松开，然后按下功能键。例如 `Ctrl+A d` = 按下 Ctrl+A，
-松开，按下 d。
+Usage: press Ctrl+A, release, then press the command key. For example
+`Ctrl+A d` = press Ctrl+A, release, press d.
 
-如果需要向程序发送字面 Ctrl+A（如 bash 的行首跳转），按两次 `Ctrl+A Ctrl+A`。
+To send a literal Ctrl+A to the program (e.g. beginning-of-line in bash),
+press `Ctrl+A Ctrl+A`.
 
-按下前缀键后状态栏会显示完整的快捷键提示。
+After pressing the prefix, the status bar shows the full list of available
+commands.
 
-### Session（会话）
+### Sessions
 
-一个 session 对应一个 PTY 进程（如 shell、vim、htop）。session 由 daemon 管理，
-TUI 只是显示和操作的前端。Session 可以显示、隐藏、重命名或关闭。
+A session is managed by the daemon; the TUI is just a frontend for viewing
+and interacting with it. Sessions can be shown, hidden, renamed, or killed.
 
-Session 内可以有多个 tab。当一个 tab 的进程退出时：
+A session can hold multiple tabs, each wrapping one PTY process (shell, vim,
+htop, ...). When a tab's process exits:
 
-- 非 shell 命令（如 `htop`、`vim`）退出 → 原地重启默认 shell，面板保持可用
-- shell（如 `bash`、`zsh`）退出 → 该 tab 自动关闭，切换到剩余 tab
-- 最后一个 tab 的 shell 退出 → 整个 session 结束
+- a non-shell command (e.g. `htop`, `vim`) exits → the default shell
+  respawns in place and the panel stays usable
+- a shell (e.g. `bash`, `zsh`) exits → the tab closes and focus moves to the
+  remaining tabs
+- the last tab's shell exits → the whole session ends
 
-### 面板（Panel）
+### Panels
 
-TUI 将每个可见 session 显示为一个面板。面板有不同布局方式：大面板、侧面板、
-网格、全屏、浮动窗口等。
+The TUI shows each visible session as a panel. Panels appear in different
+arrangements: big panel, side panels, fullscreen, floating windows.
 
 ---
 
-## 命令行用法
+## Command-line usage
 
-### codetty（无参数）
+### codetty (no arguments)
 
-启动 TUI 并连接到 daemon。如果 daemon 未启动则自动启动。如果没有活跃 session
-则自动创建一个 shell session。
+Opens the TUI and connects to the daemon. Starts the daemon if it isn't
+running. Auto-creates a shell session if none exist.
 
 ```bash
 codetty
@@ -108,47 +122,50 @@ codetty
 
 ### codetty new
 
-创建新 session 并启动 TUI。
+Creates a session and opens the TUI.
 
 ```bash
-codetty new                     # 创建默认 shell session
-codetty new -s myproject        # 指定 session 名称
-codetty new -- htop             # 运行指定命令
-codetty new -s dev -- vim .     # 指定名称 + 命令
+codetty new                     # default shell session
+codetty new -s myproject        # named session
+codetty new -- htop             # run a specific command
+codetty new -s dev -- vim .     # name + command
 ```
 
-未知命令参数会自动视为 `new` 子命令，例如 `codetty vim .` 等价于 `codetty new -- vim .`。
+Unknown arguments are treated as an implicit `new`, so `codetty vim .` is
+equivalent to `codetty new -- vim .`.
 
 ### codetty attach (a)
 
-连接到已有 session 打开 TUI。
+Opens the TUI focused on an existing session.
 
 ```bash
-codetty attach                  # attach 默认 session
-codetty a -s myproject          # attach 指定 session
+codetty attach                  # attach (focuses the last active session)
+codetty a -s myproject          # attach focused on a specific session
 ```
 
 ### codetty up
 
-从配置文件加载 session 布局，增量创建缺失的 session，然后打开 TUI。
-详见 [Session 配置文件](#session-配置文件) 章节。
+Loads a session layout from a config file, incrementally creates missing
+sessions, then opens the TUI. See [Session config files](#session-config-files).
 
 ```bash
-codetty up                      # 自动查找 .codetty.toml
-codetty up -f dev.toml          # 指定配置文件
+codetty up                      # look for .codetty.toml
+codetty up -f dev.toml          # use a specific config file
 ```
 
 ### codetty ls
 
-列出所有活跃 session。
+Lists active sessions. `-a` also includes sessions from all instances and
+all owners on this host.
 
 ```bash
 codetty ls
+codetty ls -a
 ```
 
 ### codetty kill
 
-关闭指定 session。
+Kills a session.
 
 ```bash
 codetty kill -s myproject
@@ -156,44 +173,87 @@ codetty kill -s myproject
 
 ### codetty kill-server
 
-停止 daemon 和所有 session。
+Stops the daemon and all sessions. `--all` also kills sessions owned by
+other hosts.
 
 ```bash
 codetty kill-server
 ```
 
----
+### codetty reload
 
-## Session 配置文件
-
-CodeTTY 支持通过 TOML 配置文件定义 session 布局，包括 native（原生 PTY）session
-和 tmux session（含多 window 支持）。使用 `codetty up` 命令加载配置文件并一次性
-创建所有 session。
-
-### 使用方法
+Incrementally syncs running sessions/tabs with the config file (creates
+missing items, applies changes) without restarting the daemon.
 
 ```bash
-codetty up                      # 自动查找配置文件
-codetty up -f myconfig.toml     # 指定配置文件
+codetty reload                  # look for the config file automatically
+codetty reload -f dev.toml      # use a specific config file
 ```
 
-配置文件查找顺序：
-1. `-f` 指定的路径
-2. 当前目录下的 `.codetty.toml`
+### codetty send-keys / capture / send-mouse
+
+Control sessions from external scripts; see
+[Scripting sessions](#scripting-sessions).
+
+### codetty upgrade
+
+Hot-upgrades the daemon binary without interrupting sessions; see
+[Hot upgrade](#hot-upgrade).
+
+### codetty version
+
+Shows the version and build time (stamped by `build.sh`/`build.bat`).
+
+```bash
+codetty version
+```
+
+### Named instances (-i / --instance)
+
+Run multiple isolated daemons on one host (each with its own socket and
+session list), like `tmux -L`. `-i` goes before the subcommand; the
+`CODETTY_INSTANCE` environment variable works too.
+
+```bash
+codetty -i work                     # use the "work" instance
+codetty --instance work ls          # list sessions of the work instance
+codetty ls -a                       # list sessions across all instances
+CODETTY_INSTANCE=work codetty ls    # select the instance via env var
+```
+
+---
+
+## Session config files
+
+CodeTTY can define session layouts in a TOML config file: each session may
+contain multiple tabs, reuse tab templates, and declare managed remote
+targets. Use `codetty up` to load the file and create everything at once.
+
+### Usage
+
+```bash
+codetty up                      # find the config file automatically
+codetty up -f myconfig.toml     # use a specific file
+```
+
+Config file search order:
+1. the path given with `-f`
+2. `.codetty.toml` in the current directory
 3. `~/.config/codetty/sessions.toml`
 
-### Delta 行为
+### Delta behavior
 
-`codetty up` 采用增量创建：daemon 中已有同名 session 时跳过创建。这意味着可以
-反复运行 `codetty up`，只有缺失的 session 会被创建。
+`codetty up` is incremental: sessions that already exist in the daemon are
+skipped. You can run `codetty up` repeatedly; only missing sessions are
+created.
 
-### 基本示例
+### Basic example
 
 ```toml
-layout = "list"               # 初始布局：list / focus-big / fullscreen / tabs
-focus = "editor"              # 初始聚焦的 session 名称
+layout = "list"               # initial layout: list / focus-big / fullscreen / tabs
+focus = "editor"              # session to focus initially
 
-# 原生 session（直接运行命令）
+# Native session (runs a command directly)
 [[session]]
 name = "editor"
 command = ["nvim", "."]
@@ -201,473 +261,498 @@ command = ["nvim", "."]
 [[session]]
 name = "server"
 command = ["npm", "run", "dev"]
-dir = "./backend"             # 工作目录（相对于配置文件所在目录）
+dir = "./backend"             # working dir (relative to the config file)
 
 [[session]]
-name = "shell"                # command 省略则使用默认 shell
-hidden = true                 # 启动时隐藏（可通过 Ctrl+A w 显示）
+name = "shell"                # omit command to run the default shell
+hidden = true                 # hidden at startup (show via Ctrl+A w)
 ```
 
-### 托管远程 Tab
+### Managed remote tabs
 
-托管远程模式在远程主机运行 CodeTTY daemon，SSH 仅承载 CodeTTY 协议。网络断开时，
-远程 PTY、任务和 agent 状态检测继续运行；本地 TUI 会持续重连。
+Managed remote mode runs a CodeTTY daemon on the remote host; SSH only
+carries the CodeTTY protocol. When the network drops, remote PTYs, tasks,
+and agent state detection keep running; the local TUI reconnects
+continuously.
 
-Session 始终是本地概念；`remote` 是 tab 级属性，同一 session 可混合本地与远程
-tab。远程 tab 存放在远程 daemon 上同名的会话中，按 owner（本机 hostname+uid+
-instance 的哈希）命名空间隔离——不同机器的同名会话互不可见、互不冲突。TUI
-会把它们合并进同一个 tab 栏（agent 状态显示与本地 tab 一致）。
+Sessions are always a local concept; `remote` is a tab-level attribute, so
+one session can mix local and remote tabs. Remote tabs live in a same-named
+session on the remote daemon, namespaced per owner (a hash of local
+hostname+uid+instance) — same-named sessions from different machines never
+see or clobber each other. The TUI merges them into a single tab bar (agent
+state display matches local tabs).
 
 ```toml
 [remote.gpu]
-host = "gpu01"                # 支持 ~/.ssh/config Host alias
+host = "gpu01"                # ~/.ssh/config Host aliases supported
 instance = "default"
-deploy = "auto"               # 自动部署当前 codetty binary
+deploy = "auto"               # auto-deploy the current codetty binary
 
 [[session]]
 name = "dev"
 
   [[session.tab]]
-  name = "shell"              # 本地 tab
+  name = "shell"              # local tab
 
   [[session.tab]]
   name = "agent"
-  remote = "gpu"              # 远程 tab
+  remote = "gpu"              # remote tab
   command = ["copilot"]
-  dir = "/workspace/project"  # 远程路径
+  dir = "/workspace/project"  # remote path
 ```
 
-session 级 `remote` 作为其所有 tab 的默认值（单 tab 写法 `remote = "gpu"` +
-`command` 仍然有效）；单个 tab 可用 `local = true` 强制本地。TUI 中 `Ctrl+A t`
-新建 tab 时会弹出目标选择:local、配置中的各 `[remote.*]`,以及自动从
-`~/.ssh/config` 读取的 Host 别名(默认 `instance = "default"`、`deploy = "auto"`;
-同名时 `[remote.*]` 定义优先)。通过选择器临时创建的远程 tab 会记录到
-`~/.config/codetty/<instance>/remotes.json`,TUI 重启时自动重连这些远程,
-tab 仍在;远程上的对应 tab 全部关闭后条目自动清除。
+A session-level `remote` is the default for all of its tabs (the single-tab
+shorthand `remote = "gpu"` + `command` still works); an individual tab can
+force local execution with `local = true`. When creating a tab with
+`Ctrl+A t` in the TUI, a target picker appears: local, each `[remote.*]`
+from the config, and Host aliases read from `~/.ssh/config`
+(defaulting to `instance = "default"`, `deploy = "auto"`; a `[remote.*]`
+definition wins on name conflicts). Remote tabs created ad hoc through the
+picker are recorded in `~/.config/codetty/<instance>/remotes.json`, so the
+TUI reconnects to those remotes on restart and the tabs are still there; an
+entry is removed automatically once all its tabs on the remote are closed.
 
-`deploy = "never"` 可用于已经安装 CodeTTY 的主机，并可通过 `binary` 指定远程路径。
-`deploy = "auto"` 需要本地与远程平台一致(部署的是当前运行的二进制);平台不一致时
-(如 Windows 客户端连 Linux 远程)自动回退使用远程已部署的二进制,不存在才报错。
-没有 `remote` 字段时仍在本地运行；`command = ["ssh", "gpu01"]` 始终是普通 raw SSH。
-多个 session/tab 指向同一 `host + instance` 时共享一条 TUI bridge 连接。
-远程 tab 在 tab 栏和 list 侧栏中带 `@<remote>` 标记(如 `2:agent@gpu2`),
-便于与本地 tab 区分。
+`deploy = "never"` suits hosts that already have CodeTTY installed, with an
+optional `binary` path. `deploy = "auto"` requires matching local/remote
+platforms (it deploys the currently running binary); on a platform mismatch
+(e.g. Windows client → Linux remote) it falls back to the binary already
+deployed on the remote, and errors only if none exists. Without a `remote`
+field everything runs locally; `command = ["ssh", "gpu01"]` remains plain
+raw SSH. Sessions/tabs pointing at the same `host + instance` share one TUI
+bridge connection. Remote tabs are marked `@<remote>` in tab bars and the
+list sidebar (e.g. `2:agent@gpu2`) to distinguish them from local tabs.
 
-版本兼容参考 SSH 的模型:订阅握手时双方交换协议版本区间和 capability 列表,
-取最高公共版本和能力交集通信;区间无交集时明确报错并提示升级较旧的一方。
-日常演进通过新增 JSON 字段/capability 完成,不要求两端 binary 完全一致。
+Version compatibility follows the SSH model: during the subscribe handshake
+both sides exchange protocol version ranges and capability lists, then talk
+using the highest common version and the capability intersection. If the
+ranges don't overlap, a clear error tells you to upgrade the older side.
+Day-to-day evolution happens through new JSON fields/capabilities, so the
+two binaries don't have to match exactly.
 
-`codetty version` 显示版本与构建时间(由 `build.sh` 注入)。远程热更新:
-`codetty upgrade -r <name>` 把本地二进制部署到指定远程(`[remote.*]` 名、
-`~/.ssh/config` 别名或任意 SSH host)并原地热升级其 daemon,session 不中断;
-`-r all` 更新配置及注册表中的全部远程。
+`codetty version` shows the version and build time (stamped by `build.sh`).
+Remote hot update: `codetty upgrade -r <name>` deploys the local binary to
+the named remote (a `[remote.*]` name, an `~/.ssh/config` alias, or any SSH
+host) and hot-upgrades its daemon in place without interrupting sessions;
+`-r all` updates every remote known from config and the registry.
 
-### tmux Session 与 Window
+### Multi-tab sessions
 
-配置文件支持定义 tmux session 并在其中创建多个 window（每个 window 运行一个命令）：
+A session can define multiple tabs inline, each running one command:
 
 ```toml
 [[session]]
 name = "monitoring"
-type = "tmux"
-tmux_session = "mon"                # tmux session 名称
 
-  [[session.window]]
+  [[session.tab]]
   name = "logs"
-  command = "tail -f /var/log/app.log"
+  command = ["tail", "-f", "/var/log/app.log"]
 
-  [[session.window]]
+  [[session.tab]]
   name = "htop"
-  command = "htop"
+  command = ["htop"]
 
-# 仅 attach 已有 tmux session（不创建 window）
-[[session]]
-name = "remote"
-type = "tmux"
-tmux_session = "remote-server"
-tmux_attach_only = true
+  # omit command to run the default shell
+  [[session.tab]]
+  name = "shell"
 ```
 
-tmux window 创建流程：
-1. 如果 tmux session 不存在 → 创建 session + 所有 window
-2. 如果 tmux session 已存在 → 跳过 window 创建，直接 attach
-3. 创建 CodeTTY daemon session 包裹 `tmux attach-session`
+### Templates
 
-### 模板 (Template)
-
-可定义可复用的 window 模板，多个 session 共享同一套 window 配置：
+Define reusable tab sets shared by multiple sessions:
 
 ```toml
 [template.dev]
 
-  [[template.dev.window]]
+  [[template.dev.tab]]
   name = "copilot"
-  command = "copilot --allow-all"
+  command = ["copilot", "--allow-all"]
 
-  [[template.dev.window]]
+  [[template.dev.tab]]
   name = "git"
-  command = "lazygit"
+  command = ["lazygit"]
 
-  [[template.dev.window]]
+  [[template.dev.tab]]
   name = "code"
-  command = "nvim ."
+  command = ["nvim", "."]
 
-  [[template.dev.window]]
+  [[template.dev.tab]]
   name = "shell"
 
-# 使用模板
+# Use the template
 [[session]]
 name = "frontend"
-type = "tmux"
-tmux_session = "fe"
 template = "dev"
-dir = "./frontend"            # dir 应用到所有 window
+dir = "./frontend"            # default working dir for all tabs
 ```
 
-### Session 继承与扩展模板
+### Inheriting and extending templates
 
-Session 可以继承模板并进行定制——增加、修改、删除 window：
+A session can inherit a template and customize it — same-name tabs override
+template fields, new names are appended:
 
 ```toml
 [[session]]
 name = "fullstack"
-type = "tmux"
-tmux_session = "full"
 template = "dev"
-remove_windows = ["git"]         # 删除模板中的 window
 
-  # 同名 window → 覆盖模板中的字段
-  [[session.window]]
+  # same name → overrides template fields (command/dir/env/remote/local)
+  [[session.tab]]
   name = "code"
-  command = "nvim ~/projects"
+  command = ["nvim", "~/projects"]
 
-  # 新名称 → 追加 window
-  [[session.window]]
+  # new name → appended as a new tab
+  [[session.tab]]
   name = "db"
-  command = "docker compose up db"
+  command = ["docker", "compose", "up", "db"]
 ```
 
-合并规则：
+Merge rules:
 
-| 操作 | 方法 |
-|------|------|
-| 增加 window | `session.window` 使用新的 `name` → 追加到列表末尾 |
-| 修改 window | `session.window` 使用与模板相同的 `name` → 覆盖 `command`/`dir` 字段 |
-| 删除 window | `remove_windows = ["window-name"]` |
+| Operation | How |
+|-----------|-----|
+| Add a tab | use a new `name` in `session.tab` → appended to the end |
+| Modify a tab | use the same `name` as the template → overrides `command`/`dir`/`env`/`remote`/`local` |
 
-### 字段参考
+### Field reference
 
-**顶层字段：**
+**Top-level fields:**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `layout` | string | `"list"` | 初始布局模式（list / focus-big / fullscreen / tabs） |
-| `focus` | string | 第一个 session | 初始聚焦 session |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `layout` | string | `"list"` | initial layout mode (list / focus-big / fullscreen / tabs) |
+| `focus` | string | first session | session to focus initially |
 
-**template.\<name\>：**
+**remote.\<name\>:**
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `window[]` | array | Window 定义列表 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `host` | string | **required** | SSH host (`~/.ssh/config` Host aliases supported) |
+| `instance` | string | `"default"` | remote daemon instance name |
+| `deploy` | string | `"auto"` | `"auto"` (deploy the local binary) or `"never"` |
+| `binary` | string | codetty in remote PATH | remote binary path when `deploy = "never"` |
 
-**session[]：**
+**template.\<name\>:**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `name` | string | **必填** | Session 名称（唯一） |
-| `type` | string | `"native"` | `"native"` 或 `"tmux"` |
-| `command` | string[] | 默认 shell | 原生 session 命令 |
-| `dir` | string | 配置文件目录 | 工作目录 |
-| `env` | map | `{}` | 额外环境变量 |
-| `hidden` | bool | `false` | 启动时隐藏 |
-| `template` | string | — | 模板名称（tmux 专用） |
-| `tmux_session` | string | — | tmux session 名称（tmux 必填） |
-| `tmux_attach_only` | bool | `false` | 仅 attach 已有 tmux session |
-| `remove_windows` | string[] | — | 从模板中删除的 window 名称 |
-| `window[]` | array | — | 内联 window 或模板覆盖 |
+| Field | Type | Description |
+|-------|------|-------------|
+| `tab[]` | array | tab definitions |
 
-**window[]：**
+**session[]:**
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `name` | string | **必填** | Window 名称 |
-| `command` | string | 默认 shell | Shell 命令字符串 |
-| `dir` | string | session 的 `dir` | 工作目录 |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | **required** | session name (unique) |
+| `command` | string[] | default shell | command for single-tab sessions (also the default for tabs) |
+| `dir` | string | config file dir | working directory (resolved relative to the config file when local) |
+| `env` | map | `{}` | extra environment variables |
+| `hidden` | bool | `false` | hidden at startup |
+| `remote` | string | — | managed remote target name, default for all tabs |
+| `template` | string | — | template to inherit |
+| `tab[]` | array | — | inline tab definitions or template overrides |
 
----
+**tab[]:**
 
-## TUI 界面
-
-启动后进入 TUI 界面，底部状态栏显示当前 session 列表和快捷键提示。
-
-### 无 Session 状态
-
-当没有任何 session 时，屏幕中央显示 `⬡ codetty` 标识和提示信息：
-
-- 正常提示："No sessions. Press Ctrl+A c to create one."
-- 自动创建中："No sessions. Creating one..."
-
-此状态下仍然支持所有覆盖层操作（tmux 发现器、创建 session 等），状态栏仅在覆盖层
-激活时显示。
-
-### 状态栏
-
-底部状态栏显示：
-
-- 当前焦点 session 名称和位置（如 `[bash] 1/3`）
-- 当前布局模式（list / fullscreen）
-- 操作提示
-- 按下 `Ctrl+A` 前缀键后显示完整快捷键列表
-
-### 标题栏
-
-每个面板顶部的标题栏显示 session 名称和编号。侧面板的标题栏右侧有操作按钮：
-
-- `[-]` — 隐藏面板（session 继续运行，仅不显示）
-- `[x]` — 关闭 session（会显示确认对话框）
-
-侧面板标题栏有浅绿色背景，大面板标题栏为普通样式。在窄终端（宽度 < 120）下，
-焦点放大模式采用垂直布局，底部显示一个小面板列表。
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | **required** | tab name |
+| `command` | string[] | session `command`, else default shell | tab command |
+| `dir` | string | session `dir` | working directory |
+| `env` | map | session `env` | extra environment variables |
+| `remote` | string | session `remote` | managed remote target name |
+| `local` | bool | `false` | force local execution (overrides session-level `remote`) |
 
 ---
 
-## 快捷键参考
+## The TUI
 
-所有前缀命令格式为 `Ctrl+A` 松开后按功能键。按下前缀键后状态栏会显示可用命令
-的完整列表。
+After startup the TUI shows the session panels with a status bar at the
+bottom listing sessions and key hints.
 
-### 会话管理
+### No-session state
 
-| 按键 | 功能 |
-|------|------|
-| `Ctrl+A d` | Detach — 退出 TUI，所有 session 继续运行 |
-| `Ctrl+A c` | 创建新 session（有 tmux 时弹出类型选择器） |
-| `Ctrl+A x` | 关闭当前聚焦的 session |
-| `Ctrl+A r` | 重命名当前 session（预填当前名称，可编辑后确认） |
-| `Ctrl+A t` | 打开 Tmux Session 发现器 |
-| `Ctrl+A w` | 打开 Session 管理器 |
-| `Ctrl+A m` | 创建临时浮动 shell |
+When no sessions exist, the center of the screen shows the `⬡ codetty` logo
+and a hint:
 
-### 导航
+- normally: "No sessions. Press Ctrl+A c to create one."
+- while auto-creating: "No sessions. Creating one..."
 
-| 按键 | 功能 |
-|------|------|
-| `Ctrl+A n` | 切换到下一个 session |
-| `Ctrl+A p` | 切换到上一个 session |
-| `Ctrl+A 1`-`9` | 跳转到指定编号的 session |
-| `Shift+Tab` | 列表模式下在侧栏项间连续跳转（优先跳到需处理的 agent，越过最后一项回到大面板）；焦点放大模式下在侧面板间循环高亮（Enter 浮动 / Space 提升为大面板）；浮动窗口中关闭浮动并高亮下一面板；全屏模式打开 session 切换器（实时预览）；标签页模式切换到下一个 session |
-| `Enter` | 在高亮面板上打开浮动窗口（网格模式或焦点放大的侧面板） |
+All overlay operations (creating sessions, etc.) still work in this state;
+the status bar appears only while an overlay is active.
 
-### 布局控制
+### Status bar
 
-| 按键 | 功能 |
-|------|------|
-| `Ctrl+A f` | 切换布局：浮动→全屏→上级模式；焦点放大/列表→全屏；全屏→返回 |
-| `Ctrl+A q` | 关闭浮动窗口 |
-| `Ctrl+A s` | 切换到列表模式（默认） |
-| `Ctrl+A b` | 切换到焦点放大模式 |
-| `Ctrl+A T` | 切换到标签页模式（顶部 session 标签栏） |
+The bottom status bar shows:
 
-### 面板重排
+- the focused session's name and position (e.g. `[bash] 1/3`)
+- the current layout mode (list / fullscreen)
+- action hints
+- the full command list after pressing the `Ctrl+A` prefix
 
-| 按键 | 功能 |
-|------|------|
-| `Ctrl+A h` | 当前 session 向左移动（调整顺序） |
-| `Ctrl+A l` | 当前 session 向右移动（调整顺序） |
+### Title bars
 
-### 网格模式方向键
+Each panel's title bar shows the session name and number. Side-panel title
+bars have action buttons on the right:
 
-| 按键 | 功能 |
-|------|------|
-| `←` / `→` / `↑` / `↓` | 在网格面板间移动焦点选择 |
+- `[-]` — hide the panel (the session keeps running, it's just not shown)
+- `[x]` — kill the session (with a confirmation dialog)
 
-### 直接按键（无需前缀）
-
-| 按键 | 功能 |
-|------|------|
-| `Shift+Tab` | 切换到下一个 session / 循环面板高亮 / 列表模式在列表项间跳转 / 全屏模式打开 session 切换器 |
-| `Ctrl+A Ctrl+A` | 向 session 发送字面 Ctrl+A |
+Side-panel title bars have a pale green background; the big panel's title
+bar is plain. On narrow terminals (width < 120) focus-big mode switches to a
+vertical layout with a small panel list at the bottom.
 
 ---
 
-## 鼠标操作
+## Key reference
 
-### 面板点击
+All prefix commands are `Ctrl+A`, release, then the command key. After
+pressing the prefix, the status bar lists all available commands.
 
-| 操作 | 效果 |
-|------|------|
-| 单击侧面板内容区 | 以该 session 打开浮动窗口 |
-| 单击大面板内容区 | 若 session 启用了鼠标报告（tmux、vim、copilot 等），按下/拖动/松开事件实时转发到 PTY；否则开始文本选择 |
-| Ctrl+单击侧面板 | 将该 session 提升为大面板（交换位置） |
-| 单击网格面板内容区 | 以该 session 打开浮动窗口 |
+### Session management
 
-### 标题栏按钮
+| Key | Action |
+|-----|--------|
+| `Ctrl+A d` | detach — exit the TUI, sessions keep running |
+| `Ctrl+A c` | create a new session |
+| `Ctrl+A x` | kill the focused session |
+| `Ctrl+A X` | close the current tab (when the session has more than one) |
+| `Ctrl+A r` | rename the focused session (pre-filled with the current name) |
+| `Ctrl+A t` | create a new tab in the current session (pick a local or remote target) |
+| `Ctrl+A w` | open the session manager |
+| `Ctrl+A m` | create a temporary floating shell |
+| `Ctrl+A R` | reload the session config file |
 
-侧面板标题栏右侧有 `[-]` 和 `[x]` 按钮。支持在焦点放大模式和网格模式下的
-所有非大面板上使用。
+### Navigation
 
-| 按钮 | 效果 |
-|------|------|
-| `[-]` | 隐藏该面板（session 继续运行，可通过管理器恢复） |
-| `[x]` | 关闭该 session（弹出确认对话框） |
+| Key | Action |
+|-----|--------|
+| `Ctrl+A n` | next session |
+| `Ctrl+A p` | previous session |
+| `Ctrl+A 1`-`9` | jump to session by number |
+| `Shift+Tab` | list mode: step through sidebar entries (agents needing attention first, back to the big panel after the last); focus-big mode: cycle side-panel highlight (Enter floats / Space promotes); floating window: close it and highlight the next panel; fullscreen: open the session switcher (live previews); tab mode: next session |
+| `Enter` | open a floating window on the highlighted panel (focus-big side panels) |
 
-### 标题栏拖拽重排
+### Scrollback
 
-在侧面板或网格面板的标题栏上按住鼠标并拖动到另一个面板，松开后两个面板交换位置。
+| Key | Action |
+|-----|--------|
+| `Ctrl+A [` or `Ctrl+A PgUp` | enter scrollback mode |
+| `↑`/`↓`, `j`/`k` | scroll one line |
+| `PgUp`/`PgDn`, `b`/`f` | scroll one page |
+| `u`/`d` | scroll half a page |
+| `g` / `Home` | jump to the top of history |
+| `G` / `End` | jump to the bottom |
+| `q` / `Esc` / `Enter` | return to the live view |
 
-拖拽过程中目标面板标题栏会显示 `⬇` 指示器。
+### Layout control
 
-**区分拖拽和点击：** 鼠标按下后移动超过阈值才进入拖拽模式，单纯点击不会触发
-拖拽。
+| Key | Action |
+|-----|--------|
+| `Ctrl+A f` | toggle layout: floating→fullscreen→parent mode; focus-big/list→fullscreen; fullscreen→back |
+| `Ctrl+A q` | close the floating window |
+| `Ctrl+A s` | switch to list mode (default) |
+| `Ctrl+A b` | switch to focus-big mode |
+| `Ctrl+A T` | switch to tab mode (session tab bar on the top row) |
 
-### 文本选择与复制
+### Panel reordering
 
-在大面板（全屏/焦点放大模式下的主面板或浮动窗口）中：
+| Key | Action |
+|-----|--------|
+| `Ctrl+A h` | move the current session left (display order) |
+| `Ctrl+A l` | move the current session right (display order) |
 
-1. 按住鼠标左键拖动选择文本
-2. 松开鼠标后选中文本自动复制到系统剪贴板（OSC 52）
-3. 选区高亮显示（反色）
+### Direct keys (no prefix)
 
-**注意：** 侧面板不支持文本选择，仅大面板/浮动窗口支持。
-
-### 滚轮
-
-鼠标滚轮事件转发到有鼠标报告能力的 session PTY（如 tmux、vim 等）。
-
----
-
-## 布局模式
-
-### 列表模式 (List，默认)
-
-大面板占据屏幕左侧，右侧是固定宽度（28 列）的 session 列表侧栏。
-列表显示每个 session 的名称，并在名称下方逐行列出该 session 中带 agent
-的 tab 及其状态（一个 session 可有 0 个或多个 agent）：
-
-- `■ copilot blocked`（红色）— agent 等待用户输入
-- `● copilot working`（橙色）— agent 正在工作（●/○ 交替闪烁）
-- `✓ copilot done`（绿色）— agent 已完成、尚未查看
-- `· copilot idle`（灰色）— agent 空闲
-
-操作方式：
-
-- `Shift+Tab` 在侧栏项间连续跳转：优先跳到需要处理的 agent 行（blocked
-  最优先，其次 done），然后依次经过各 session 行，越过最后一项后焦点回到
-  大面板（列表聚焦时状态栏显示 `list*`）
-- 列表聚焦时：`↑`/`↓` 在 session 行和 agent 行之间逐行移动光标（循环）；
-  `Enter` 把光标项切换为大面板，若光标在 agent 行上会同时激活对应 agent
-  所在的 tab；`Esc` 或任意其他键返回大面板（不会向 PTY 泄漏输入）
-- 鼠标点击 session 行直接切换大面板；点击 agent 行则在切换 session 的
-  同时激活对应 agent 所在的 tab；滚轮在侧栏上滚动列表
-- 当前选中的 session 以低对比度背景色标识，列表光标为高亮背景
-- `Ctrl+A n/p` 或 `Ctrl+A 1-9` 仍可直接切换（保持列表模式）
-- 大面板的键盘/鼠标行为与焦点放大模式的大面板一致
-
-### 焦点放大模式 (Focus-Big)
-
-一个 session 占据大部分屏幕（大面板，行为与列表模式的大面板完全一致），
-其余 session 显示在右侧的小面板列表中。`Ctrl+A b` 进入。
-
-- 大面板接收键盘输入和鼠标事件（渲染、tab 栏、底部信息行与列表模式一致）
-- 侧面板不向 session 转发任何键盘/鼠标输入
-- 单击侧面板以该 session 打开浮动窗口（适合临时处理简单任务，主工作区
-  不变）；Ctrl+单击把它提升为大面板，并自动激活其优先 tab
-  （blocked > done > 当前活动 tab）
-- `Shift+Tab` 在侧面板间循环高亮（越过最后一项回到大面板，状态栏显示
-  `big*`）；高亮时 `↑`/`↓` 移动高亮，`Enter` 打开浮动窗口，`Space`
-  提升为大面板，其他键返回大面板（不会向 PTY 泄漏输入）
-- `Ctrl+A n/p`、`Ctrl+A 1-9` 直接切换大面板 session
-- 侧面板标题栏显示聚合 agent 状态徽标：session 内没有 agent 时不显示
-  任何圆点；有 agent 时显示 `■`（blocked）/ `●○` 闪烁（working）/
-  `●`（done）/ `○`（idle），标题栏与边框颜色跟列表模式侧栏一致
-  （blocked 红 / working 琥珀 / done 绿）
-
-### 网格模式 (Grid)
-
-所有 session 以网格形式平铺显示，每个面板大小均等。每行最多显示 2 个面板。
-
-- `←` `→` `↑` `↓` 方向键在面板间导航
-- 点击面板以该 session 打开浮动窗口
-- `Enter` 在选中面板上打开浮动窗口
-- 标题栏支持 `[-]`/`[x]` 按钮和拖拽重排
-- `Ctrl+A f` 打开焦点 session 的浮动窗口
-
-### 全屏模式 (Fullscreen)
-
-当前 session 占满整个终端窗口。
-
-- 所有鼠标事件转发到 PTY（支持 vim、tmux 等鼠标操作）
-- 支持文本选择与复制
-- `Ctrl+A f` 退回上一个模式（通过模式栈导航）
-- `Shift+Tab` 打开 session 切换器（见下）
-
-### 标签页模式 (Tabs)
-
-顶部一行显示所有 session 的标签栏，其余区域为当前 session 的内容
-（无边框，底部信息行与全屏模式一致）。`Ctrl+A T` 进入。
-
-- 标签颜色与焦点放大模式的标签栏一致：当前 session 蓝色高亮，agent
-  状态着色（blocked 红底、working 橙色闪烁、done 绿色）
-- 点击顶部标签切换 session（自动跳到需处理的 agent 标签页）
-- `Shift+Tab` 切换到下一个 session
-- 内容区支持文本选择、滚轮与鼠标转发（同全屏模式）
-
-### 全屏 Session 切换器 (Shift+Tab)
-
-全屏模式下按 `Shift+Tab` 弹出浮动切换器，罗列除当前 session 外的所有
-可见 session，每个 session 以焦点放大模式侧面板的样式展示实时输出预览
-（约 10 行），便于根据当前状态选择要切换的 session。
-
-- `↓` / `j` — 向下移动（列不变，末行再向下回到首行）
-- `↑` / `k` — 向上移动（列不变，首行再向上回到该列末行）
-- `→` / `l` — 向右移动（行不变，行末再向右回到行首）
-- `←` / `h` — 向左移动（行不变，行首再向左回到行末）
-- `Tab` / `Shift+Tab` — 按顺序高亮下一个面板
-- `Enter` — 切换到高亮的 session（保持全屏）
-- `1`-`9` — 按编号直接切换
-- `Esc` / `q` — 关闭切换器，留在当前 session
-- 鼠标左键点击面板 — 直接切换到该 session
-- 鼠标点击框外 — 关闭切换器
-- 滚轮 — 循环切换高亮面板
-
-### 模式栈导航
-
-`Ctrl+A f` 使用模式栈实现智能导航：
-
-- 网格模式 → 打开浮动窗口
-- 焦点放大模式 → 切换到全屏
-- 浮动窗口 → 切换到全屏（浮动窗口中的 session）
-- 全屏模式（普通 session）→ 弹出模式栈，跳过中间的浮动窗口状态
-- 全屏模式（临时 shell）→ 返回上一级浮动窗口
-- 临时 shell 在全屏时关闭 → 返回浮动窗口
+| Key | Action |
+|-----|--------|
+| `Shift+Tab` | next session / cycle panel highlight / step through list entries / open the fullscreen session switcher |
+| `Ctrl+A Ctrl+A` | send a literal Ctrl+A to the session |
 
 ---
 
-## Session 管理
+## Mouse operations
 
-### 创建 Session (Ctrl+A c)
+### Panel clicks
 
-按下 `Ctrl+A c` 后：
+| Action | Effect |
+|--------|--------|
+| click a side panel's content | open a floating window with that session |
+| click the big panel's content | if the session enabled mouse reporting (tmux, vim, copilot, ...), press/drag/release events are forwarded to the PTY in real time; otherwise text selection starts |
+| Ctrl+click a side panel | promote that session to the big panel (swap) |
 
-- **系统中有 tmux** — 弹出类型选择器：
-  - 按 `c` 创建普通 shell session
-  - 按 `t` 创建 tmux session
-  - 按 `Esc` 取消
-- **系统中没有 tmux** — 直接进入名称输入模式
+### Title-bar buttons
 
-名称输入模式支持：
-- 输入 session 名称后按 `Enter` 确认
-- `Esc` 取消创建
-- `Backspace` 删除字符
+Side-panel title bars have `[-]` and `[x]` buttons on the right, available
+on all non-big panels in focus-big mode.
 
-### 重命名 Session (Ctrl+A r)
+| Button | Effect |
+|--------|--------|
+| `[-]` | hide the panel (the session keeps running; restore via the manager) |
+| `[x]` | kill the session (confirmation dialog) |
 
-- 进入重命名模式，**预填当前 session 名称**，可直接编辑
-- `Enter` 确认，`Esc` 取消，`Backspace` 删除字符
+### Drag to reorder
 
-### 关闭 Session（确认对话框）
+Press and hold on a side panel's title bar, drag to another panel, and
+release — the two panels swap positions.
 
-关闭 session 前显示确认对话框：
+While dragging, the target panel's title bar shows a `⬇` indicator.
+
+**Drag vs click:** dragging starts only after the pointer moves beyond a
+threshold; a plain click never triggers a drag.
+
+### Text selection and copy
+
+In big panels (fullscreen / the focus-big main panel / floating windows):
+
+1. hold the left button and drag to select text
+2. on release, the selection is copied to the system clipboard (OSC 52)
+3. the selection is highlighted (reverse video)
+
+**Note:** side panels don't support text selection; only big
+panels/floating windows do.
+
+### Scroll wheel
+
+Wheel events are forwarded to session PTYs with mouse reporting enabled
+(tmux, vim, ...). For sessions without mouse reporting, the wheel scrolls
+the local scrollback buffer instead (see [Scrollback](#scrollback)).
+
+---
+
+## Layout modes
+
+### List mode (default)
+
+The big panel occupies the left of the screen; the right side is a
+fixed-width (28-column) session list sidebar. The list shows each session's
+name, and below it one line per agent-carrying tab with its state (a session
+can have zero or more agents):
+
+- `■ copilot blocked` (red) — the agent is waiting for user input
+- `● copilot working` (amber) — the agent is working (●/○ blinking)
+- `✓ copilot done` (green) — the agent finished, not yet reviewed
+- `· copilot idle` (gray) — the agent is idle
+
+Interaction:
+
+- `Shift+Tab` steps through sidebar entries: agents needing attention first
+  (blocked, then done), then each session row; past the last entry focus
+  returns to the big panel (the status bar shows `list*` while the list has
+  focus)
+- with the list focused: `↑`/`↓` move the cursor between session rows and
+  agent rows (wrapping); `Enter` makes the cursor item the big panel, and on
+  an agent row also activates that agent's tab; `Esc` or any other key
+  returns to the big panel (no input leaks to the PTY)
+- clicking a session row switches the big panel; clicking an agent row also
+  activates that agent's tab; the wheel scrolls the sidebar
+- the current session has a low-contrast background; the list cursor is a
+  bright highlight
+- `Ctrl+A n/p` and `Ctrl+A 1-9` still switch directly (staying in list mode)
+- the big panel's keyboard/mouse behavior matches focus-big mode
+
+### Focus-big mode
+
+One session takes most of the screen (the big panel, identical in behavior
+to list mode's big panel); the rest appear as small side panels on the
+right. Enter with `Ctrl+A b`.
+
+- the big panel receives keyboard input and mouse events (rendering, tab
+  bar, and bottom info line match list mode)
+- side panels never forward keyboard/mouse input to their sessions
+- clicking a side panel opens a floating window with that session (handy
+  for quick tasks without disturbing the main workspace); Ctrl+click
+  promotes it to the big panel and activates its priority tab
+  (blocked > done > current active tab)
+- `Shift+Tab` cycles the side-panel highlight (past the last, focus returns
+  to the big panel; status bar shows `big*`); while highlighted, `↑`/`↓`
+  move the highlight, `Enter` opens a floating window, `Space` promotes to
+  the big panel, any other key returns to the big panel (no input leaks to
+  the PTY)
+- `Ctrl+A n/p`, `Ctrl+A 1-9` switch the big-panel session directly
+- side-panel title bars show an aggregated agent badge: no dot when the
+  session has no agents; otherwise `■` (blocked) / blinking `●○` (working) /
+  `●` (done) / `○` (idle); title bar and border colors match the list-mode
+  sidebar (blocked red / working amber / done green)
+
+### Fullscreen mode
+
+The current session fills the entire terminal.
+
+- all mouse events are forwarded to the PTY (vim, tmux, etc. mouse support)
+- text selection and copy work
+- `Ctrl+A f` returns to the previous mode (via the mode stack)
+- `Shift+Tab` opens the session switcher (below)
+
+### Tab mode
+
+The top row is a tab bar of all sessions; the rest of the screen is the
+selected session's content (no borders; the bottom info line matches
+fullscreen mode). Enter with `Ctrl+A T`.
+
+- tab colors match the focus-big tab bar: current session highlighted blue,
+  agent states colored (blocked red background, working blinking amber,
+  done green)
+- clicking a tab switches sessions (jumping to the agent tab that needs
+  attention)
+- `Shift+Tab` switches to the next session
+- the content area supports text selection, wheel, and mouse forwarding
+  (same as fullscreen)
+
+### Fullscreen session switcher (Shift+Tab)
+
+In fullscreen, `Shift+Tab` pops up a floating switcher listing all visible
+sessions except the current one, each rendered like a focus-big side panel
+with a live output preview (~10 rows), so you can pick by current state.
+
+- `↓` / `j` — move down (same column; wraps from the last row to the first)
+- `↑` / `k` — move up (same column; wraps from the first row to the last)
+- `→` / `l` — move right (same row; wraps at the end of the row)
+- `←` / `h` — move left (same row; wraps at the start of the row)
+- `Tab` / `Shift+Tab` — highlight the next panel in order
+- `Enter` — switch to the highlighted session (staying fullscreen)
+- `1`-`9` — switch by number
+- `Esc` / `q` — close the switcher, stay on the current session
+- left click on a panel — switch to that session
+- click outside the box — close the switcher
+- wheel — cycle the highlight
+
+### Mode-stack navigation
+
+`Ctrl+A f` navigates using a mode stack:
+
+- list/focus-big/tab mode → fullscreen
+- floating window → fullscreen (with the floating session)
+- fullscreen (normal session) → pop the mode stack, skipping intermediate
+  floating states
+- fullscreen (temporary shell) → back to the parent floating window
+- a temporary shell closing while fullscreen → back to the floating window
+
+---
+
+## Session management
+
+### Creating a session (Ctrl+A c)
+
+`Ctrl+A c` enters name-input mode:
+
+- type the session name, `Enter` to confirm
+- `Esc` cancels
+- `Backspace` deletes
+
+### Creating a tab (Ctrl+A t)
+
+Creates a tab in the current session. If the config defines `[remote.*]`
+targets or `~/.ssh/config` has Host aliases, a target picker appears first
+(local / each remote target), then the tab name prompt. New tabs inherit the
+current tab's working directory.
+
+### Renaming a session (Ctrl+A r)
+
+- enters rename mode **pre-filled with the current name** for editing
+- `Enter` confirms, `Esc` cancels, `Backspace` deletes
+
+### Killing a session (confirmation dialog)
+
+A confirmation dialog appears before killing:
 
 ```
 ┌─ Kill session "bash"? ───────┐
@@ -676,11 +761,11 @@ remove_windows = ["git"]         # 删除模板中的 window
 └───────────────────────────────┘
 ```
 
-支持 `y`/`Enter` 确认或 `n`/`Esc` 取消。
+`y`/`Enter` confirms; `n`/`Esc` cancels.
 
-### Session 管理器 (Ctrl+A w)
+### Session manager (Ctrl+A w)
 
-打开覆盖层显示所有 session（包括已隐藏的），按类型和状态标识：
+Opens an overlay listing all sessions (including hidden ones) with status:
 
 ```
 ┌─── ⬡ Session Manager ─────────────────────┐
@@ -688,7 +773,7 @@ remove_windows = ["git"]         # 删除模板中的 window
 │  2 visible / 3 total                       │
 │  ─────────────────────────────             │
 │  ▸ visible  bash                           │
-│    visible  vim           [tmux]           │
+│    visible  vim                            │
 │    hidden   htop                           │
 │  ─────────────────────────────             │
 │                                            │
@@ -697,247 +782,282 @@ remove_windows = ["git"]         # 删除模板中的 window
 └────────────────────────────────────────────┘
 ```
 
-操作：
+Controls:
 
-| 按键 | 功能 |
-|------|------|
-| `j` / `↓` | 向下移动光标 |
-| `k` / `↑` | 向上移动光标 |
-| `Space` / `Enter` | 切换显示/隐藏状态 |
-| `h` | 隐藏选中 session |
-| `s` | 显示选中 session |
-| `x` | 关闭选中 session（需确认） |
-| `Esc` / `q` | 退出管理器 |
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | move cursor down |
+| `k` / `↑` | move cursor up |
+| `Space` / `Enter` | toggle visible/hidden |
+| `h` | hide the selected session |
+| `s` | show the selected session |
+| `x` | kill the selected session (confirmation) |
+| `Esc` | close the manager |
 
-### 隐藏 / 显示 Session
+### Hiding / showing sessions
 
-隐藏一个 session 后：
+After hiding a session:
 
-- session 继续在后台运行
-- 不显示在面板布局中
-- 可通过 Session 管理器 (`Ctrl+A w`) 恢复显示
-- 也可通过侧面板 `[-]` 按钮隐藏
-
----
-
-## Tmux 集成
-
-### Tmux Session 发现器 (Ctrl+A t)
-
-如果系统中有 tmux 运行，`Ctrl+A t` 打开发现器：
-
-```
-┌─── ⬡ Tmux Sessions ───────────────────────┐
-│                                            │
-│  2/3 selected                              │
-│  ─────────────────────────────             │
-│  ▸ ◉  dev                                  │
-│    ◉  server                               │
-│    ○  monitor                              │
-│  ─────────────────────────────             │
-│                                            │
-│  ↑↓ nav  space toggle  a/n all/none        │
-│  enter confirm  esc cancel                 │
-└────────────────────────────────────────────┘
-```
-
-- **Space** — 切换单个 session 的选中状态
-- **Enter** — 确认选择：选中且未管理的 tmux session 被加载，取消选中的已管理 session 被卸除
-- **a** — 全选所有 tmux session
-- **n** — 取消全选
-- **j/k / ↑/↓** — 导航
-- **Esc** — 取消并关闭发现器
-
-加载后 tmux session 在面板中显示类型标签 `[tmux]`，键盘和鼠标事件正常转发。
-
-### 创建新会话 (Ctrl+A c)
-
-如果系统有 tmux，按 `Ctrl+A c` 会弹出类型选择：
-
-- **Shell** (`c`) — 创建普通 shell session
-- **Tmux** (`t`) — 创建新的 tmux session 并加载
-
-如果系统没有 tmux，直接进入 shell session 名称输入。
+- it keeps running in the background
+- it disappears from the panel layout
+- restore it via the session manager (`Ctrl+A w`)
+- the side-panel `[-]` button also hides
 
 ---
 
-## 浮动窗口
+## Floating windows
 
-浮动窗口是覆盖在当前布局上的单个 session 显示窗口，尺寸为终端的 80%。
-外观与大面板一致：没有顶部标题栏，底部信息行左侧显示 tab 栏（多 tab 时），
-右侧显示 `[n] 名称  (^A q close)`；点击信息行上的 tab 可切换 tab。
+A floating window shows a single session on top of the current layout at
+80% of the terminal size. It looks like the big panel: no top title bar, a
+bottom info line with the tab bar on the left (when multi-tab) and
+`[n] name  (^A q close)` on the right; clicking a tab in the info line
+switches tabs.
 
-### 打开浮动窗口
+### Opening a floating window
 
-- 网格模式下 `Ctrl+A f` — 以焦点 session 打开浮动窗口
-- 焦点放大模式下点击侧面板内容区 — 以该 session 打开浮动窗口
-- 网格模式下点击面板 — 以该 session 打开浮动窗口
-- 高亮侧面板上按 `Enter` — 以该 session 打开浮动窗口
-- `Ctrl+A m` — 创建新的临时浮动 shell
+- list/focus-big mode: click a side panel (or a sidebar session row) —
+  opens that session in a floating window
+- `Enter` on a highlighted side panel — opens that session in a floating
+  window
+- `Ctrl+A m` — creates a new temporary floating shell
 
-### 操作浮动窗口
+### Working with a floating window
 
-- `Ctrl+A q` — 关闭浮动窗口（临时 shell 会自动 kill）
-- `Shift+Tab` — 关闭浮动窗口并将焦点移到下一个小面板
-- `Ctrl+A f` — 从浮动切换到全屏
-- 键盘输入正常转发到浮动窗口的 session
-- 鼠标操作：支持文本选择和点击转发
+- `Ctrl+A q` — close it (temporary shells are killed automatically)
+- `Shift+Tab` — close it and highlight the next small panel
+- `Ctrl+A f` — go from floating to fullscreen
+- keyboard input is forwarded to the floating session normally
+- mouse: text selection and click forwarding are supported
 
-### 临时浮动 Shell
+### Temporary floating shells
 
-`Ctrl+A m` 创建的临时 shell 有特殊行为：
+Shells created by `Ctrl+A m` behave specially:
 
-- 关闭浮动窗口时自动 kill 该 session
-- 不会出现在主面板布局中
-- 适合临时执行一个命令后返回正常工作
+- killed automatically when the floating window closes
+- never appear in the main panel layout
+- ideal for running a quick command and getting back to work
 
 ---
 
-## 文本选择与复制
+## Scrollback
 
-在大面板、全屏模式或浮动窗口中，可以使用鼠标选择和复制文本：
+`Ctrl+A [` or `Ctrl+A PgUp` puts the focused panel into scrollback mode to
+review terminal history (tmux copy-mode analog). While scrolled back, the
+panel shows a position indicator, and new output doesn't move the view.
 
-1. **开始选择** — 在面板内容区按住鼠标左键
-2. **拖动选择** — 移动鼠标，选中的文本以反色高亮显示
-3. **复制** — 松开鼠标，选中文本通过 OSC 52 发送到系统剪贴板
-4. **取消** — 点击其他位置取消选区
+- `↑`/`↓` or `j`/`k` — one line
+- `PgUp`/`PgDn` or `b`/`f` — one page
+- `u`/`d` — half a page
+- `g` / `Home` — top of history
+- `G` / `End` — bottom
+- `q` / `Esc` / `Enter` — return to the live view
 
-如果 session 启用了鼠标报告（如 tmux、vim、copilot），鼠标按下、拖动和松开
-事件会实时转发到 PTY 程序而非触发文本选择，应用内的点击和拖拽都能正常工作。
+The mouse wheel also scrolls back in big panels; scrolling to the bottom
+returns to live. While a floating window is open, scrollback applies to the
+floating session.
 
-### OSC 52 剪贴板
+---
 
-CodeTTY 使用 OSC 52 转义序列设置系统剪贴板。大多数现代终端都支持：
+## Text selection and copy
+
+In big panels, fullscreen mode, or floating windows, select and copy text
+with the mouse:
+
+1. **start** — hold the left button in the panel content area
+2. **drag** — the selected text is highlighted in reverse video
+3. **copy** — release; the text is sent to the system clipboard via OSC 52
+4. **cancel** — click elsewhere to clear the selection
+
+If the session enabled mouse reporting (tmux, vim, copilot, ...), press,
+drag, and release events are forwarded to the PTY program in real time
+instead of starting a selection, so in-app clicking and dragging work
+normally.
+
+### OSC 52 clipboard
+
+CodeTTY sets the system clipboard with the OSC 52 escape sequence. Most
+modern terminals support it:
 
 - iTerm2 ✓
 - Alacritty ✓
 - kitty ✓
 - Windows Terminal ✓
-- tmux（需要设置 `set -g set-clipboard on`）
+- tmux (needs `set -g set-clipboard on`)
 
-如果你的终端不支持 OSC 52，复制后剪贴板不会更新。
+If your terminal doesn't support OSC 52, the clipboard just won't update.
 
 ---
 
-## 工作流示例
+## AI agent state detection
 
-### 新项目开发
+CodeTTY detects AI coding agents running inside tabs by mapping each PTY's
+foreground process to a registered agent, then infers the agent's state from
+the visible screen tail:
+
+- **idle** — waiting at its prompt with nothing to do
+- **working** — actively processing (blinking indicator)
+- **blocked** — needs human input (approval, selection); shown red
+- **done** — finished working, not yet reviewed; shown green
+
+The state appears in the list-mode sidebar (one row per agent tab), on
+focus-big side-panel badges, and in tab bars. Switching to a session
+activates its priority tab automatically (blocked > done > active).
+
+Currently only **Copilot CLI** is recognized. The state-probing approach was
+inspired by [herdr](https://github.com/herdrdev/herdr).
+
+---
+
+## Scripting sessions
+
+Control sessions from scripts or other tools without attaching:
 
 ```bash
-# 启动 CodeTTY，自动创建 shell
-codetty
+# Send keys (tmux-style names: Enter, C-c, M-x, Up, ...; -l = literal)
+codetty send-keys -s mysession 'echo hi' Enter
+codetty send-keys -s dev -t 1 C-c        # target tab 1
 
-# 在 TUI 中：
-# Ctrl+A c 创建编辑器 session（输入名称 "vim"，命令 "vim ."）
-# Ctrl+A c 创建第二个 shell 用于运行测试
-# Ctrl+A n/p 在 session 之间切换
-# Ctrl+A f 全屏编辑
-# Ctrl+A f 返回多面板
+# Capture a tab's screen as plain text
+codetty capture -s dev                   # full screen
+codetty capture -s dev -n 50             # last 50 rows
+
+# Send a mouse event at cell x,y (1-based)
+# events: click1/2/3, down/up/drag1/2/3, move, wheelup, wheeldown
+codetty send-mouse -s dev click1 10 5
 ```
 
-### 接管 tmux 会话
+`send-mouse` requires the application to have mouse reporting enabled;
+SGR/X10 encoding is chosen automatically.
+
+---
+
+## Hot upgrade
+
+`codetty upgrade` replaces the running daemon binary in place using
+same-PID exec: every session, tab process, and client connection is
+preserved. Combine with named instances via `-i`.
 
 ```bash
-# 启动 CodeTTY（即使没有活跃 session）
-codetty
-
-# Ctrl+A t 打开 tmux 发现器
-# 选择需要的 tmux session 按 Enter 加载
-# 现在可以在 CodeTTY 面板中操作 tmux session
+codetty upgrade              # upgrade the local daemon to the current binary
+codetty upgrade -r gpu       # deploy the local binary to remote "gpu" and upgrade it
+codetty upgrade -r all       # upgrade all known remotes
+codetty version              # verify version and build time
 ```
 
-### SSH 远程工作
+For remote maintenance over SSH, remember the daemon socket lives in
+`XDG_RUNTIME_DIR` and named instances use `codetty-<name>.sock`:
 
 ```bash
-# 在远程服务器启动
+ssh host 'XDG_RUNTIME_DIR=/run/user/$(id -u) codetty -i default upgrade'
+```
+
+---
+
+## Workflow examples
+
+### New project development
+
+```bash
+# Start CodeTTY; a shell is created automatically
+codetty
+
+# In the TUI:
+# Ctrl+A c create an editor session (name "vim", command "vim .")
+# Ctrl+A c create a second shell for running tests
+# Ctrl+A n/p switch between sessions
+# Ctrl+A f fullscreen the editor
+# Ctrl+A f back to the multi-panel view
+```
+
+### SSH remote work
+
+```bash
+# On the remote server
 ssh user@server
 codetty new -s work -- vim project/
 
-# SSH 断开后重连
+# After the SSH connection drops
 ssh user@server
-codetty attach -s work   # 恢复之前的 vim 状态
+codetty attach -s work   # vim is exactly where you left it
 ```
 
-### 多任务管理
+### Remote agents with managed remote tabs
+
+```bash
+# .codetty.toml
+# [remote.gpu]
+# host = "gpu01"
+#
+# [[session]]
+# name = "train"
+#   [[session.tab]]
+#   name = "agent"
+#   remote = "gpu"
+#   command = ["copilot"]
+
+codetty up      # deploys codetty to gpu01 and opens the session
+# Close the laptop; the remote agent keeps working.
+# Later: codetty attach — the tab reconnects with full state.
+```
+
+### Multitasking
 
 ```bash
 codetty
 
-# 创建多个 session 后，使用 Session 管理器整理：
-# Ctrl+A w 打开管理器
-# 隐藏暂时不需要的 session（space 键切换）
-# 需要时再恢复显示
+# After creating several sessions, organize with the session manager:
+# Ctrl+A w open the manager
+# hide sessions you don't need right now (Space toggles)
+# restore them when needed
 
-# 用拖拽重排侧面板顺序（鼠标拖标题栏）
-# 用 Ctrl+A h/l 键盘重排
+# Reorder side panels by dragging title bars with the mouse
+# or with Ctrl+A h/l
 ```
 
 ---
 
-## 故障排除
+## Troubleshooting
 
-### Daemon 无法启动
+### The daemon won't start
 
 ```bash
-# 检查是否有残留的 socket 文件
-ls /tmp/codetty-*.sock
+# Check for stale socket files
+ls "${XDG_RUNTIME_DIR:-/tmp}"/codetty*.sock
 
-# 强制停止旧 daemon
+# Force-stop an old daemon
 codetty kill-server
 
-# 删除残留 socket 后重新启动
-rm /tmp/codetty-*.sock
+# Remove stale sockets and start again
+rm "${XDG_RUNTIME_DIR:-/tmp}"/codetty*.sock
 codetty
 ```
 
-### 键盘快捷键不响应
+### Keyboard shortcuts don't respond
 
-- 确认已按下 `Ctrl+A` 前缀键后松开，再按功能键
-- 检查是否在覆盖层模式（如 Session 管理器或 Tmux 发现器）中——先按 Esc 退出
-- 部分操作需要特定模式（如 `Ctrl+A m` 仅在非全屏模式下工作）
-- 在浮动窗口中，`Ctrl+A` 前缀键仍然有效
+- make sure you press `Ctrl+A`, release, then the command key
+- check whether an overlay is active (session manager, pickers) — press Esc
+  first
+- some actions require a specific mode (e.g. `Ctrl+A m` only works outside
+  fullscreen)
+- the `Ctrl+A` prefix still works inside floating windows
 
-### 显示异常
+### Rendering issues
 
-- 如果出现字符错位，可能是终端不支持宽字符或字体问题
-- 调整终端窗口大小会触发重新渲染
-- 确保终端支持 256 色或 True Color
+- misaligned characters usually mean the terminal or font lacks proper
+  wide-character support
+- resizing the terminal window forces a full re-render
+- make sure the terminal supports 256 colors or true color
 
-### 文本复制不工作
+### Copy doesn't work
 
-- 确认终端支持 OSC 52（见上文兼容列表）
-- 在 tmux 内使用时需要 `set -g set-clipboard on`
-- 部分终端需要手动开启剪贴板访问权限
+- confirm your terminal supports OSC 52 (see the compatibility list above)
+- inside tmux you need `set -g set-clipboard on`
+- some terminals require explicitly enabling clipboard access
 
-### Windows 特殊注意事项
+### Windows notes
 
-- 需要 Windows 10 version 1809 或更高版本（ConPTY 支持）
-- 建议使用 Windows Terminal（完整支持 ANSI、鼠标、OSC 52）
-- cmd.exe 和 PowerShell ISE 可能显示不正常
-
----
-
-## 版本历史
-
-### v1.0.0
-
-初始发布：
-
-- Daemon 架构与持久会话管理（detach/attach）
-- 四布局模式：列表（List，默认）、焦点放大（Focus-Big）、网格（Grid）、全屏（Fullscreen）
-- 窄终端垂直布局自适应
-- Ctrl+A 命令前缀系统
-- Shift+Tab 面板循环切换
-- Enter 打开浮动窗口
-- 覆盖层式 Session 管理器（`Ctrl+A w`）
-- Tmux Session 发现器（`Ctrl+A t`）——支持选择加载/卸除
-- 创建 session 类型选择器（普通 shell / tmux）
-- Session 重命名（预填当前名称）
-- 临时浮动 shell（`Ctrl+A m`，关闭时自动清理）
-- 面板拖拽重排
-- 侧面板 `[-]`（隐藏）和 `[x]`（关闭）标题栏按钮
-- 鼠标点击切换面板、Ctrl+click 提升大面板
-- 文本选择与 OSC 52 剪贴板复制（大面板、全屏、浮动窗口）
-- 模式栈导航（`Ctrl+A f` 智能回溯）
-- 宽字符支持
-- 跨平台 PTY（Linux/macOS/Windows）
+- requires Windows 10 version 1809 or later (ConPTY)
+- Windows Terminal is recommended (full ANSI, mouse, OSC 52 support)
+- cmd.exe and PowerShell ISE may not render correctly
+- before Windows 11 22621, ConPTY drops VT mouse sequences, so apps inside
+  CodeTTY never receive mouse events

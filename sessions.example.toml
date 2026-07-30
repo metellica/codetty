@@ -1,36 +1,38 @@
-# CodeTTY Session 配置文件示例
+# CodeTTY session config file sample
 #
-# 使用方法：
-#   1. 将本文件复制到项目根目录并重命名为 .codetty.toml
-#   2. 或复制到 ~/.config/codetty/sessions.toml 作为全局配置
-#   3. 运行 codetty up 加载配置
+# Usage:
+#   1. Copy this file to your project root and rename it to .codetty.toml
+#   2. Or copy it to ~/.config/codetty/sessions.toml as the global config
+#   3. Run `codetty up` to load it
 #
-# codetty up 采用增量创建：已有同名 session 不会重复创建。
+# `codetty up` is incremental: sessions that already exist are not recreated.
 
-# 初始布局模式：list（默认）、fullscreen
+# Initial layout mode: list (default), fullscreen
 layout = "list"
 
-# 初始聚焦的 session 名称（省略则聚焦第一个 session）
+# Session to focus initially (omit to focus the first session)
 focus = "editor"
 
-# ── 托管远程目标（可选）─────────────────────────────────────
+# ── Managed remote targets (optional) ───────────────────────
 
-# CodeTTY 使用本机 OpenSSH 客户端连接远程主机。deploy = "auto"
-# 会把当前 codetty binary 原子部署到远程 ~/.local/lib/codetty/codetty，
-# 然后通过远程 CodeTTY daemon 托管 session；网络断开不会终止远程任务。
+# CodeTTY connects to remote hosts with the local OpenSSH client.
+# deploy = "auto" atomically deploys the current codetty binary to
+# ~/.local/lib/codetty/codetty on the remote, then hosts the session on the
+# remote CodeTTY daemon; network drops do not kill remote tasks.
 #
 # [remote.gpu]
-# host = "gpu01"       # 支持 ~/.ssh/config 中的 Host alias
+# host = "gpu01"       # ~/.ssh/config Host aliases are supported
 # instance = "default"
-# deploy = "auto"      # auto（默认）或 never
+# deploy = "auto"      # auto (default) or never
 #
-# deploy = "never" 时，默认使用远程 PATH 中的 codetty，也可指定绝对路径：
+# With deploy = "never" the codetty found in the remote PATH is used by
+# default, or point at an absolute path:
 # [remote.preinstalled]
 # host = "build01"
 # deploy = "never"
 # binary = "/opt/codetty/bin/codetty"
 
-# ── 模板（可复用的 tab 配置）────────────────────────────────
+# ── Templates (reusable tab sets) ───────────────────────────
 
 [template.dev]
 
@@ -46,92 +48,95 @@ focus = "editor"
   name = "code"
   command = ["nvim", "."]
 
-  # 省略 command 则使用默认 shell
+  # Omit command to run the default shell
   [[template.dev.tab]]
   name = "shell"
 
-# ── Session 定义 ────────────────────────────────────────────
+# ── Session definitions ─────────────────────────────────────
 
-# 单 tab session：直接运行命令
+# Single-tab session: run a command directly
 [[session]]
 name = "editor"
 command = ["nvim", "."]
 
-# 指定工作目录（相对于本文件所在目录）
+# Set a working directory (relative to this file's directory)
 # [[session]]
 # name = "server"
 # command = ["npm", "run", "dev"]
 # dir = "./backend"
 
-# 托管远程 session：command 和 dir 都在远程执行/解释
+# Managed remote session: command and dir are executed/interpreted remotely
 # [[session]]
 # name = "gpu-agent"
 # remote = "gpu"
 # command = ["copilot"]
 # dir = "/workspace/project"
 #
-# remote 也可以按 tab 声明，同一 session 可混合本地与远程 tab：
+# remote can also be declared per tab; a session may mix local and remote tabs:
 # [[session]]
 # name = "dev"
 #
 #   [[session.tab]]
-#   name = "shell"              # 本地 tab
+#   name = "shell"              # local tab
 #
 #   [[session.tab]]
 #   name = "agent"
-#   remote = "gpu"              # 远程 tab（在 gpu 上运行）
+#   remote = "gpu"              # remote tab (runs on gpu)
 #   command = ["copilot"]
 #   dir = "/workspace/project"
 #
-# session 级 remote 是 tab 的默认值；单个 tab 可用 local = true 强制本地：
+# A session-level remote is the default for its tabs; force a single tab
+# local with local = true:
 # [[session]]
 # name = "gpu-work"
 # remote = "gpu"
 #
 #   [[session.tab]]
 #   name = "agent"
-#   command = ["copilot"]       # 继承 session 的 remote = "gpu"
+#   command = ["copilot"]       # inherits the session's remote = "gpu"
 #
 #   [[session.tab]]
 #   name = "notes"
-#   local = true                # 强制本地运行
+#   local = true                # force local execution
 #
-# 多个 session/tab 指向同一 host + instance 时会共享连接。
+# Sessions/tabs pointing at the same host + instance share one connection.
 
-# Raw SSH 保持为普通本地命令，不会自动升级为托管远程模式：
+# Raw SSH stays a plain local command; it is never auto-upgraded to
+# managed remote mode:
 # [[session]]
 # name = "raw-ssh"
 # command = ["ssh", "gpu01"]
 
-# 省略 command 则使用默认 shell
+# Omit command to run the default shell
 [[session]]
 name = "shell"
 
-# 启动时隐藏（可通过 Ctrl+A w 显示）
+# Hidden at startup (show it via Ctrl+A w)
 # [[session]]
 # name = "logs"
 # hidden = true
 
-# 使用模板创建多 tab session
+# Multi-tab session from a template
 # [[session]]
 # name = "frontend"
 # template = "dev"
 # dir = "./frontend"
 
-# 继承模板并定制：同名 tab 覆盖模板配置，新名字追加为新 tab
+# Inherit a template and customize: same-name tabs override the template,
+# new names are appended as new tabs
 # [[session]]
 # name = "fullstack"
 # template = "dev"
 #
 #   [[session.tab]]
 #   name = "code"
-#   command = ["nvim", "~/projects"]   # 覆盖模板中的同名 tab
+#   command = ["nvim", "~/projects"]   # overrides the template tab
 #
 #   [[session.tab]]
-#   name = "db"                        # 追加新 tab
+#   name = "db"                        # appended as a new tab
 #   command = ["docker", "compose", "up", "db"]
 
-# 内联定义多 tab session（不使用模板）
+# Inline multi-tab session (no template)
 # [[session]]
 # name = "monitoring"
 #
