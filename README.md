@@ -25,7 +25,7 @@
 - **Daemon 架构** — 会话在后台持续运行，detach/attach 不影响进程，SSH 断开后可恢复
 - **多 Tab Session** — 一个 session 内可开多个 tab；非 shell 命令退出后原地重启默认 shell，新 tab 继承当前 tab 的工作目录
 - **多布局模式** — 列表 (list，默认)、焦点放大 (focus-big)、标签页 (tabs)、全屏 (fullscreen)、浮动窗口
-- **AI Agent 状态检测** — 自动识别 tab 内运行的 AI 编码 agent（如 Copilot CLI），在标签栏/侧边栏显示 idle/working/blocked 状态，切换 session 时优先聚焦需要人工确认的 tab
+- **AI Agent 状态检测** — 自动识别 tab 内运行的 AI 编码 agent，在标签栏/侧边栏显示 idle/working/blocked 状态，切换 session 时优先聚焦需要人工确认的 tab（目前仅支持 [Copilot CLI](https://github.com/github/copilot-cli)；状态探测思路参考了 [herdr](https://github.com/herdrdev/herdr)）
 - **托管远程 Tab** — 通过系统 OpenSSH 自动部署并连接远程 CodeTTY daemon，同一 session 可混合本地与远程 tab，断网重连后任务和 agent 状态继续保留
 - **热升级** — `codetty upgrade` 原地替换 daemon 二进制（同 PID exec），所有会话和 tab 进程无缝保留，支持 `-r` 远程升级
 - **脚本化控制** — `send-keys` / `capture` / `send-mouse` 命令可从外部向会话注入按键、抓取屏幕文本、发送鼠标事件
@@ -194,3 +194,16 @@ codetty/
 - Go 1.25+
 - Linux / macOS / Windows
 - Windows 需要 Windows 10 version 1809+（ConPTY）
+
+## 平台支持状态
+
+| 平台 | 状态 |
+|------|------|
+| Linux | ✅ 比较稳定，主要开发和使用平台 |
+| macOS | ⚠️ 可用，但未经充分测试 |
+| Windows | ⚠️ 限制较多（ConPTY 能力所限，如 Win11 22621 之前鼠标事件无法穿透 ConPTY），且测试很少 |
+
+## 已知限制
+
+- Agent 状态检测目前只支持 **Copilot CLI**，其他 agent（Claude Code、Aider 等）暂未适配
+- Agent 状态探测的实现思路参考了 [herdr](https://github.com/herdrdev/herdr)
