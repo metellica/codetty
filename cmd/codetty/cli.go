@@ -154,7 +154,19 @@ func startTUIWithEndpoints(
 	}
 	iw := newImeWriter(os.Stdout)
 	model.imeWriter = iw
-	p := tea.NewProgram(model, tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(iw))
+	opts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithMouseCellMotion(), tea.WithOutput(iw)}
+	// Under SSH into Windows, read raw VT bytes (with resize/mouse record
+	// translation) instead of Bubble Tea's native console input path, which
+	// cannot see the remote terminal's mouse. No-op elsewhere.
+	vtIn := newVTStdinReader()
+	if vtIn != nil {
+		opts = append(opts, tea.WithInput(vtIn))
+		defer vtIn.restore()
+	}
+	p := tea.NewProgram(model, opts...)
+	if vtIn != nil {
+		vtIn.forwardResizes(p)
+	}
 
 	if err := conn.Subscribe(p); err != nil {
 		log.Fatalf("subscribe: %v", err)
