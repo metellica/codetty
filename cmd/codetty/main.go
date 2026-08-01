@@ -126,6 +126,7 @@ func normalizeRuneWidth() {
 
 func main() {
 	normalizeRuneWidth()
+	defer platformInit()()
 	rest, name, err := extractInstanceArgs(os.Args[1:])
 	if err != nil {
 		log.Fatal(err)
