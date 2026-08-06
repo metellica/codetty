@@ -183,10 +183,9 @@ codetty/
 | [charmbracelet/lipgloss](https://github.com/charmbracelet/lipgloss) | TUI styling and layout |
 | [charmbracelet/x/ansi](https://github.com/charmbracelet/x) | ANSI escape sequence handling |
 | [creack/pty](https://github.com/creack/pty) | Unix PTY creation and management |
-| [UserExistsError/conpty](https://github.com/UserExistsError/conpty) | Windows ConPTY |
 | [mattn/go-runewidth](https://github.com/mattn/go-runewidth) | Unicode character width |
 | [golang.org/x/term](https://pkg.go.dev/golang.org/x/term) | terminal raw mode |
-| [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys) | Unix syscalls (PTY ioctl, process management) |
+| [golang.org/x/sys](https://pkg.go.dev/golang.org/x/sys) | syscalls (Unix PTY ioctl, Windows ConPTY, process management) |
 | [BurntSushi/toml](https://github.com/BurntSushi/toml) | user config file (config.toml) parsing |
 
 ## Requirements

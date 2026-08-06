@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -354,6 +355,26 @@ func (s *DaemonSession) waitLoopForTab(tab *SessionTab, term terminal.Session) {
 	suppress := s.killed || tab.closing
 	s.mu.Unlock()
 	close(tab.doneCh)
+
+	// ConPTY tears down without emitting alt-screen/cursor cleanup when the
+	// child dies mid-TUI, leaving the mirror (and attached terminals) stuck
+	// on the alternate screen with a hidden cursor. Reset before respawning
+	// a shell into the same tab. Unix PTYs restore this via the app's own
+	// termination path, so keep this Windows-only.
+	if runtime.GOOS == "windows" && tab.Screen.InAltScreen() {
+		reset := []byte("\x1b[?1049l\x1b[?25h")
+		tab.Screen.Write(reset)
+		tab.contentSeq.Add(1)
+		s.mu.Lock()
+		isActive := s.ActiveTab >= 0 && s.ActiveTab < len(s.Tabs) && s.Tabs[s.ActiveTab] == tab
+		s.mu.Unlock()
+		if isActive {
+			s.broadcastOutput(reset)
+			if s.onOutput != nil {
+				s.onOutput(s.Name, reset)
+			}
+		}
+	}
 
 	if !suppress {
 		if !isShellCommand(tab.Command) {

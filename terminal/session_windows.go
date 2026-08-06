@@ -3,16 +3,22 @@
 package terminal
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
-	"github.com/UserExistsError/conpty"
 	"golang.org/x/sys/windows"
 )
 
 type windowsSession struct {
-	pty *conpty.ConPty
+	pty *conPty
+
+	// Mouse workaround for conhost builds < 22621, which drop VT mouse
+	// sequences written to the ConPTY input pipe: intercept them and
+	// inject native MOUSE_EVENT records instead (unless the child console
+	// runs in VT-input mode, where raw bytes reach the app verbatim).
+	filterMouse bool
+	filter      mouseFilter
+	injector    mouseInjector
 }
 
 func startPlatform(args []string, cols, rows uint16, dir string, env []string) (Session, error) {
@@ -20,25 +26,15 @@ func startPlatform(args []string, cols, rows uint16, dir string, env []string) (
 	if err != nil {
 		return nil, err
 	}
-
-	opts := []conpty.ConPtyOption{
-		conpty.ConPtyDimensions(int(cols), int(rows)),
-		conpty.ConPtyEnv(ptyEnviron(env)),
-	}
-	if dir != "" {
-		opts = append(opts, conpty.ConPtyWorkDir(dir))
-	}
-
-	cpty, err := conpty.Start(commandLine, opts...)
+	cpty, err := startConPty(commandLine, cols, rows, dir, ptyEnviron(env))
 	if err != nil {
 		return nil, fmt.Errorf("start conpty: %w", err)
 	}
-	return &windowsSession{pty: cpty}, nil
+	return &windowsSession{
+		pty:         cpty,
+		filterMouse: !conptyHasPassthrough(),
+	}, nil
 }
-
-// ProcessCwd is not supported on Windows; callers fall back to the
-// tab's recorded directory.
-func ProcessCwd(pid int) string { return "" }
 
 func windowsCommandLine(args []string) (string, error) {
 	for _, arg := range args {
@@ -49,24 +45,41 @@ func windowsCommandLine(args []string) (string, error) {
 	return windows.ComposeCommandLine(args), nil
 }
 
-func (t *windowsSession) Read(p []byte) (int, error)  { return t.pty.Read(p) }
-func (t *windowsSession) Write(p []byte) (int, error) { return t.pty.Write(p) }
-func (t *windowsSession) Close() error                { return t.pty.Close() }
-func (t *windowsSession) Kill() error                 { return t.pty.Close() }
-func (t *windowsSession) Fd() int                     { return -1 }
-func (t *windowsSession) Pid() int                    { return t.pty.Pid() }
+func (t *windowsSession) Read(p []byte) (int, error) { return t.pty.Read(p) }
+
+func (t *windowsSession) Write(p []byte) (int, error) {
+	if !t.filterMouse {
+		return t.pty.Write(p)
+	}
+	for _, seg := range t.filter.feed(p) {
+		if seg.ev == nil {
+			if _, err := t.pty.Write(seg.data); err != nil {
+				return len(p), err
+			}
+			continue
+		}
+		if t.injector.childVTI(t.pty.pi.ProcessId) {
+			// VT-input child (crossterm/ratatui style TUI): the raw
+			// sequence reaches the app through the pipe.
+			if _, err := t.pty.Write(seg.ev.raw); err != nil {
+				return len(p), err
+			}
+			continue
+		}
+		if rec, ok := t.injector.record(seg.ev); ok {
+			injectMouseRecords(t.pty.pi.ProcessId, []inputRecord{rec})
+		}
+	}
+	return len(p), nil
+}
+
+func (t *windowsSession) Close() error { return t.pty.Close() }
+func (t *windowsSession) Kill() error  { return t.pty.Kill() }
+func (t *windowsSession) Fd() int      { return -1 }
+func (t *windowsSession) Pid() int     { return t.pty.Pid() }
 
 func (t *windowsSession) Resize(cols, rows uint16) error {
-	return t.pty.Resize(int(cols), int(rows))
+	return t.pty.Resize(cols, rows)
 }
 
-func (t *windowsSession) Wait() error {
-	exitCode, err := t.pty.Wait(context.Background())
-	if err != nil {
-		return err
-	}
-	if exitCode != 0 {
-		return fmt.Errorf("process exited with code %d", exitCode)
-	}
-	return nil
-}
+func (t *windowsSession) Wait() error { return t.pty.Wait() }

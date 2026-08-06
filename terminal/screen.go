@@ -73,6 +73,12 @@ func (s *ScreenMirror) Mode() vt10x.ModeFlag {
 	return s.term.Mode()
 }
 
+// InAltScreen reports whether the mirrored application is currently on the
+// alternate screen buffer (DECSET 1049/47).
+func (s *ScreenMirror) InAltScreen() bool {
+	return s.Mode()&vt10x.ModeAltScreen != 0
+}
+
 // TailText returns the bottom n rows of the screen as plain text (lines
 // joined by newlines, trailing spaces trimmed). n <= 0 returns the whole
 // screen. Wide-character continuation cells (NUL) are skipped.
