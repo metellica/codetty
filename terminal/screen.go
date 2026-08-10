@@ -79,6 +79,18 @@ func (s *ScreenMirror) InAltScreen() bool {
 	return s.Mode()&vt10x.ModeAltScreen != 0
 }
 
+// Title returns the window title set by the application via OSC 0/2.
+// AI agents publish their run state in the title (e.g. Claude Code's
+// spinner prefix), which agent detection uses as its primary signal.
+func (s *ScreenMirror) Title() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.term.Lock()
+	defer s.term.Unlock()
+	return s.term.Title()
+}
+
 // TailText returns the bottom n rows of the screen as plain text (lines
 // joined by newlines, trailing spaces trimmed). n <= 0 returns the whole
 // screen. Wide-character continuation cells (NUL) are skipped.

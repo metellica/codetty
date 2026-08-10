@@ -1,11 +1,13 @@
 // Package agentdetect detects AI coding agents running inside PTY sessions
-// and infers their state (idle/working/blocked) from the visible screen tail.
+// and infers their state (idle/working/blocked) from the OSC window title
+// and the visible screen tail.
 //
 // Detection has two parts:
 //   - identification: map the PTY's foreground process to a registered agent
 //     (see registry.go and proc_*.go)
-//   - state inference: match the screen tail against the agent's declarative
-//     rules (see rules.go), debounced by a per-tab Detector state machine.
+//   - state inference: match the OSC title and screen tail against the
+//     agent's declarative rules (see rules.go), debounced by a per-tab
+//     Detector state machine.
 package agentdetect
 
 import "time"

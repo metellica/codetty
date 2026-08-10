@@ -903,7 +903,9 @@ The state appears in the list-mode sidebar (one row per agent tab), on
 focus-big side-panel badges, and in tab bars. Switching to a session
 activates its priority tab automatically (blocked > done > active).
 
-Currently only **Copilot CLI** is recognized. The state-probing approach was
+Currently **Claude Code**, **Codex CLI**, and **Copilot CLI** are recognized.
+Each agent is detected by its process name and its on-screen prompt/spinner/
+approval patterns. The state-probing approach was
 inspired by [herdr](https://github.com/herdrdev/herdr).
 
 ---

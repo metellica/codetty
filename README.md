@@ -25,7 +25,7 @@ A local terminal multiplexer, similar to tmux/screen. A background daemon manage
 - **Daemon architecture** — sessions keep running in the background; detach/attach never disturbs the processes, so you can recover after an SSH drop
 - **Multi-tab sessions** — a session can hold multiple tabs; when a non-shell command exits, the default shell respawns in place, and new tabs inherit the current tab's working directory
 - **Multiple layout modes** — list (default), focus-big, tabs, fullscreen, floating windows
-- **AI agent state detection** — automatically recognizes AI coding agents running inside tabs and shows idle/working/blocked state in the tab bar/sidebar; switching sessions focuses the tab that needs human input first (currently only [Copilot CLI](https://github.com/github/copilot-cli) is supported; the state-probing approach was inspired by [herdr](https://github.com/herdrdev/herdr))
+- **AI agent state detection** — automatically recognizes AI coding agents running inside tabs and shows idle/working/blocked state in the tab bar/sidebar; switching sessions focuses the tab that needs human input first (supports [Claude Code](https://github.com/anthropics/claude-code), [Codex CLI](https://github.com/openai/codex), and [Copilot CLI](https://github.com/github/copilot-cli); the state-probing approach was inspired by [herdr](https://github.com/herdrdev/herdr))
 - **Managed remote tabs** — auto-deploys and connects to a remote CodeTTY daemon over the system OpenSSH client; a session can mix local and remote tabs, and tasks plus agent state survive network drops
 - **Hot upgrade** — `codetty upgrade` replaces the daemon binary in place (same-PID exec), keeping every session and tab process alive; `-r` upgrades remotes
 - **Scriptable control** — `send-keys` / `capture` / `send-mouse` inject keystrokes, capture screen text, and send mouse events from outside
@@ -204,5 +204,5 @@ codetty/
 
 ## Known limitations
 
-- Agent state detection currently only supports **Copilot CLI**; other agents (Claude Code, Aider, etc.) are not yet supported
+- Agent state detection currently supports **Claude Code**, **Codex CLI**, and **Copilot CLI**; other agents (Aider, Cursor, etc.) are not yet supported
 - The agent state-probing approach was inspired by [herdr](https://github.com/herdrdev/herdr)

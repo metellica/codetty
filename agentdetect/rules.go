@@ -61,12 +61,27 @@ func Regex(pattern string) Matcher {
 	return func(text, _ string) bool { return re.MatchString(text) }
 }
 
-// Rule maps a screen-tail pattern to an agent state. Higher priority rules
-// win; the first matching rule (in descending priority order) decides.
+// Region selects which text a rule matches against.
+type Region int
+
+const (
+	// RegionScreen matches the visible screen tail (default).
+	RegionScreen Region = iota
+	// RegionTitle matches the OSC window title set by the application.
+	// Agents like Claude Code and Codex publish their run state in the
+	// title (spinner prefix while working), which is more reliable than
+	// screen text because it never lingers in the transcript.
+	RegionTitle
+)
+
+// Rule maps a screen-tail or title pattern to an agent state. Higher
+// priority rules win; the first matching rule (in descending priority
+// order) decides.
 type Rule struct {
 	ID       string
 	State    AgentState
 	Priority int
+	Region   Region
 	Match    Matcher
 }
 
@@ -89,11 +104,20 @@ func (spec *AgentSpec) sortRules() {
 	})
 }
 
-// Evaluate returns the raw state for the given screen tail text.
-func (spec *AgentSpec) Evaluate(tail string) AgentState {
-	lower := strings.ToLower(tail)
+// Evaluate returns the raw state for the given OSC title and screen tail
+// text. Title rules only run when the title is non-empty.
+func (spec *AgentSpec) Evaluate(title, tail string) AgentState {
+	lowerTail := strings.ToLower(tail)
+	lowerTitle := strings.ToLower(title)
 	for _, r := range spec.Rules {
-		if r.Match(tail, lower) {
+		text, lower := tail, lowerTail
+		if r.Region == RegionTitle {
+			if title == "" {
+				continue
+			}
+			text, lower = title, lowerTitle
+		}
+		if r.Match(text, lower) {
 			return r.State
 		}
 	}

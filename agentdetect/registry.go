@@ -9,6 +9,8 @@ import (
 var registry = func() []*AgentSpec {
 	specs := []*AgentSpec{
 		copilotSpec(),
+		claudeSpec(),
+		codexSpec(),
 	}
 	for _, spec := range specs {
 		spec.sortRules()
