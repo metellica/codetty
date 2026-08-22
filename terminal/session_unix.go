@@ -88,7 +88,7 @@ func RecoverSession(fd int, pid int) Session {
 // pty (creack/pty uses Setsid+Setctty). Only PIDs that are direct children
 // of this process are returned, so Wait4 on the result is valid.
 func ptyChildPid(fd int) int {
-	sid, err := unix.IoctlGetInt(fd, unix.TIOCGSID)
+	sid, err := unix.IoctlGetInt(fd, tiocgsid)
 	if err != nil || sid <= 0 {
 		return 0
 	}
