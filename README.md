@@ -2,6 +2,8 @@
 
 A local terminal multiplexer, similar to tmux/screen. A background daemon manages PTY sessions while a TUI frontend provides multi-panel interaction. Sessions keep running after SSH disconnects or the terminal closes — just re-attach to pick up where you left off.
 
+![CodeTTY Focus-Big Mode](demo/screenshot/focus-big-mode.jpg)
+
 ## Architecture
 
 ```
@@ -24,7 +26,7 @@ A local terminal multiplexer, similar to tmux/screen. A background daemon manage
 
 - **Daemon architecture** — sessions keep running in the background; detach/attach never disturbs the processes, so you can recover after an SSH drop
 - **Multi-tab sessions** — a session can hold multiple tabs; when a non-shell command exits, the default shell respawns in place, and new tabs inherit the current tab's working directory
-- **Multiple layout modes** — list (default), focus-big, tabs, fullscreen, floating windows
+- **Multiple layout modes** — focus-big (default), list, tabs, fullscreen, floating windows
 - **AI agent state detection** — automatically recognizes AI coding agents running inside tabs and shows idle/working/blocked state in the tab bar/sidebar; switching sessions focuses the tab that needs human input first (supports [Claude Code](https://github.com/anthropics/claude-code), [Codex CLI](https://github.com/openai/codex), and [Copilot CLI](https://github.com/github/copilot-cli); the state-probing approach was inspired by [herdr](https://github.com/herdrdev/herdr))
 - **Managed remote tabs** — auto-deploys and connects to a remote CodeTTY daemon over the system OpenSSH client; a session can mix local and remote tabs, and tasks plus agent state survive network drops
 - **Hot upgrade** — `codetty upgrade` replaces the daemon binary in place (same-PID exec), keeping every session and tab process alive; `-r` upgrades remotes
@@ -39,6 +41,16 @@ A local terminal multiplexer, similar to tmux/screen. A background daemon manage
 - **Automatic daemon** — starts on first run, exits when all sessions have ended
 - **Named instances** — `-i/--instance` runs multiple isolated daemons on one host (like `tmux -L`)
 - **Session config files** — define session/tab layouts in `.codetty.toml`, with reusable tab templates and remote target declarations
+
+## Screenshots & Layouts
+
+| Focus-Big Mode (Default) | List Mode |
+|:---:|:---:|
+| ![Focus-Big Mode](demo/screenshot/focus-big-mode.jpg)<br><sub>*Main workspace with live stacked side panels*</sub> | ![List Mode](demo/screenshot/list-mode.jpg)<br><sub>*AI agent state detection (`■ blocked` / `● working`) & session sidebar*</sub> |
+
+| Tabs Mode | Session Switcher Modal |
+|:---:|:---:|
+| ![Tabs Mode](demo/screenshot/tabs-mode.jpg)<br><sub>*Compact top tab bar with per-session agent badges*</sub> | ![Session Switcher](demo/screenshot/session-switcher.jpg)<br><sub>*Fast keyboard switcher with live panel previews (`Shift+Tab` / `Ctrl+A w`)*</sub> |
 
 ## Quick start
 

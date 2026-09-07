@@ -1,0 +1,34 @@
+# CodeTTY Demo Session Configuration (Clean / De-identified)
+# Run with parameter isolation:
+#   codetty -i demo up -f demo/demo.toml
+
+layout = "focus-big"
+focus = "workspace"
+
+[[session]]
+name = "workspace"
+  [[session.tab]]
+  name = "copilot"
+  command = ["bash", "bin/copilot"]
+
+  [[session.tab]]
+  name = "tests"
+  command = ["bash", "mock_test.sh"]
+
+[[session]]
+name = "claude-refactor"
+  [[session.tab]]
+  name = "claude"
+  command = ["bash", "bin/claude"]
+
+[[session]]
+name = "api-gateway"
+  [[session.tab]]
+  name = "server"
+  command = ["bash", "mock_server.sh"]
+
+[[session]]
+name = "metrics"
+  [[session.tab]]
+  name = "top"
+  command = ["bash", "mock_top.sh"]

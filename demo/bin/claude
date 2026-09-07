@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Mock Claude Code for CodeTTY Demo (Clean / De-identified)
+export TERM=xterm-256color
+clear
+
+# OSC title for working state detection
+printf "\033]0;⠐ Claude Code\007"
+
+printf "\033[1;36mdeveloper@devbox\033[0m:\033[1;34m~/workspace/nexus\033[0m$ claude\n\n"
+printf "\033[1;38;5;208m✳ Claude Code\033[0m \033[90mv0.2.29\033[0m\n"
+printf "Task: Refactor concurrent connection pool in \033[36mpkg/worker/pool.go\033[0m\n\n"
+printf "Reading \033[90mpkg/worker/pool.go\033[0m (148 lines)...\n"
+printf "Reading \033[90mpkg/worker/pool_test.go\033[0m (85 lines)...\n\n"
+
+# Spinner loop
+frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+braille=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+i=0
+while true; do
+    f="${frames[$i]}"
+    b="${braille[$i]}"
+    # Update OSC title to keep agentdetect in working state
+    printf "\033]0;%s Claude Code\007" "$b"
+    
+    # Render in-terminal thinking status
+    printf "\r\033[K\033[38;5;208m✻ Thinking…\033[0m analyzing mutex contention in Pool.Acquire() \033[90m(%s)\033[0m\n" "$f"
+    printf "\033[90m  esc to interrupt · ctrl+c to exit\033[0m\033[1A"
+    
+    i=$(( (i + 1) % 10 ))
+    sleep 0.5
+done
