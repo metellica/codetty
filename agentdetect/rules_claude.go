@@ -35,7 +35,75 @@ func claudeSpec() *AgentSpec {
 				Priority: 1100,
 				Region:   RegionTitle,
 				// Braille spinner frame prefix, e.g. "⠐ Claude Code".
-				Match: Regex(`^[\x{2800}-\x{28FF}] `),
+				// Claude Code >= 2.1.228 switched its busy spinner to
+				// half-circle glyphs (U+25D0-25D3); match both ranges
+				// (matches herdr's osc_title_working).
+				Match: Regex(`^[\x{2800}-\x{28FF}\x{25D0}-\x{25D3}] `),
+			},
+			{
+				ID:       "background_agents_working",
+				State:    StateWorking,
+				Priority: 900,
+				// "* Waiting for N background agents to finish" (matches
+				// herdr's background_agents_working rule). Uses the same
+				// activity-marker glyph set as working_spinner below.
+				Match: Regex(`(?m)^\s*[*·✢✶✻✽]\s+Waiting for [1-9]\d* background agents? to finish\s*$`),
+			},
+			{
+				ID:       "background_mcp_task_working",
+				State:    StateWorking,
+				Priority: 895,
+				// "<marker> ... · N MCP tasks still running" activity
+				// summary (matches herdr's background_mcp_task_working).
+				// Guarded against overlapping live blocker text so a
+				// stale summary line above an active prompt can't mask
+				// it as merely "working".
+				Match: All(
+					Regex(`(?m)^[*·✢✶✻✽][ \t]+\S.*·\s*[1-9]\d*\s+MCP\s+tasks?\s+still\s+running\s*$`),
+					Not(Contains("do you want to proceed?")),
+					Not(Contains("esc to cancel")),
+					Not(Contains("waiting for permission")),
+					Not(Contains("do you want to allow this connection?")),
+					Not(Contains("tab to amend")),
+					Not(Contains("ctrl+e to explain")),
+				),
+			},
+			{
+				ID:       "btw_overlay_working",
+				State:    StateWorking,
+				Priority: 890,
+				// The "/btw" side-conversation overlay shows its own
+				// "Esc to close" footer instead of the usual working
+				// hints (matches herdr's btw_overlay_working).
+				Match: All(
+					Regex(`(?m)^\s*/btw(?:\s|$)`),
+					Contains("esc to close"),
+				),
+			},
+			{
+				ID:       "dynamic_workflow_prompt",
+				State:    StateBlocked,
+				Priority: 980,
+				// "Run a dynamic workflow?" confirmation (matches
+				// herdr's dynamic_workflow_prompt).
+				Match: Contains("run a dynamic workflow?", "esc to cancel"),
+			},
+			{
+				ID:       "mcp_elicitation_prompt",
+				State:    StateBlocked,
+				Priority: 980,
+				// MCP elicitation dialogs (elicitation/create) show
+				// Accept/Decline controls with an "Esc to cancel"
+				// footer but no Enter hint, so form_blocker can't see
+				// them (matches herdr's mcp_elicitation_prompt).
+				Match: All(
+					Contains("esc to cancel"),
+					Regex(`(?im)^\s*MCP server ["“].+["”] requests your input\s*$`),
+					Any(
+						Regex(`(?m)^\s*❯?\s*Accept\b`),
+						Regex(`(?m)^\s*❯?\s*Decline\b`),
+					),
+				),
 			},
 			{
 				ID:       "form_blocker",
@@ -80,6 +148,10 @@ func claudeSpec() *AgentSpec {
 							Regex(`(?m)^\s*❯?\s*\d+\. Yes\b`),
 							Regex(`(?m)^\s*❯?\s*\d+\. No\b`),
 						),
+						// Plan-mode review/interview prompts (matches
+						// herdr's legacy_no_prompt_blocker phrases).
+						Contains("review your answers"),
+						Contains("skip interview and plan immediately"),
 					),
 					// A visible empty ❯ input box means Claude is idle
 					// at its prompt; blocker-looking text above it is

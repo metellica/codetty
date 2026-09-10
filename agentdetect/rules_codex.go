@@ -9,7 +9,8 @@ package agentdetect
 //   - idle:    any other non-empty title
 //
 // Screen-text rules cover approval prompts and act as a working fallback:
-//   - blocked: "Allow command?", "press Enter to confirm or Esc to
+//   - blocked: workspace trust prompt, "Update available!" startup
+//     dialog, "Allow command?", "press Enter to confirm or Esc to
 //     cancel", grant-permissions menus, generic [y/n] prompts
 //   - working: the status line "• Working (… esc to interrupt)" rendered
 //     near the bottom during model processing
@@ -33,6 +34,30 @@ func codexSpec() *AgentSpec {
 				Region:   RegionTitle,
 				// Braille spinner frame surrounded by spaces/edges.
 				Match: Regex(`(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)`),
+			},
+			{
+				ID:       "trust_directory",
+				State:    StateBlocked,
+				Priority: 950,
+				// Startup workspace-trust prompt (matches herdr's
+				// trust_directory rule).
+				Match: Regex(`(?is)do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory\?`),
+			},
+			{
+				ID:       "startup_update",
+				State:    StateBlocked,
+				Priority: 950,
+				// "Update available!" startup dialog blocks until the
+				// user skips or updates (matches herdr's startup_update
+				// rule; regression from #3301/#3632/#3517 where quoted
+				// confirmation text upstream could mask this as idle).
+				Match: All(
+					Contains("update available!", "update now"),
+					Any(
+						Regex(`(?i)skip\s+until\s+next\s+version`),
+						Regex(`(?i)press enter to continue\s*$`),
+					),
+				),
 			},
 			{
 				ID:       "strong_blocker",

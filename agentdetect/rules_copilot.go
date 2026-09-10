@@ -37,6 +37,19 @@ func copilotSpec() *AgentSpec {
 				),
 			},
 			{
+				ID:       "background_agents_working",
+				State:    StateWorking,
+				Priority: 210,
+				// Copilot renders "<icon> Waiting for background agents"
+				// while a background agent task is running (matches
+				// herdr's background_agents_working rule, added after
+				// #3291/#3403). The icon is cli-spinners' "toggle9"
+				// spinner, which alternates between ◉ and ◎ — herdr's
+				// manifest only checked ◎, so we match both frames to
+				// avoid missing every other poll.
+				Match: Regex(`(?m)^\s*[◉◎]\s+Waiting for background agents(?:\s|·|$)`),
+			},
+			{
 				ID:       "working_cancel_hint",
 				State:    StateWorking,
 				Priority: 100,

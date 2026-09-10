@@ -63,6 +63,22 @@ func TestCopilotIdlePromptOverridesStaleWorking(t *testing.T) {
 	}
 }
 
+func TestCopilotBackgroundAgentsWorking(t *testing.T) {
+	// Both toggle9 spinner frames (◉/◎) must be recognized (issue: the
+	// status bar was seen showing ◉, but the upstream herdr manifest
+	// this rule mirrors only checked ◎).
+	screens := []string{
+		"◉ Waiting for background agents · 94.8 KiB esc stop agents",
+		"◎ Waiting for background agents · 12.0 KiB esc stop agents",
+		"◎ Waiting for background agents\n",
+	}
+	for _, screen := range screens {
+		if got := copilot().Evaluate("", screen); got != StateWorking {
+			t.Errorf("Evaluate(%q) = %q, want working", screen, got)
+		}
+	}
+}
+
 func TestBlockedOutranksWorking(t *testing.T) {
 	// Both hints on screen: blocker rule has higher priority.
 	screen := "Esc to cancel · Enter to confirm"
@@ -270,6 +286,68 @@ func TestClaudePastTenseCompletionIsNotWorking(t *testing.T) {
 	}
 }
 
+func TestClaudeTitleWorkingHalfCircleSpinner(t *testing.T) {
+	// Claude Code >= 2.1.228 switched its title spinner to half-circle
+	// glyphs (U+25D0-25D3) instead of Braille frames.
+	if got := claude().Evaluate("◑ Claude Code", "❯ \n"); got != StateWorking {
+		t.Errorf("Evaluate(title=half-circle) = %q, want working", got)
+	}
+}
+
+func TestClaudeBackgroundAgentsWorking(t *testing.T) {
+	screens := []string{
+		"✻ Waiting for 3 background agents to finish",
+		"* Waiting for 1 background agent to finish",
+	}
+	for _, screen := range screens {
+		if got := claude().Evaluate("", screen); got != StateWorking {
+			t.Errorf("Evaluate(%q) = %q, want working", screen, got)
+		}
+	}
+}
+
+func TestClaudeBackgroundMCPTaskWorking(t *testing.T) {
+	screen := "✻ Running tests · 2 MCP tasks still running"
+	if got := claude().Evaluate("", screen); got != StateWorking {
+		t.Errorf("Evaluate(%q) = %q, want working", screen, got)
+	}
+}
+
+func TestClaudeBtwOverlayWorking(t *testing.T) {
+	screen := "/btw ask a quick question\n\nEsc to close"
+	if got := claude().Evaluate("", screen); got != StateWorking {
+		t.Errorf("Evaluate(%q) = %q, want working", screen, got)
+	}
+}
+
+func TestClaudeDynamicWorkflowPromptBlocked(t *testing.T) {
+	screen := "Run a dynamic workflow?\n\nEsc to cancel"
+	if got := claude().Evaluate("", screen); got != StateBlocked {
+		t.Errorf("Evaluate(%q) = %q, want blocked", screen, got)
+	}
+}
+
+func TestClaudeMCPElicitationPromptBlocked(t *testing.T) {
+	screen := "MCP server \"linear\" requests your input\n\n" +
+		"❯ Accept\n  Decline\n\n" +
+		"Esc to cancel"
+	if got := claude().Evaluate("", screen); got != StateBlocked {
+		t.Errorf("Evaluate(%q) = %q, want blocked", screen, got)
+	}
+}
+
+func TestClaudeLegacyReviewPromptBlocked(t *testing.T) {
+	screens := []string{
+		"Please review your answers\n\n❯ 1. Looks good\n  2. Edit",
+		"Skip interview and plan immediately\n\n❯ 1. Yes\n  2. No",
+	}
+	for _, screen := range screens {
+		if got := claude().Evaluate("", screen); got != StateBlocked {
+			t.Errorf("Evaluate(%q) = %q, want blocked", screen, got)
+		}
+	}
+}
+
 func TestClaudeTrustFolderPromptBlocked(t *testing.T) {
 	// Captured live from Claude Code v2.1.223 startup in a new dir.
 	screen := "Accessing workspace:\n\n" +
@@ -367,6 +445,24 @@ func codex() *AgentSpec {
 	spec := codexSpec()
 	spec.sortRules()
 	return spec
+}
+
+func TestCodexTrustDirectoryPromptBlocked(t *testing.T) {
+	screen := "> You are in /home/user/project\n\n" +
+		"Do you trust the contents of this directory?\n\n" +
+		"1. Yes, proceed\n2. No, exit"
+	if got := codex().Evaluate("", screen); got != StateBlocked {
+		t.Errorf("Evaluate(%q) = %q, want blocked", screen, got)
+	}
+}
+
+func TestCodexStartupUpdatePromptBlocked(t *testing.T) {
+	screen := "Update available! v1.2.3 -> v1.3.0\n\n" +
+		"Update now\nSkip until next version\n\n" +
+		"Press enter to continue"
+	if got := codex().Evaluate("", screen); got != StateBlocked {
+		t.Errorf("Evaluate(%q) = %q, want blocked", screen, got)
+	}
 }
 
 func TestCodexBlockedOnPermissionPrompt(t *testing.T) {
