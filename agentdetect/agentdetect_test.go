@@ -609,3 +609,57 @@ func TestDetectorNeedsScan(t *testing.T) {
 		t.Fatal("pending idle hold must keep scanning")
 	}
 }
+
+func TestCodexTrustFolderDialogBlocked(t *testing.T) {
+	screen := "Folder access\n\nTrust this folder?\n" +
+		"Codex can read, edit, and run files here\n\n" +
+		"› 1. Trust and continue\n  2. Exit\n\nenter continue"
+	if got := codex().Evaluate("", screen); got != StateBlocked {
+		t.Errorf("Evaluate(trust folder) = %q, want blocked", got)
+	}
+}
+
+func TestCodexPluginSearchPopupBlocked(t *testing.T) {
+	screen := "› @pl\n\nAll Results   Filesystem Only   Plugins\n"
+	if got := codex().Evaluate("", screen); got != StateBlocked {
+		t.Errorf("Evaluate(mention popup) = %q, want blocked", got)
+	}
+}
+
+func TestCodexWorkingStatusLineVariants(t *testing.T) {
+	screens := []string{
+		// Real codex separator and a dynamic activity label.
+		"• Working (12s • esc to interrupt)\n\n› Ask Codex\n\n  gpt-5 · 90% left",
+		"• Reading files (1m 05s • esc to interrupt)\n\n› ",
+		// Reduced-motion/remapped hint: only the timer suffix remains.
+		"Reading files (5s)\n\n› ",
+		// Queued inputs may sit below the status.
+		"• Working (3s • esc to interrupt)\n  • Queued follow-up inputs\n    ↳ next\n\n› ",
+	}
+	for _, screen := range screens {
+		if got := codex().Evaluate("", screen); got != StateWorking {
+			t.Errorf("Evaluate(%q) = %q, want working", screen, got)
+		}
+	}
+}
+
+func TestCodexStaleStatusLineNotWorking(t *testing.T) {
+	screens := []string{
+		// A response block after the status makes it stale.
+		"• Working (12s • esc to interrupt)\n• Done.\n\n› ",
+		"• Reconnect failed — check the endpoint, then relaunch (12s)\n\n› ",
+	}
+	for _, screen := range screens {
+		if got := codex().Evaluate("", screen); got == StateWorking {
+			t.Errorf("Evaluate(%q) = working, want not working", screen)
+		}
+	}
+}
+
+func TestCodexWeakBlockerSuppressedByLivePrompt(t *testing.T) {
+	// Transcript text above a live composer must not read as a prompt.
+	screen := "• Overwrite file? [y/n]\n\n› Ask Codex"
+	if got := codex().Evaluate("", screen); got == StateBlocked {
+		t.Errorf("Evaluate(%q) = blocked, want not blocked", screen)
+	}
+}
