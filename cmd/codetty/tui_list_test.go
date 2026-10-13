@@ -32,7 +32,7 @@ func TestListMode_ShiftTabCyclesListThenBigPanel(t *testing.T) {
 	m := newListTestModel()
 	m.selected = 1
 
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	if !m.listFocus {
 		t.Fatal("listFocus should be true after Shift+Tab")
 	}
@@ -41,17 +41,17 @@ func TestListMode_ShiftTabCyclesListThenBigPanel(t *testing.T) {
 	}
 
 	// Continues through the list…
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	if !m.listFocus || m.listCursor != 1 {
 		t.Fatalf("listFocus/cursor = %v/%d, want true/1", m.listFocus, m.listCursor)
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	if !m.listFocus || m.listCursor != 2 {
 		t.Fatalf("listFocus/cursor = %v/%d, want true/2", m.listFocus, m.listCursor)
 	}
 
 	// …and returns to the big panel after the last entry.
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	if m.listFocus {
 		t.Fatal("listFocus should return to big panel after last entry")
 	}
@@ -62,7 +62,7 @@ func TestListMode_ShiftTabCyclesListThenBigPanel(t *testing.T) {
 
 func TestListKey_UpDownEnterSwitchesSelection(t *testing.T) {
 	m := newListTestModel()
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 
 	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
 	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
@@ -93,7 +93,7 @@ func TestListKey_UpDownEnterSwitchesSelection(t *testing.T) {
 
 func TestListKey_EscapeAndOtherKeysReturnFocus(t *testing.T) {
 	m := newListTestModel()
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
 
 	m.handleKey(tea.KeyMsg{Type: tea.KeyEscape})
@@ -104,7 +104,7 @@ func TestListKey_EscapeAndOtherKeysReturnFocus(t *testing.T) {
 		t.Fatalf("selected = %d, want 0 (Escape must not switch)", m.selected)
 	}
 
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	if m.listFocus {
 		t.Fatal("printable key should drop list focus")
@@ -164,7 +164,7 @@ func TestListKey_EnterOnSessionUsePriorityTab(t *testing.T) {
 	m.sessions[1].ActiveTab = 0
 
 	// Shift+Tab lands on session with noticed agent (beta has blocked).
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	if m.listCursor != 1 || m.listCursorTab != -1 {
 		t.Fatalf("cursor = (%d, %d), want (1, -1)", m.listCursor, m.listCursorTab)
 	}
@@ -203,7 +203,7 @@ func TestListKey_EnterOnHeaderDoesNotSwitchTab(t *testing.T) {
 	}
 	m.sessions[1].ActiveTab = 0
 
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	m.handleKey(tea.KeyMsg{Type: tea.KeyDown}) // beta header
 	m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 
@@ -231,13 +231,13 @@ func TestListMode_ShiftTabPrioritizesAttentionAgents(t *testing.T) {
 		{2, -1}, {0, -1}, {1, -1},
 	}
 	for i, want := range steps {
-		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+		pressPrefixTab(m)
 		if !m.listFocus || m.listCursor != want.sess || m.listCursorTab != want.tab {
 			t.Fatalf("step %d: focus/cursor = %v/(%d, %d), want true/(%d, %d)",
 				i, m.listFocus, m.listCursor, m.listCursorTab, want.sess, want.tab)
 		}
 	}
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	if m.listFocus {
 		t.Fatal("listFocus should return to big panel after last entry")
 	}

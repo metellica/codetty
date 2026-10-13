@@ -488,7 +488,7 @@ func TestNumberKeyActivatesPriorityTab(t *testing.T) {
 // cycling in tabs mode switches to the pending agent tab.
 func TestTabsModeShiftTabActivatesPriorityTab(t *testing.T) {
 	m := newAgentNavTestModel(t, modeTabs)
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	if m.selected != 1 {
 		t.Fatalf("selected = %d, want 1", m.selected)
 	}

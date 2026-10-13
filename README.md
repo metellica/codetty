@@ -50,7 +50,7 @@ A local terminal multiplexer, similar to tmux/screen. A background daemon manage
 
 | Tabs Mode | Session Switcher Modal |
 |:---:|:---:|
-| ![Tabs Mode](demo/screenshot/tabs-mode.jpg)<br><sub>*Compact top tab bar with per-session agent badges*</sub> | ![Session Switcher](demo/screenshot/session-switcher.jpg)<br><sub>*Fast keyboard switcher with live panel previews (`Shift+Tab` / `Ctrl+A w`)*</sub> |
+| ![Tabs Mode](demo/screenshot/tabs-mode.jpg)<br><sub>*Compact top tab bar with per-session agent badges*</sub> | ![Session Switcher](demo/screenshot/session-switcher.jpg)<br><sub>*Fast keyboard switcher with live panel previews (`Ctrl+A Tab` / `Ctrl+A w`)*</sub> |
 
 ## Quick start
 

@@ -88,7 +88,7 @@ TUI Keys (%s prefix):
   1-9     Jump to session by number
 
 Other keys:
-  Shift+Tab           Switch to next session
+  Ctrl+A Tab          Switch to next session
                       (list mode: cycle through list entries, ↑/↓ + Enter to switch)
                       (fullscreen: open session switcher with live previews)
   Mouse click         Select session panel

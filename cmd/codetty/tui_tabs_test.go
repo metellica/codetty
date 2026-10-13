@@ -62,7 +62,7 @@ func TestTabs_ShiftTabCyclesSessions(t *testing.T) {
 	m := newTabsTestModel()
 
 	for i, want := range []int{1, 2, 0} {
-		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+		pressPrefixTab(m)
 		if m.selected != want {
 			t.Fatalf("press %d: selected = %d, want %d", i+1, m.selected, want)
 		}

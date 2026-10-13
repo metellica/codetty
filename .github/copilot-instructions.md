@@ -54,7 +54,8 @@ lifetime (like tmux). Uses Unix PTY on Linux/macOS and Windows ConPTY on Windows
   handling with content coordinates offset one row down.
 - `cmd/codetty/tui_list.go` renders list mode (the default): big panel on
   the left, a session-list sidebar on the right showing per-tab agent
-  states. Shift+Tab cycles through list entries then back to the big
+  states. Ctrl+A Tab (prefix + Tab; bare Shift+Tab is forwarded to
+  the PTY) cycles through list entries then back to the big
   panel; ↑/↓ + Enter switch sessions, agent-row clicks activate the tab.
 - `cmd/codetty/tui_session.go` renders terminal content from vt10x state to
   ANSI strings. Handles cursor rendering, reverse video, wide characters.

@@ -229,6 +229,7 @@ func TestTUIKeyToBytes_CommonMappings(t *testing.T) {
 	}{
 		{name: "enter", msg: tea.KeyMsg{Type: tea.KeyEnter}, want: []byte{'\r'}},
 		{name: "tab", msg: tea.KeyMsg{Type: tea.KeyTab}, want: []byte{'\t'}},
+		{name: "shift-tab", msg: tea.KeyMsg{Type: tea.KeyShiftTab}, want: []byte{0x1b, '[', 'Z'}},
 		{name: "escape", msg: tea.KeyMsg{Type: tea.KeyEscape}, want: []byte{0x1b}},
 		{name: "up", msg: tea.KeyMsg{Type: tea.KeyUp}, want: []byte{0x1b, '[', 'A'}},
 		{name: "ctrl-c", msg: tea.KeyMsg{Type: tea.KeyCtrlC}, want: []byte{0x03}},
@@ -790,7 +791,7 @@ func TestHandleKey_ShiftTabClosesFloatingAndFocusesNext(t *testing.T) {
 			t.Fatalf("floatingIdx = %d, want 0", m.floatingIdx)
 		}
 
-		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+		pressPrefixTab(m)
 
 		if m.floatingIdx != -1 {
 			t.Fatalf("floatingIdx = %d, want -1 (closed)", m.floatingIdx)
@@ -809,7 +810,7 @@ func TestHandleKey_ShiftTabClosesFloatingAndFocusesNext(t *testing.T) {
 		m.selected = 2
 		m.openFloating(2)
 
-		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+		pressPrefixTab(m)
 
 		if m.floatingIdx != -1 {
 			t.Fatalf("floatingIdx = %d, want -1 (closed)", m.floatingIdx)

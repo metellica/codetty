@@ -86,10 +86,6 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 			}
 			return m.handlePrefixKey(msg)
 		}
-		if msg.Type == tea.KeyShiftTab {
-			m.closeFloatingFocusNext()
-			return nil
-		}
 		// Tab switching in floating mode
 		if msg.Type == tea.KeyShiftLeft || msg.Type == tea.KeyShiftRight {
 			ordered := m.orderedSessions()
@@ -117,49 +113,6 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		m.exitScrollMode()
-	}
-
-	if msg.Type == tea.KeyShiftTab {
-		switch m.mode {
-		case modeList:
-			// Cycle the sidebar: agents needing attention first (blocked,
-			// then done), then the session entries; after the last one,
-			// focus returns to the big panel.
-			if positions := m.listShiftTabPositions(); len(positions) > 0 {
-				if !m.listFocus {
-					m.listFocus = true
-					m.listCursor = positions[0].sessIdx
-					m.listCursorTab = positions[0].tabIdx
-				} else {
-					pi := -1
-					for idx, p := range positions {
-						if p.sessIdx == m.listCursor && p.tabIdx == m.listCursorTab {
-							pi = idx
-							break
-						}
-					}
-					if pi+1 < len(positions) {
-						m.listCursor = positions[pi+1].sessIdx
-						m.listCursorTab = positions[pi+1].tabIdx
-					} else {
-						m.listFocus = false
-					}
-				}
-			}
-		case modeFullscreen:
-			// Open the session switcher with live previews instead of
-			// blindly cycling — fullscreen hides all other sessions.
-			m.openSwitcher()
-		case modeTabs:
-			// Session tabs are visible on the top row: cycle directly.
-			m.selectDelta(1)
-		case modeFocusBig:
-			// Cycle the side-panel highlight; after the last panel focus
-			// returns to the big panel. Enter opens the highlighted
-			// session in a floating window, Space promotes it to big.
-			m.focusSideCycle()
-		}
-		return nil
 	}
 
 	// Tab switching: Shift+Left/Right when focused session has multiple tabs
@@ -362,7 +315,60 @@ func (m *tuiModel) createTabOnTarget(session, name string, target remoteTarget) 
 	}
 }
 
+// cycleSessionFocus implements <prefix> Tab: the mode-specific "next
+// session / next panel" navigation. It is behind the prefix (not a bare
+// Shift+Tab) so programs such as Claude Code receive Shift+Tab untouched.
+func (m *tuiModel) cycleSessionFocus() {
+	if m.floatingIdx >= 0 {
+		m.closeFloatingFocusNext()
+		return
+	}
+	switch m.mode {
+	case modeList:
+		// Cycle the sidebar: agents needing attention first (blocked,
+		// then done), then the session entries; after the last one,
+		// focus returns to the big panel.
+		if positions := m.listShiftTabPositions(); len(positions) > 0 {
+			if !m.listFocus {
+				m.listFocus = true
+				m.listCursor = positions[0].sessIdx
+				m.listCursorTab = positions[0].tabIdx
+			} else {
+				pi := -1
+				for idx, p := range positions {
+					if p.sessIdx == m.listCursor && p.tabIdx == m.listCursorTab {
+						pi = idx
+						break
+					}
+				}
+				if pi+1 < len(positions) {
+					m.listCursor = positions[pi+1].sessIdx
+					m.listCursorTab = positions[pi+1].tabIdx
+				} else {
+					m.listFocus = false
+				}
+			}
+		}
+	case modeFullscreen:
+		// Open the session switcher with live previews instead of
+		// blindly cycling — fullscreen hides all other sessions.
+		m.openSwitcher()
+	case modeTabs:
+		// Session tabs are visible on the top row: cycle directly.
+		m.selectDelta(1)
+	case modeFocusBig:
+		// Cycle the side-panel highlight; after the last panel focus
+		// returns to the big panel. Enter opens the highlighted
+		// session in a floating window, Space promotes it to big.
+		m.focusSideCycle()
+	}
+}
+
 func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
+	if msg.Type == tea.KeyTab {
+		m.cycleSessionFocus()
+		return nil
+	}
 	if msg.Type == tea.KeyPgUp {
 		m.enterScrollMode()
 		return nil
@@ -756,6 +762,8 @@ func tuiKeyToBytes(msg tea.KeyMsg) []byte {
 		return []byte{'\r'}
 	case tea.KeyTab:
 		return []byte{'\t'}
+	case tea.KeyShiftTab:
+		return []byte{0x1b, '[', 'Z'}
 	case tea.KeyBackspace:
 		return []byte{0x7f}
 	case tea.KeyEscape:

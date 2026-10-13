@@ -528,7 +528,7 @@ pressing the prefix, the status bar lists all available commands.
 | `Ctrl+A n` | next session |
 | `Ctrl+A p` | previous session |
 | `Ctrl+A 1`-`9` | jump to session by number |
-| `Shift+Tab` | list mode: step through sidebar entries (agents needing attention first, back to the big panel after the last); focus-big mode: cycle side-panel highlight (Enter floats / Space promotes); floating window: close it and highlight the next panel; fullscreen: open the session switcher (live previews); tab mode: next session |
+| `Ctrl+A Tab` | list mode: step through sidebar entries (agents needing attention first, back to the big panel after the last); focus-big mode: cycle side-panel highlight (Enter floats / Space promotes); floating window: close it and highlight the next panel; fullscreen: open the session switcher (live previews); tab mode: next session |
 | `Enter` | open a floating window on the highlighted panel (focus-big side panels) |
 
 ### Scrollback
@@ -562,9 +562,12 @@ pressing the prefix, the status bar lists all available commands.
 
 ### Direct keys (no prefix)
 
+`Shift+Tab` is intentionally **not** intercepted: it is forwarded to the
+focused program (e.g. Claude Code uses it to cycle permission modes). The
+session navigation that used to live on it is now `Ctrl+A Tab`.
+
 | Key | Action |
 |-----|--------|
-| `Shift+Tab` | next session / cycle panel highlight / step through list entries / open the fullscreen session switcher |
 | `Ctrl+A Ctrl+A` | send a literal Ctrl+A to the session |
 
 ---
@@ -634,7 +637,7 @@ can have zero or more agents):
 
 Interaction:
 
-- `Shift+Tab` steps through sidebar entries: agents needing attention first
+- `Ctrl+A Tab` steps through sidebar entries: agents needing attention first
   (blocked, then done), then each session row; past the last entry focus
   returns to the big panel (the status bar shows `list*` while the list has
   focus)
@@ -662,7 +665,7 @@ right. Enter with `Ctrl+A b`.
   for quick tasks without disturbing the main workspace); Ctrl+click
   promotes it to the big panel and activates its priority tab
   (blocked > done > current active tab)
-- `Shift+Tab` cycles the side-panel highlight (past the last, focus returns
+- `Ctrl+A Tab` cycles the side-panel highlight (past the last, focus returns
   to the big panel; status bar shows `big*`); while highlighted, `↑`/`↓`
   move the highlight, `Enter` opens a floating window, `Space` promotes to
   the big panel, any other key returns to the big panel (no input leaks to
@@ -680,7 +683,7 @@ The current session fills the entire terminal.
 - all mouse events are forwarded to the PTY (vim, tmux, etc. mouse support)
 - text selection and copy work
 - `Ctrl+A f` returns to the previous mode (via the mode stack)
-- `Shift+Tab` opens the session switcher (below)
+- `Ctrl+A Tab` opens the session switcher (below)
 
 ### Tab mode
 
@@ -693,13 +696,13 @@ fullscreen mode). Enter with `Ctrl+A T`.
   done green)
 - clicking a tab switches sessions (jumping to the agent tab that needs
   attention)
-- `Shift+Tab` switches to the next session
+- `Ctrl+A Tab` switches to the next session
 - the content area supports text selection, wheel, and mouse forwarding
   (same as fullscreen)
 
-### Fullscreen session switcher (Shift+Tab)
+### Fullscreen session switcher (Ctrl+A Tab)
 
-In fullscreen, `Shift+Tab` pops up a floating switcher listing all visible
+In fullscreen, `Ctrl+A Tab` pops up a floating switcher listing all visible
 sessions except the current one, each rendered like a focus-big side panel
 with a live output preview (~10 rows), so you can pick by current state.
 
@@ -824,7 +827,7 @@ switches tabs.
 ### Working with a floating window
 
 - `Ctrl+A q` — close it (temporary shells are killed automatically)
-- `Shift+Tab` — close it and highlight the next small panel
+- `Ctrl+A Tab` — close it and highlight the next small panel
 - `Ctrl+A f` — go from floating to fullscreen
 - keyboard input is forwarded to the floating session normally
 - mouse: text selection and click forwarding are supported

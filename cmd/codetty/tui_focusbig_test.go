@@ -61,7 +61,7 @@ func TestFocusBig_ShiftTabCyclesHighlightThenBigPanel(t *testing.T) {
 
 	// Highlight cycles through side panels (selected excluded)…
 	for i, want := range []int{1, 2, -1} {
-		m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+		pressPrefixTab(m)
 		if m.focusCursor != want {
 			t.Fatalf("press %d: focusCursor = %d, want %d", i+1, m.focusCursor, want)
 		}
@@ -78,7 +78,7 @@ func TestFocusBig_EnterOpensFloating_SpacePromotes(t *testing.T) {
 	m := newFocusBigTestModel()
 
 	// Enter on the highlighted side panel opens it in a floating window.
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab}) // highlight beta
+	pressPrefixTab(m) // highlight beta
 	m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.floatingIdx != 1 {
 		t.Fatalf("floatingIdx = %d, want 1 (beta floating)", m.floatingIdx)
@@ -95,7 +95,7 @@ func TestFocusBig_EnterOpensFloating_SpacePromotes(t *testing.T) {
 	}
 
 	// Space on the highlighted side panel promotes it to the big panel.
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab}) // highlight beta
+	pressPrefixTab(m) // highlight beta
 	m.handleKey(tea.KeyMsg{Type: tea.KeySpace})
 	if m.selected != 1 {
 		t.Fatalf("selected = %d, want 1 (beta promoted)", m.selected)
@@ -111,7 +111,7 @@ func TestFocusBig_EnterOpensFloating_SpacePromotes(t *testing.T) {
 func TestFocusBig_HighlightKeysDoNotLeakToPTY(t *testing.T) {
 	m := newFocusBigTestModel()
 
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab}) // highlight beta
+	pressPrefixTab(m) // highlight beta
 	// ↑/↓ move the highlight among side panels (wrap).
 	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
 	if m.focusCursor != 2 {
@@ -371,17 +371,17 @@ func TestFocusBig_ShiftTabPrioritizesAgentState(t *testing.T) {
 	m.sessions[2].Tabs = []tuiTab{{Name: "shell", Agent: "copilot", AgentState: "blocked"}}
 
 	// First Shift+Tab should land on the blocked session (gamma=2).
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	if m.focusCursor != 2 {
 		t.Fatalf("press 1: focusCursor = %d, want 2 (blocked)", m.focusCursor)
 	}
 	// Second should land on the done session (beta=1).
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	if m.focusCursor != 1 {
 		t.Fatalf("press 2: focusCursor = %d, want 1 (done)", m.focusCursor)
 	}
 	// Third returns to big panel.
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 	if m.focusCursor != -1 {
 		t.Fatalf("press 3: focusCursor = %d, want -1 (big panel)", m.focusCursor)
 	}

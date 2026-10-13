@@ -7,6 +7,22 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// pressPrefixTab simulates <prefix> Tab, the session/panel navigation key.
+func pressPrefixTab(m *tuiModel) {
+	m.prefix = true
+	m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+}
+
+func TestShiftTab_NotInterceptedInFullscreen(t *testing.T) {
+	m := newSwitcherTestModel()
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+
+	if m.switcher.active {
+		t.Fatal("bare Shift+Tab must be forwarded to the session, not open the switcher")
+	}
+}
+
 func newSwitcherTestModel() *tuiModel {
 	m := newTUIModel(nil, "", nil)
 	m.width = 120
@@ -25,10 +41,10 @@ func newSwitcherTestModel() *tuiModel {
 func TestShiftTab_FullscreenOpensSwitcher(t *testing.T) {
 	m := newSwitcherTestModel()
 
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 
 	if !m.switcher.active {
-		t.Fatal("switcher should be active after Shift+Tab in fullscreen")
+		t.Fatal("switcher should be active after Ctrl+A Tab in fullscreen")
 	}
 	if m.selected != 0 {
 		t.Fatalf("selected = %d, want 0 (unchanged)", m.selected)
@@ -43,7 +59,7 @@ func TestShiftTab_FullscreenSingleSessionNoSwitcher(t *testing.T) {
 	m.sessions = m.sessions[:1]
 	m.order = m.order[:1]
 
-	m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	pressPrefixTab(m)
 
 	if m.switcher.active {
 		t.Fatal("switcher should not open with a single session")

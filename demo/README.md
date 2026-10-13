@@ -42,7 +42,7 @@ codetty -i demo kill-server
 - **What it shows**: Fullscreen preview switcher dialog with live thumbnails.
 - **How to trigger**:
   1. Toggle fullscreen: `Ctrl+A` then `f`
-  2. Press `Shift+Tab` to open the live session switcher modal.
+  2. Press `Ctrl+A Tab` to open the live session switcher modal.
 
 ---
 
