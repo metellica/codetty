@@ -17,6 +17,7 @@
 - [Text selection and copy](#text-selection-and-copy)
 - [AI agent state detection](#ai-agent-state-detection)
 - [Scripting sessions](#scripting-sessions)
+- [Persistence across reboots](#persistence-across-reboots)
 - [Hot upgrade](#hot-upgrade)
 - [Workflow examples](#workflow-examples)
 - [Troubleshooting](#troubleshooting)
@@ -41,6 +42,8 @@ Highlights:
   idle/working/blocked state display
 - Managed remote tabs: connect to a remote CodeTTY daemon over OpenSSH;
   network drops don't interrupt remote tasks
+- Sessions and tabs survive a machine reboot (layout restored, see
+  [Persistence](#persistence-across-reboots))
 - Mouse drag to reorder panels, title-bar buttons
 - Text selection with OSC 52 clipboard copy
 
@@ -934,6 +937,27 @@ codetty send-mouse -s dev click1 10 5
 
 `send-mouse` requires the application to have mouse reporting enabled;
 SGR/X10 encoding is chosen automatically.
+
+---
+
+## Persistence across reboots
+
+The daemon snapshots its layout about once a second to
+`~/.config/codetty/<instance>/sessions-state.json`. Persistence is per
+isolation unit: each [named instance](#named-instances--i----instance) has
+its own file, which also covers the owner namespaces (e.g. remote clients)
+that instance serves. After a reboot (or any daemon stop that is not
+`kill-server`), the next `codetty` start recreates every session and tab
+from the file: names, order, active tab/session, renamed tabs, sizes.
+
+Only the layout comes back. Each tab starts the default shell in its last
+working directory (the original directory if that one no longer exists);
+running programs, screen contents and environment are not restored.
+
+The file is discarded on `codetty kill-server` and when the last session
+exits, so deliberately closed sessions don't return. A `SIGTERM`/`SIGINT`
+shutdown (what a reboot sends) keeps it. Changes made in the last second
+before a crash or power loss may be lost.
 
 ---
 

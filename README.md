@@ -29,6 +29,7 @@ A local terminal multiplexer, similar to tmux/screen. A background daemon manage
 - **Multiple layout modes** — focus-big (default), list, tabs, fullscreen, floating windows
 - **AI agent state detection** — automatically recognizes AI coding agents running inside tabs and shows idle/working/blocked state in the tab bar/sidebar; switching sessions focuses the tab that needs human input first (supports [Claude Code](https://github.com/anthropics/claude-code), [Codex CLI](https://github.com/openai/codex), and [Copilot CLI](https://github.com/github/copilot-cli); the state-probing approach was inspired by [herdr](https://github.com/herdrdev/herdr))
 - **Managed remote tabs** — auto-deploys and connects to a remote CodeTTY daemon over the system OpenSSH client; a session can mix local and remote tabs, and tasks plus agent state survive network drops
+- **Reboot persistence** — the daemon saves its session/tab layout per instance (`~/.config/codetty/<instance>/sessions-state.json`); after a reboot every session and tab is recreated with the default shell in its last working directory
 - **Hot upgrade** — `codetty upgrade` replaces the daemon binary in place (same-PID exec), keeping every session and tab process alive; `-r` upgrades remotes
 - **Scriptable control** — `send-keys` / `capture` / `send-mouse` inject keystrokes, capture screen text, and send mouse events from outside
 - **Scrollback** — prefix+`[` or prefix+PgUp enters history scroll mode (vi-style j/k/u/d/g/G); the mouse wheel works too

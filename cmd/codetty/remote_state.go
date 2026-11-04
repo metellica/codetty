@@ -17,9 +17,9 @@ import (
 // them and part changes rewrite the file, so dead or emptied remotes drop
 // off automatically.
 
-// recordedRemotesPath returns the registry path inside the per-instance
-// state directory (~/.config/codetty/<instance>/).
-func recordedRemotesPath() string {
+// instanceStateDir returns the per-instance state directory
+// (~/.config/codetty/<instance>/), or "" when the home directory is unknown.
+func instanceStateDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
@@ -28,7 +28,27 @@ func recordedRemotesPath() string {
 	if name == "" {
 		name = "default"
 	}
-	return filepath.Join(home, ".config", "codetty", name, "remotes.json")
+	return filepath.Join(home, ".config", "codetty", name)
+}
+
+// recordedRemotesPath returns the registry path inside the per-instance
+// state directory.
+func recordedRemotesPath() string {
+	dir := instanceStateDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "remotes.json")
+}
+
+// sessionStatePath returns the file the daemon persists its session/tab
+// layout to, so it can be restored after a reboot.
+func sessionStatePath() string {
+	dir := instanceStateDir()
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "sessions-state.json")
 }
 
 // loadRecordedRemotes reads the registry; missing or invalid files mean no

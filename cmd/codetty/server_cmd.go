@@ -24,6 +24,7 @@ func cmdServer(args []string) {
 	}
 
 	srv := daemon.NewServer(sockPath)
+	enablePersistence(srv, true)
 	if err := srv.Start(); err != nil {
 		log.Fatalf("daemon start: %v", err)
 	}
@@ -32,7 +33,8 @@ func cmdServer(args []string) {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	select {
 	case <-sigCh:
-		srv.Stop()
+		// Keep the saved layout: this is how a reboot stops the daemon.
+		srv.StopPreserving()
 	case <-srv.Done():
 		// Stopped internally (kill-server or auto-exit): just exit.
 	}
@@ -45,6 +47,7 @@ func cmdServerUpgrade(stateFile string) {
 		log.Fatalf("upgrade recovery failed: %v", err)
 	}
 
+	enablePersistence(srv, false)
 	if err := srv.Start(); err != nil {
 		log.Fatalf("daemon start after upgrade: %v", err)
 	}
@@ -55,8 +58,18 @@ func cmdServerUpgrade(stateFile string) {
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 	select {
 	case <-sigCh:
-		srv.Stop()
+		srv.StopPreserving()
 	case <-srv.Done():
 		// Stopped internally (kill-server or auto-exit): just exit.
+	}
+}
+
+// enablePersistence makes the daemon save its session/tab layout in the
+// instance's state directory and, when restore is set, recreate the saved
+// layout at start (a fresh daemon after reboot; a hot-upgraded daemon
+// already inherited its live sessions).
+func enablePersistence(srv *daemon.Server, restore bool) {
+	if path := sessionStatePath(); path != "" {
+		srv.EnablePersistence(path, restore)
 	}
 }

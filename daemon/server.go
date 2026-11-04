@@ -35,6 +35,13 @@ type Server struct {
 	done        chan struct{}
 	stopped     chan struct{}
 	wg          sync.WaitGroup
+
+	// State persistence (see persist.go); statePath "" disables it.
+	statePath     string
+	restoreState  bool
+	persistMu     sync.Mutex // guards preserveState, lastState and state file writes
+	preserveState bool       // OS-initiated shutdown: keep the state file
+	lastState     []byte
 }
 
 // NewServer creates a new daemon server listening on the given Unix socket path.
@@ -66,6 +73,9 @@ func (s *Server) Start() error {
 		}
 		s.lock = lock
 	}
+	if s.statePath != "" && s.restoreState {
+		s.restoreSessions()
+	}
 	os.Remove(s.sockPath)
 
 	ln, err := net.Listen("unix", s.sockPath)
@@ -79,6 +89,11 @@ func (s *Server) Start() error {
 
 	s.wg.Add(1)
 	go s.agentPollLoop()
+
+	if s.statePath != "" {
+		s.wg.Add(1)
+		go s.persistLoop()
+	}
 	return nil
 }
 
@@ -139,6 +154,14 @@ func (s *Server) Stop() {
 		s.listener.Close()
 	}
 	s.wg.Wait()
+
+	// The persist loop has exited; unless the OS is shutting us down, the
+	// user wants no layout restored.
+	s.persistMu.Lock()
+	if s.statePath != "" && !s.preserveState {
+		os.Remove(s.statePath)
+	}
+	s.persistMu.Unlock()
 
 	s.mu.Lock()
 	for _, sess := range s.sessions {
