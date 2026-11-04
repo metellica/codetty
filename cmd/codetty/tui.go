@@ -81,6 +81,13 @@ type tuiModel struct {
 	renaming   bool
 	renameText string
 
+	// Rename tab mode: target captured at prompt time so a focus change
+	// while typing can't redirect the rename.
+	renamingTab      bool
+	renameTabText    string
+	renameTabSession string
+	renameTabIdx     int
+
 	// Create session mode
 	creating   bool
 	createText string
@@ -415,7 +422,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleKey(msg)
 
 	case tea.MouseMsg:
-		if m.renaming || m.creating || m.creatingTab || m.confirmKill || m.sessMgr.active {
+		if m.renaming || m.renamingTab || m.creating || m.creatingTab || m.confirmKill || m.sessMgr.active {
 			return m, nil
 		}
 		if m.switcher.active {
@@ -472,7 +479,7 @@ func (m *tuiModel) View() string {
 		}
 		// Only show the status bar when in an interactive overlay state
 		// that still uses the bottom bar (renaming, prefix help).
-		hasStatusBar := m.renaming || m.prefix
+		hasStatusBar := m.renaming || m.renamingTab || m.prefix
 		centerH := m.height
 		var status string
 		if hasStatusBar {
@@ -668,7 +675,7 @@ func (m *tuiModel) syncTabInfo(sess *tuiSession, info daemon.SessionInfo) {
 		hadTabBar := len(sess.Tabs) > 1
 		tabs := make([]tuiTab, len(info.Tabs))
 		for i, t := range info.Tabs {
-			tabs[i] = tuiTab{Name: t.Name, Command: t.Command, Agent: t.Agent, AgentState: t.AgentState, Remote: t.Remote}
+			tabs[i] = tuiTab{Name: t.Name, OrigName: t.OrigName, Command: t.Command, Agent: t.Agent, AgentState: t.AgentState, Remote: t.Remote}
 			if i < len(sess.Tabs) {
 				tabs[i].Done = agentDoneAfterUpdate(sess.Tabs[i], tabs[i])
 			}

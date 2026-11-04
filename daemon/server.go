@@ -1003,6 +1003,24 @@ func (s *Server) closeTabForSubscriber(sub *Subscriber, req CloseTabRequest) {
 	s.sendTabSnapshot(sub, sess)
 }
 
+// renameTabForSubscriber renames a tab and refreshes every subscriber's tab
+// list. It reuses the "agent_state" event, the generic "tab list changed,
+// no terminal reset" update.
+func (s *Server) renameTabForSubscriber(sub *Subscriber, req RenameTabRequest) {
+	sess := s.SessionByName(sub.owner, req.Session)
+	if sess == nil {
+		return
+	}
+	if err := sess.RenameTab(req.Index, req.NewName); err != nil {
+		return
+	}
+	s.notifyOwner(sess.Owner, SessionEvent{
+		Type:    "agent_state",
+		Session: sess.Name,
+		Info:    sess.Info(),
+	})
+}
+
 // switchTabForSubscriber switches the active tab in a session.
 func (s *Server) switchTabForSubscriber(sub *Subscriber, req SwitchTabRequest) {
 	sess := s.SessionByName(sub.owner, req.Session)

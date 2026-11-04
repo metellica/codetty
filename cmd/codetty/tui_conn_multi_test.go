@@ -1000,3 +1000,37 @@ func TestDuplicateDaemonPeerDeduped(t *testing.T) {
 		t.Fatal("peer with a different daemon ID must stay registered")
 	}
 }
+
+func TestCompositeRenameTabMapsIndexAndChecksCap(t *testing.T) {
+	dc := newTestCompositeConn("local", "remote:gpu")
+	local := dc.peers["local"]
+	remote := dc.peers["remote:gpu"]
+	shadow := dc.testShadow("dev")
+
+	dc.mergeAndRun(local, daemon.SessionEvent{
+		Type: "snapshot", Session: "dev",
+		Info: daemon.SessionInfo{Name: "dev", Tabs: []daemon.TabInfo{{Name: "shell"}, {Name: "edit"}}},
+	})
+	dc.mergeAndRun(remote, daemon.SessionEvent{
+		Type: "snapshot", Session: shadow,
+		Info: daemon.SessionInfo{Name: shadow, Tabs: []daemon.TabInfo{{Name: "agent"}}},
+	})
+
+	rconn := remote.conn.(*recordingConn)
+	dc.RenameTab("dev", 2, "gpu-agent")
+	if n := len(rconn.frames(t)); n != 0 {
+		t.Fatalf("frame sent to peer without tab_rename cap: %d", n)
+	}
+
+	remote.caps = map[string]bool{"tab_rename": true}
+	dc.RenameTab("dev", 2, "gpu-agent")
+	frames := rconn.frames(t)
+	if len(frames) != 1 || frames[0].ft != daemon.FrameRenameTab {
+		t.Fatalf("remote frames = %+v", frames)
+	}
+	var req daemon.RenameTabRequest
+	mustUnmarshal(t, frames[0].payload, &req)
+	if req.Session != shadow || req.Index != 0 || req.NewName != "gpu-agent" {
+		t.Fatalf("rename = %+v, want shadow tab 0", req)
+	}
+}

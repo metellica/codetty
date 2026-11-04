@@ -184,6 +184,12 @@ func (s *Subscriber) Run(srv *Server) {
 				srv.switchTabForSubscriber(s, req)
 			}
 
+		case FrameRenameTab:
+			var req RenameTabRequest
+			if json.Unmarshal(payload, &req) == nil {
+				srv.renameTabForSubscriber(s, req)
+			}
+
 		case FrameReorderSess:
 			var req ReorderSessionsRequest
 			if json.Unmarshal(payload, &req) == nil {

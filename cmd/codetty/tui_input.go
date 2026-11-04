@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -57,6 +59,10 @@ func (m *tuiModel) handleKey(msg tea.KeyMsg) tea.Cmd {
 	// Rename mode: capture text input
 	if m.renaming {
 		return m.handleRenameKey(msg)
+	}
+	// Rename tab mode: capture text input
+	if m.renamingTab {
+		return m.handleRenameTabKey(msg)
 	}
 	// Create session mode: capture name input
 	if m.creating {
@@ -182,6 +188,56 @@ func (m *tuiModel) handleRenameKey(msg tea.KeyMsg) tea.Cmd {
 		m.renameText += " "
 	}
 	return nil
+}
+
+func (m *tuiModel) handleRenameTabKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.Type {
+	case tea.KeyEnter:
+		name := strings.TrimSpace(m.renameTabText)
+		sessName, idx := m.renameTabSession, m.renameTabIdx
+		m.renamingTab = false
+		m.renameTabText = ""
+		if name == "" || m.conn == nil {
+			return nil
+		}
+		if sess := m.sessionByName(sessName); sess != nil && idx < len(sess.Tabs) {
+			if err := validTabName(sess, idx, name); err != "" {
+				m.notice = err
+				return nil
+			}
+			if sess.Tabs[idx].Name == name {
+				return nil
+			}
+		}
+		m.conn.RenameTab(sessName, idx, name)
+	case tea.KeyEscape:
+		m.renamingTab = false
+		m.renameTabText = ""
+	case tea.KeyBackspace:
+		if len(m.renameTabText) > 0 {
+			m.renameTabText = trimLastRune(m.renameTabText)
+		}
+	case tea.KeyRunes:
+		m.renameTabText += string(msg.Runes)
+	case tea.KeySpace:
+		m.renameTabText += " "
+	}
+	return nil
+}
+
+// validTabName returns a user-facing error when name can't be given to the
+// tab at idx: numbers are reserved for index addressing and names must be
+// unique within the session. The daemon enforces the same rules.
+func validTabName(sess *tuiSession, idx int, name string) string {
+	if _, err := strconv.Atoi(name); err == nil {
+		return "tab name must not be a number"
+	}
+	for i, t := range sess.Tabs {
+		if i != idx && t.Name == name {
+			return fmt.Sprintf("tab name %q already exists", name)
+		}
+	}
+	return ""
 }
 
 func (m *tuiModel) handleCreateKey(msg tea.KeyMsg) tea.Cmd {
@@ -503,6 +559,25 @@ func (m *tuiModel) handlePrefixKey(msg tea.KeyMsg) tea.Cmd {
 				m.createTabTargets = loadRemoteTargets()
 				m.createTabPick = 0
 				m.createTabPicking = len(m.createTabTargets) > 1
+			}
+			return nil
+		case ',':
+			// Rename the active tab of the focused session (floating
+			// mode targets the floating session).
+			var sess *tuiSession
+			if m.floatingIdx >= 0 {
+				ordered := m.orderedSessions()
+				if m.floatingIdx < len(ordered) {
+					sess = ordered[m.floatingIdx]
+				}
+			} else {
+				sess = m.focusedSession()
+			}
+			if sess != nil && m.conn != nil && sess.ActiveTab >= 0 && sess.ActiveTab < len(sess.Tabs) {
+				m.renamingTab = true
+				m.renameTabSession = sess.Name
+				m.renameTabIdx = sess.ActiveTab
+				m.renameTabText = sess.Tabs[sess.ActiveTab].Name
 			}
 			return nil
 		case 'w':

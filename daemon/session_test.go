@@ -309,3 +309,42 @@ func TestAddTab_InheritedDirShellAutoCloses(t *testing.T) {
 		t.Fatalf("expected 1 tab after auto-close, got %d", len(sess.Tabs))
 	}
 }
+
+func TestRenameTab(t *testing.T) {
+	sess, err := newDaemonSession("", "rn", []string{"cat"}, 80, 24, "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sess.Kill()
+	if _, err := sess.AddTab("logs", []string{"cat"}, 80, 24, "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sess.RenameTab(1, "  日志  "); err != nil {
+		t.Fatal(err)
+	}
+	tabs := sess.Info().Tabs
+	if tabs[1].Name != "日志" || tabs[1].OrigName != "logs" {
+		t.Fatalf("tab = %+v, want renamed with OrigName logs", tabs[1])
+	}
+	if tabs[0].OrigName != "" {
+		t.Fatalf("untouched tab OrigName = %q, want empty", tabs[0].OrigName)
+	}
+
+	// A second rename keeps the creation name.
+	if err := sess.RenameTab(1, "logs2"); err != nil {
+		t.Fatal(err)
+	}
+	if got := sess.Info().Tabs[1].OrigName; got != "logs" {
+		t.Fatalf("OrigName after second rename = %q, want logs", got)
+	}
+
+	for _, tc := range []struct {
+		idx  int
+		name string
+	}{{1, ""}, {1, "default"}, {1, "42"}, {5, "x"}, {-1, "x"}} {
+		if err := sess.RenameTab(tc.idx, tc.name); err == nil {
+			t.Errorf("RenameTab(%d, %q) succeeded, want error", tc.idx, tc.name)
+		}
+	}
+}

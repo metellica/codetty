@@ -876,3 +876,43 @@ func TestPromptBackspace_TrimsWholeRune(t *testing.T) {
 		t.Fatalf("createText = %q, want empty", m.createText)
 	}
 }
+
+func TestRenameTabKey(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.handleSessionEvent(daemon.SessionEvent{Type: "created", Session: "alpha", Info: daemon.SessionInfo{
+		Command: "bash",
+		Tabs:    []daemon.TabInfo{{Name: "a"}, {Name: "b"}},
+	}})
+	sess := m.sessionByName("alpha")
+	sess.ActiveTab = 1
+
+	m.renamingTab = true
+	m.renameTabSession, m.renameTabIdx, m.renameTabText = "alpha", 1, "标签x"
+	m.handleKey(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.renameTabText != "标签" {
+		t.Fatalf("renameTabText = %q, want 标签", m.renameTabText)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyEscape})
+	if m.renamingTab {
+		t.Fatal("Esc should cancel tab rename")
+	}
+
+	if got := validTabName(sess, 1, "a"); got == "" {
+		t.Error("duplicate tab name accepted")
+	}
+	if got := validTabName(sess, 1, "7"); got == "" {
+		t.Error("numeric tab name accepted")
+	}
+	if got := validTabName(sess, 1, "b"); got != "" {
+		t.Errorf("keeping own name rejected: %s", got)
+	}
+}
+
+func TestConfigKeyPrefersCreationName(t *testing.T) {
+	if got := configKey("renamed", "server"); got != "server" {
+		t.Fatalf("configKey = %q, want server", got)
+	}
+	if got := configKey("server", ""); got != "server" {
+		t.Fatalf("configKey = %q, want server", got)
+	}
+}

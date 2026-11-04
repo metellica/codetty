@@ -73,6 +73,7 @@ type tuiSession struct {
 // tuiTab represents a tab entry for display in the TUI.
 type tuiTab struct {
 	Name       string
+	OrigName   string // creation name if renamed, "" otherwise (see configKey)
 	Command    string
 	Agent      string // detected agent name (e.g. "copilot"), "" if none
 	AgentState string // "idle", "working", "blocked", "" if unknown

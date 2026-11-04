@@ -98,7 +98,7 @@ func (m *tuiModel) reloadConfig() tea.Cmd {
 			}
 			existing := make(map[string]bool, len(tabs))
 			for _, tab := range tabs {
-				existing[tab.Name] = true
+				existing[configKey(tab.Name, tab.OrigName)] = true
 			}
 			for _, tab := range cp.Tabs {
 				if !existing[tab.Name] {
@@ -111,7 +111,7 @@ func (m *tuiModel) reloadConfig() tea.Cmd {
 			}
 			// Close in reverse order to keep part-local indices stable.
 			for i := len(tabs) - 1; i >= 0; i-- {
-				if !desired[tabs[i].Name] {
+				if !desired[configKey(tabs[i].Name, tabs[i].OrigName)] {
 					m.conn.CloseTabOn(display, cp.EndpointID, i)
 				}
 			}
@@ -181,6 +181,15 @@ func (m *tuiModel) reloadLocalOnly(plans []sessionPlan) {
 	}
 }
 
+// configKey is the name config reload matches a tab by: its creation name,
+// so renaming a tab at runtime doesn't make reload close and recreate it.
+func configKey(name, origName string) string {
+	if origName != "" {
+		return origName
+	}
+	return name
+}
+
 // diffAndApplyTabs compares current tabs with desired tabs and adds/removes as needed.
 func (m *tuiModel) diffAndApplyTabs(sess *tuiSession, desired []config.ResolvedTab) {
 	if m.conn == nil {
@@ -190,7 +199,7 @@ func (m *tuiModel) diffAndApplyTabs(sess *tuiSession, desired []config.ResolvedT
 	// Build map of existing tab names
 	existing := make(map[string]int) // name -> index
 	for i, tab := range sess.Tabs {
-		existing[tab.Name] = i
+		existing[configKey(tab.Name, tab.OrigName)] = i
 	}
 
 	// Build map of desired tab names
@@ -202,7 +211,7 @@ func (m *tuiModel) diffAndApplyTabs(sess *tuiSession, desired []config.ResolvedT
 	// Close tabs that are no longer in config (in reverse order to keep indices stable)
 	for i := len(sess.Tabs) - 1; i >= 0; i-- {
 		tab := sess.Tabs[i]
-		if _, want := desiredMap[tab.Name]; !want {
+		if _, want := desiredMap[configKey(tab.Name, tab.OrigName)]; !want {
 			m.conn.CloseTab(sess.Name, i)
 		}
 	}

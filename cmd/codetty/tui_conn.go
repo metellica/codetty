@@ -1248,6 +1248,40 @@ func (dc *daemonConn) SwitchTab(session string, index int) {
 	}))
 }
 
+// RenameTab renames the tab at the merged index of a session, mapping it to
+// the owning part in multi mode. Peers that don't advertise "tab_rename"
+// are skipped rather than sent an unknown frame.
+func (dc *daemonConn) RenameTab(session string, index int, newName string) {
+	if !dc.multi() {
+		_ = daemon.WriteFrame(dc.conn, daemon.FrameRenameTab, daemon.MarshalJSON(daemon.RenameTabRequest{
+			Session: session,
+			Index:   index,
+			NewName: newName,
+		}))
+		return
+	}
+	dc.compMu.Lock()
+	c := dc.composites[session]
+	if c == nil {
+		dc.compMu.Unlock()
+		return
+	}
+	p, localIdx := c.mapTab(index)
+	dc.compMu.Unlock()
+	if p == nil {
+		return
+	}
+	peer := dc.peer(p.peerID)
+	if peer == nil || !peer.hasCap("tab_rename") {
+		return
+	}
+	dc.writePeerFrame(peer, daemon.FrameRenameTab, daemon.MarshalJSON(daemon.RenameTabRequest{
+		Session: p.name,
+		Index:   localIdx,
+		NewName: newName,
+	}))
+}
+
 // ReorderSessions pushes the full session display order to the daemon so it
 // persists across detach/attach and hot upgrades. Display order is owned by
 // the local daemon.

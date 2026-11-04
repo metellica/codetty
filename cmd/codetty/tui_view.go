@@ -903,6 +903,11 @@ func (m *tuiModel) statusBar() string {
 		return tuiStatusStyle.Width(m.width).Render(prompt)
 	}
 
+	if m.renamingTab {
+		prompt := fmt.Sprintf(" Rename tab: %s█  (Enter confirm, Esc cancel)", m.renameTabText)
+		return tuiStatusStyle.Width(m.width).Render(prompt)
+	}
+
 	if m.notice != "" {
 		return tuiStatusStyle.Width(m.width).Render(" " + m.notice)
 	}
@@ -924,7 +929,7 @@ func (m *tuiModel) statusBar() string {
 	}
 
 	if m.prefix {
-		help := m.prefixLabel + ": d detach  c new  t tab  x kill  X close-tab  r rename  R reload  n/p nav  [ scroll  s list  b big  f full  T tabs  w manager  Shift+←→ tabs"
+		help := m.prefixLabel + ": d detach  c new  t tab  , rename-tab  x kill  X close-tab  r rename  R reload  n/p nav  [ scroll  s list  b big  f full  T tabs  w manager  Shift+←→ tabs"
 		return tuiStatusStyle.Width(m.width).Render(" " + help)
 	}
 
@@ -1082,7 +1087,7 @@ func (m *tuiModel) imeCursorSeq() string {
 	// Overlays and text-input prompts capture keyboard for non-PTY input —
 	// no meaningful session cursor position to anchor the IME window to.
 	if m.sessMgr.active || m.switcher.active ||
-		m.confirmKill || m.renaming || m.creating || m.creatingTab {
+		m.confirmKill || m.renaming || m.renamingTab || m.creating || m.creatingTab {
 		return ""
 	}
 	if m.lastCurScreenRow > 0 && m.lastCurScreenCol > 0 {

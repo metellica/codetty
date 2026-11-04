@@ -44,6 +44,7 @@ type UpgradeSession struct {
 // UpgradeTab holds the state of a single tab for hot restart.
 type UpgradeTab struct {
 	Name      string   `json:"name"`
+	OrigName  string   `json:"orig_name,omitempty"` // creation name of a renamed tab
 	Command   []string `json:"command"`
 	Dir       string   `json:"dir,omitempty"`       // working directory; respawned shells start here
 	Workspace bool     `json:"workspace,omitempty"` // dir was explicitly requested (config workspace tab)
@@ -105,6 +106,7 @@ func (s *Server) PrepareUpgrade() (string, error) {
 
 				us.Tabs = append(us.Tabs, UpgradeTab{
 					Name:      tab.Name,
+					OrigName:  tab.origName,
 					Command:   tab.Command,
 					Dir:       tab.Dir,
 					Workspace: tab.workspace,
@@ -217,6 +219,7 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 
 			tab := &SessionTab{
 				Name:      ut.Name,
+				origName:  ut.OrigName,
 				Command:   ut.Command,
 				Dir:       ut.Dir,
 				workspace: ut.Workspace,

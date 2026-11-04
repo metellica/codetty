@@ -128,6 +128,7 @@ The default prefix key is `Ctrl+A` (customizable in the config file, see [Config
 | `Ctrl+A d` | Detach (exit the TUI, sessions keep running) |
 | `Ctrl+A c` | Create a new session |
 | `Ctrl+A t` | Create a new tab in the current session (pick a local or remote target) |
+| `Ctrl+A ,` | Rename the active tab (names must be unique in the session and not purely numeric; lasts until the daemon restarts, `reload` still matches by the original config name) |
 | `Ctrl+A x` / `Ctrl+A X` | Kill the current session / close the current tab |
 | `Ctrl+A r` | Rename the current session |
 | `Ctrl+A w` | Open the session manager |

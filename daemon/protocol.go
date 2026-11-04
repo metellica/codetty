@@ -37,6 +37,7 @@ func ProtocolCaps() []string {
 		"tab_name",    // TabName on create session/tab requests
 		"reorder",     // FrameReorderSess
 		"set_active",  // FrameSetActive
+		"tab_rename",  // FrameRenameTab
 		"hot_upgrade", // upgrade action
 		"owner",       // owner-namespaced sessions and scoped subscriptions
 	}
@@ -109,6 +110,7 @@ const (
 	FrameReloadConfig  FrameType = 0x1A // C→S: JSON reload config request
 	FrameReorderSess   FrameType = 0x1B // C→S: JSON reorder sessions request
 	FrameSetActive     FrameType = 0x1C // C→S: JSON set active (big panel) session
+	FrameRenameTab     FrameType = 0x1D // C→S: JSON rename tab request
 )
 
 // Action identifies the requested operation in a Request frame.
@@ -213,7 +215,11 @@ type SessionInfo struct {
 
 // TabInfo describes a single tab within a session.
 type TabInfo struct {
-	Name       string `json:"name"`
+	Name string `json:"name"`
+	// OrigName is the name the tab was created with, set only once the tab
+	// has been renamed. Config reload matches tabs by it so a renamed
+	// config tab is neither closed nor recreated.
+	OrigName   string `json:"orig_name,omitempty"`
 	Command    string `json:"command"`
 	Agent      string `json:"agent,omitempty"`       // detected agent name (e.g. "copilot")
 	AgentState string `json:"agent_state,omitempty"` // "idle", "working", "blocked"
@@ -294,6 +300,13 @@ type CloseTabRequest struct {
 type SwitchTabRequest struct {
 	Session string `json:"session"` // session name
 	Index   int    `json:"index"`   // tab index to switch to
+}
+
+// RenameTabRequest is the payload for FrameRenameTab.
+type RenameTabRequest struct {
+	Session string `json:"session"`  // session name
+	Index   int    `json:"index"`    // tab index to rename
+	NewName string `json:"new_name"` // must be unique within the session
 }
 
 // TabEvent describes a tab lifecycle change (sent via FrameSessionEvent).

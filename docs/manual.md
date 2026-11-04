@@ -517,6 +517,7 @@ pressing the prefix, the status bar lists all available commands.
 | `Ctrl+A X` | close the current tab (when the session has more than one) |
 | `Ctrl+A r` | rename the focused session (pre-filled with the current name) |
 | `Ctrl+A t` | create a new tab in the current session (pick a local or remote target) |
+| `Ctrl+A ,` | rename the active tab (unique within the session, not purely numeric; lasts until the daemon restarts, `reload` still matches by the original config name) |
 | `Ctrl+A w` | open the session manager |
 | `Ctrl+A m` | create a temporary floating shell |
 | `Ctrl+A R` | reload the session config file |

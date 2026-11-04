@@ -3,6 +3,7 @@ package daemon
 import (
 	"fmt"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ const (
 // SessionTab represents a single tab (PTY) within a DaemonSession.
 type SessionTab struct {
 	Name     string
+	origName string // creation name once renamed; "" if never renamed
 	Command  []string
 	Dir      string // working directory; respawned shells start here
 	Terminal terminal.Session
@@ -228,6 +230,37 @@ func (s *DaemonSession) CloseTab(idx int) error {
 	return nil
 }
 
+// RenameTab renames the tab at idx. Names must be non-empty, not purely
+// numeric (send-keys resolves numbers as indices) and unique in the session.
+func (s *DaemonSession) RenameTab(idx int, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("tab name must not be empty")
+	}
+	if _, err := strconv.Atoi(name); err == nil {
+		return fmt.Errorf("tab name %q must not be a number", name)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idx < 0 || idx >= len(s.Tabs) {
+		return fmt.Errorf("tab index %d out of range", idx)
+	}
+	for i, t := range s.Tabs {
+		if i != idx && t.Name == name {
+			return fmt.Errorf("tab name %q already exists", name)
+		}
+	}
+	tab := s.Tabs[idx]
+	if tab.Name == name {
+		return nil
+	}
+	if tab.origName == "" {
+		tab.origName = tab.Name
+	}
+	tab.Name = name
+	return nil
+}
+
 // TabCount returns the number of tabs in this session.
 func (s *DaemonSession) TabCount() int {
 	s.mu.Lock()
@@ -254,6 +287,7 @@ func (s *DaemonSession) TabInfos() []TabInfo {
 		}
 		infos[i] = TabInfo{
 			Name:       tab.Name,
+			OrigName:   tab.origName,
 			Command:    cmd,
 			Agent:      tab.agent,
 			AgentState: string(tab.agentState),
@@ -673,6 +707,7 @@ func (s *DaemonSession) Info() SessionInfo {
 			}
 			infos[i] = TabInfo{
 				Name:       tab.Name,
+				OrigName:   tab.origName,
 				Command:    tcmd,
 				Agent:      tab.agent,
 				AgentState: string(tab.agentState),
