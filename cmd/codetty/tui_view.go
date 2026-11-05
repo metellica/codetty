@@ -49,6 +49,9 @@ func (m *tuiModel) fullscreenView() string {
 	} else {
 		lines, curX, curY := sess.RenderANSI(m.width, contentH)
 		content = strings.Join(lines, "\n")
+		sess.mu.Lock()
+		curX, curY = sess.LastCursorPos()
+		sess.mu.Unlock()
 		if curX >= 0 && curY >= 0 {
 			m.lastCurScreenRow = curY + 1
 			m.lastCurScreenCol = curX + 1

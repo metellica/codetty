@@ -80,3 +80,19 @@ func TestRenderRowANSIRunLength(t *testing.T) {
 		t.Fatalf("expected 1 red SGR sequence for a run of red cells, got %d in %q", count, line)
 	}
 }
+
+func TestRenderANSI_HiddenCursorStillReportsPosition(t *testing.T) {
+	s := newTUISession("s", "sh", 20, 5)
+	// Hide the cursor, then park it on the cell after two wide glyphs.
+	s.WriteOutput([]byte("\x1b[?25l\x1b[2;1H中文x\x1b[2;5H"))
+	_, curX, curY := s.RenderANSI(20, 5)
+	if curX >= 0 || curY >= 0 {
+		t.Fatalf("hidden cursor must not be drawn, got %d,%d", curX, curY)
+	}
+	s.mu.Lock()
+	x, y := s.LastCursorPos()
+	s.mu.Unlock()
+	if x != 4 || y != 1 {
+		t.Fatalf("LastCursorPos = %d,%d, want 4,1", x, y)
+	}
+}

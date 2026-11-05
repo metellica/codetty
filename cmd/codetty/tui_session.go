@@ -276,12 +276,52 @@ func (s *tuiSession) RenderANSI(w, h int) (lines []string, curX, curY int) {
 	}
 	s.lastRenderCurX = curX
 	s.lastRenderCurY = curY
+	if curY < 0 {
+		// Programs such as Claude Code hide the terminal cursor and draw
+		// their own, but still park it at the input position. Keep reporting
+		// that position so the IME window can follow it.
+		if cy := s.term.Cursor().Y - startRow; cy >= 0 && cy < h {
+			if cx := cursorVisualCol(s.term.Row(s.term.Cursor().Y), s.term.Cursor().X, w); cx >= 0 {
+				s.lastRenderCurX = cx
+				s.lastRenderCurY = cy
+			}
+		}
+	}
 	return lines, curX, curY
 }
 
-// LastCursorPos returns the viewport-relative cursor position from the
-// most recent RenderANSI call. Returns (-1, -1) if the cursor was hidden
-// or no render has occurred. Caller must hold s.mu.
+// cursorVisualCol returns the visual column of terminal column cursorX within
+// row, mirroring renderRowANSI's wide-glyph handling, or -1 if it is off-screen.
+func cursorVisualCol(row []vt10x.Glyph, cursorX, w int) int {
+	visualCol := 0
+	for x := 0; x < len(row) && visualCol < w; x++ {
+		ch := row[x].Char
+		if ch == 0 {
+			ch = ' '
+		}
+		cw := runewidth.RuneWidth(ch)
+		if cw == 0 {
+			cw = 1
+		}
+		if visualCol+cw > w {
+			break
+		}
+		nextIsCont := cw > 1 && x+1 < len(row) && row[x+1].Char == 0
+		if x == cursorX || (nextIsCont && cursorX == x+1) {
+			return visualCol
+		}
+		visualCol += cw
+		if nextIsCont {
+			x++
+		}
+	}
+	return -1
+}
+
+// LastCursorPos returns the viewport-relative position of the terminal
+// cursor from the most recent RenderANSI call, even if the program hid it.
+// Returns (-1, -1) if it is off-screen or no render has occurred. Caller
+// must hold s.mu.
 func (s *tuiSession) LastCursorPos() (curX, curY int) {
 	return s.lastRenderCurX, s.lastRenderCurY
 }
