@@ -40,6 +40,7 @@ func ProtocolCaps() []string {
 		"tab_rename",  // FrameRenameTab
 		"hot_upgrade", // upgrade action
 		"owner",       // owner-namespaced sessions and scoped subscriptions
+		"hide",        // FrameSetHidden and visibility session events
 	}
 }
 
@@ -111,6 +112,7 @@ const (
 	FrameReorderSess   FrameType = 0x1B // C→S: JSON reorder sessions request
 	FrameSetActive     FrameType = 0x1C // C→S: JSON set active (big panel) session
 	FrameRenameTab     FrameType = 0x1D // C→S: JSON rename tab request
+	FrameSetHidden     FrameType = 0x1E // C→S: JSON hide/show session request
 )
 
 // Action identifies the requested operation in a Request frame.
@@ -256,7 +258,8 @@ type SessionEvent struct {
 	ExitCode int         `json:"exit_code,omitempty"`
 	Cols     uint16      `json:"cols,omitempty"`
 	Rows     uint16      `json:"rows,omitempty"`
-	Order    []string    `json:"order,omitempty"` // session display order (type "reordered")
+	Order    []string    `json:"order,omitempty"`  // session display order (type "reordered")
+	Hidden   []string    `json:"hidden,omitempty"` // hidden session names (type "visibility")
 }
 
 // CreateSessionRequest is the payload for FrameCreateSession.
@@ -329,6 +332,14 @@ type ReorderSessionsRequest struct {
 // remembers the client's big-panel session so the next attach restores it.
 type SetActiveSessionRequest struct {
 	Session string `json:"session"`
+}
+
+// SetHiddenRequest is the payload for FrameSetHidden. Visibility is
+// daemon-authoritative per owner namespace, like display order and the
+// big-panel selection, so every attach sees the same hidden set.
+type SetHiddenRequest struct {
+	Session string `json:"session"`
+	Hidden  bool   `json:"hidden"`
 }
 
 // ReloadConfigRequest is the payload for FrameReloadConfig.

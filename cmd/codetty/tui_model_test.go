@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"net"
 	"slices"
 	"strings"
@@ -914,5 +915,114 @@ func TestConfigKeyPrefersCreationName(t *testing.T) {
 	}
 	if got := configKey("server", ""); got != "server" {
 		t.Fatalf("configKey = %q, want server", got)
+	}
+}
+
+func TestApplyVisibilityReplacesDaemonOwnedHides(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 160
+	m.height = 40
+	m.sessions = []*tuiSession{
+		newTUISession("alpha", "bash", 80, 24),
+		newTUISession("beta", "bash", 80, 24),
+		newTUISession("remote", "bash", 80, 24),
+	}
+	m.order = []string{"alpha", "beta", "remote"}
+	// alpha was hidden by the daemon; remote is a local-only hide (e.g. a
+	// remote-only composite the daemon never reported); cfg is a config
+	// hide whose session has not appeared yet.
+	m.hidden = map[string]bool{"alpha": true, "remote": true}
+	m.daemonHidden = map[string]bool{"alpha": true}
+	m.pendingHidden = []string{"cfg"}
+
+	m.applyVisibility([]string{"beta"})
+
+	want := map[string]bool{"remote": true, "cfg": true, "beta": true}
+	if !maps.Equal(m.hidden, want) {
+		t.Fatalf("hidden = %v, want %v", m.hidden, want)
+	}
+	wantDaemon := map[string]bool{"beta": true}
+	if !maps.Equal(m.daemonHidden, wantDaemon) {
+		t.Fatalf("daemonHidden = %v, want %v", m.daemonHidden, wantDaemon)
+	}
+}
+
+func TestApplyVisibilityClampsSelection(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 160
+	m.height = 40
+	m.sessions = []*tuiSession{
+		newTUISession("a", "bash", 80, 24),
+		newTUISession("b", "bash", 80, 24),
+	}
+	m.order = []string{"a", "b"}
+	m.selected = 1
+
+	m.applyVisibility([]string{"b"})
+
+	if m.selected != 0 {
+		t.Fatalf("selected = %d after hiding the last session, want 0", m.selected)
+	}
+}
+
+func TestRenameMigratesHidden(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.sessions = []*tuiSession{newTUISession("a", "bash", 80, 24)}
+	m.order = []string{"a"}
+	m.hidden = map[string]bool{"a": true}
+	m.daemonHidden = map[string]bool{"a": true}
+
+	m.handleSessionEvent(daemon.SessionEvent{
+		Type:    "renamed",
+		Session: "a",
+		Info:    daemon.SessionInfo{Name: "bee"},
+	})
+
+	if !m.hidden["bee"] || m.hidden["a"] {
+		t.Fatalf("hidden = %v, want only bee", m.hidden)
+	}
+	if !m.daemonHidden["bee"] || m.daemonHidden["a"] {
+		t.Fatalf("daemonHidden = %v, want only bee", m.daemonHidden)
+	}
+}
+
+func TestVisibilityEchoMakesHideDaemonOwned(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.width = 160
+	m.height = 40
+	m.sessions = []*tuiSession{newTUISession("alpha", "bash", 80, 24)}
+	m.order = []string{"alpha"}
+
+	// The user hides alpha locally; the change is not confirmed yet.
+	m.hideSession("alpha")
+	if !m.hidden["alpha"] {
+		t.Fatal("alpha should be hidden locally")
+	}
+
+	// The daemon echoes the authoritative set: the hide is now daemon-owned.
+	m.handleSessionEvent(daemon.SessionEvent{Type: "visibility", Hidden: []string{"alpha"}})
+	if !m.daemonHidden["alpha"] {
+		t.Fatalf("daemonHidden = %v, want alpha", m.daemonHidden)
+	}
+
+	// Another client shows it: the local view must follow, not treat the
+	// name as a local-only hide.
+	m.handleSessionEvent(daemon.SessionEvent{Type: "visibility"})
+	if m.hidden["alpha"] {
+		t.Fatal("alpha still hidden after another client showed it")
+	}
+}
+
+func TestRemoveSessionClearsDaemonHidden(t *testing.T) {
+	m := newTUIModel(nil, "", nil)
+	m.sessions = []*tuiSession{newTUISession("a", "bash", 80, 24)}
+	m.order = []string{"a"}
+	m.hidden = map[string]bool{"a": true}
+	m.daemonHidden = map[string]bool{"a": true}
+
+	m.removeSession("a")
+
+	if len(m.hidden) != 0 || len(m.daemonHidden) != 0 {
+		t.Fatalf("hidden = %v, daemonHidden = %v, want both empty", m.hidden, m.daemonHidden)
 	}
 }

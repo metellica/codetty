@@ -27,9 +27,12 @@ type Server struct {
 	// an owner namespace ("" = the daemon host's own sessions).
 	sessions map[string]*DaemonSession
 	// orders holds each owner's session display order (authoritative);
-	// actives remembers each owner's last big-panel session.
+	// actives remembers each owner's last big-panel session; hidden holds
+	// each owner's hidden session names. All three are daemon-owned so a
+	// new attach restores the same view.
 	orders      map[string][]string
 	actives     map[string]string
+	hidden      map[string]map[string]bool // owner -> session name -> hidden
 	subscribers []*Subscriber
 	mu          sync.Mutex
 	done        chan struct{}
@@ -55,6 +58,7 @@ func NewServer(sockPath string) *Server {
 		sessions:  make(map[string]*DaemonSession),
 		orders:    make(map[string][]string),
 		actives:   make(map[string]string),
+		hidden:    make(map[string]map[string]bool),
 		done:      make(chan struct{}),
 		stopped:   make(chan struct{}),
 	}
@@ -548,6 +552,10 @@ func (s *Server) renameSessionForSubscriber(sub *Subscriber, req RenameSessionRe
 			break
 		}
 	}
+	if set := s.hidden[owner]; set[req.OldName] {
+		delete(set, req.OldName)
+		set[req.NewName] = true
+	}
 	s.mu.Unlock()
 
 	s.notifyOwner(owner, SessionEvent{
@@ -583,8 +591,27 @@ func (s *Server) handleSubscribeAll(conn net.Conn, req Request) {
 
 	s.mu.Lock()
 	sessions := s.orderedSessionsLocked(sub.owner)
+	hidden := s.hiddenNamesLocked(sub.owner)
 	activeSess := s.sessions[ownerKey(sub.owner, s.actives[sub.owner])]
+	if activeSess != nil && s.hidden[sub.owner][activeSess.Name] {
+		// Never announce a hidden session as the big panel.
+		activeSess = nil
+	}
 	s.mu.Unlock()
+
+	hiddenSet := make(map[string]bool, len(hidden))
+	for _, name := range hidden {
+		hiddenSet[name] = true
+	}
+
+	// The hidden set is authoritative and always announced, even when
+	// empty: a reconnecting client must forget hides that no longer
+	// exist. Send it before the active session and snapshots so the
+	// client can filter them.
+	sub.sendFrameDirect(FrameSessionEvent, MarshalJSON(SessionEvent{
+		Type:   "visibility",
+		Hidden: hidden,
+	}))
 
 	// Announce the remembered big-panel session before the snapshots so
 	// the client can adopt it as its focus target (an explicit attach
@@ -595,7 +622,7 @@ func (s *Server) handleSubscribeAll(conn net.Conn, req Request) {
 		activeSess = nil
 		var latest time.Time
 		for _, sess := range sessions {
-			if !sess.isExited() && sess.CreatedAt.After(latest) {
+			if !sess.isExited() && !hiddenSet[sess.Name] && sess.CreatedAt.After(latest) {
 				activeSess = sess
 				latest = sess.CreatedAt
 			}
@@ -713,6 +740,12 @@ func (s *Server) removeSessionLocked(owner, name string) {
 	if s.actives[owner] == name {
 		delete(s.actives, owner)
 	}
+	if set := s.hidden[owner]; set != nil {
+		delete(set, name)
+		if len(set) == 0 {
+			delete(s.hidden, owner)
+		}
+	}
 	order := s.orders[owner]
 	for i, n := range order {
 		if n == name {
@@ -738,6 +771,22 @@ func (s *Server) orderedSessionsLocked(owner string) []*DaemonSession {
 		}
 	}
 	return result
+}
+
+// hiddenNamesLocked returns an owner's hidden session names in display
+// order. Caller must hold s.mu.
+func (s *Server) hiddenNamesLocked(owner string) []string {
+	set := s.hidden[owner]
+	if len(set) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(set))
+	for _, name := range s.orders[owner] {
+		if set[name] {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // ownersLocked returns all owner namespaces that currently have sessions,
@@ -793,6 +842,51 @@ func (s *Server) setActiveSessionForSubscriber(sub *Subscriber, req SetActiveSes
 	defer s.mu.Unlock()
 	if _, ok := s.sessions[ownerKey(sub.owner, req.Session)]; ok {
 		s.actives[sub.owner] = req.Session
+	}
+}
+
+// setHiddenForSubscriber applies a client-requested visibility change and
+// broadcasts the resulting hidden set to every subscriber in the same owner
+// namespace, including the sender. The echo is deliberate: it is the
+// authoritative answer that confirms the change (unknown names are ignored),
+// and full-set semantics make rapid toggles converge as frames are ordered.
+// Hiding the remembered big-panel session clears it so the next attach never
+// focuses an invisible session.
+func (s *Server) setHiddenForSubscriber(from *Subscriber, req SetHiddenRequest) {
+	if req.Session == "" {
+		return
+	}
+	owner := from.owner
+	s.mu.Lock()
+	if _, ok := s.sessions[ownerKey(owner, req.Session)]; !ok {
+		s.mu.Unlock()
+		return
+	}
+	if req.Hidden {
+		set := s.hidden[owner]
+		if set == nil {
+			set = make(map[string]bool)
+			s.hidden[owner] = set
+		}
+		set[req.Session] = true
+		if s.actives[owner] == req.Session {
+			delete(s.actives, owner)
+		}
+	} else if set := s.hidden[owner]; set != nil {
+		delete(set, req.Session)
+		if len(set) == 0 {
+			delete(s.hidden, owner)
+		}
+	}
+	hidden := s.hiddenNamesLocked(owner)
+	subs := append([]*Subscriber(nil), s.subscribers...)
+	s.mu.Unlock()
+
+	evt := SessionEvent{Type: "visibility", Hidden: hidden}
+	for _, sub := range subs {
+		if sub.owner == owner {
+			sub.SendSessionEvent(evt)
+		}
 	}
 }
 

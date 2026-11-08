@@ -152,8 +152,15 @@ type tuiModel struct {
 	// pastes it into the focused session.
 	clipText string
 
-	// Hidden sessions (still running but not displayed)
-	hidden map[string]bool
+	// Hidden sessions (still running but not displayed). daemonHidden
+	// remembers the last authoritative set received from the local daemon
+	// so remote-only composites and not-yet-pushed config hides survive
+	// visibility updates.
+	hidden       map[string]bool
+	daemonHidden map[string]bool
+	// pendingHidden holds config-specified hides whose session does not
+	// exist yet; each is pushed to the daemon once its snapshot arrives.
+	pendingHidden []string
 
 	// Kill confirmation
 	confirmKill     bool
@@ -235,6 +242,7 @@ func newTUIModel(conn *daemonConn, focusTarget string, autoCreate []string) *tui
 		height:            40,
 		floatingIdx:       -1,
 		hidden:            make(map[string]bool),
+		daemonHidden:      make(map[string]bool),
 		pendingReloadTabs: make(map[string][]config.ResolvedTab),
 		focusTarget:       focusTarget,
 		autoCreate:        autoCreate,
@@ -332,6 +340,12 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.applyDesiredOrder()
 			}
 		}
+		if len(m.pendingHidden) > 0 {
+			switch msg.Event.Type {
+			case "created", "snapshot":
+				m.applyPendingHidden()
+			}
+		}
 		return m, tea.ClearScreen
 
 	case tuiNoticeMsg:
@@ -368,6 +382,7 @@ func (m *tuiModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// remote-only sessions still to come.
 		cmd := m.startupRemoteJobCmds()
 		m.applyDesiredOrder()
+		m.applyPendingHidden()
 		// Initial snapshots arrive with the daemon-side (stale) session sizes.
 		// Resize everything to the actual panel content size now that all
 		// initial snapshots have been received.
@@ -604,6 +619,14 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 				break
 			}
 		}
+		if m.hidden[oldName] {
+			delete(m.hidden, oldName)
+			m.hidden[newName] = true
+		}
+		if m.daemonHidden[oldName] {
+			delete(m.daemonHidden, oldName)
+			m.daemonHidden[newName] = true
+		}
 
 	case "reordered":
 		// Another client (or the daemon) changed the display order.
@@ -611,10 +634,14 @@ func (m *tuiModel) handleSessionEvent(evt daemon.SessionEvent) {
 			m.applyOrderNames(evt.Order)
 		}
 
+	case "visibility":
+		// The local daemon's authoritative hidden set.
+		m.applyVisibility(evt.Hidden)
+
 	case "active":
 		// Daemon-remembered big-panel session, sent before the initial
 		// snapshots. An explicit attach/config target takes precedence.
-		if m.focusTarget != "" {
+		if m.focusTarget != "" || m.hidden[evt.Session] {
 			break
 		}
 		if m.sessionByName(evt.Session) != nil {
@@ -776,6 +803,7 @@ func (m *tuiModel) visibleIndexByName(name string) int {
 func (m *tuiModel) removeSession(name string) {
 	// Clean up hidden state
 	delete(m.hidden, name)
+	delete(m.daemonHidden, name)
 
 	// Find the ordered index of the removed session before removal
 	removedIdx := -1
@@ -872,18 +900,115 @@ func (m *tuiModel) visibleToOrderIdx(visibleIdx int) int {
 	return -1
 }
 
-// hideSession hides a session from display without killing it.
+// hideSession hides a session from display without killing it and makes the
+// change daemon-authoritative, so every attached client and the next attach
+// see the same hidden set.
 func (m *tuiModel) hideSession(name string) {
-	m.hidden[name] = true
-	visible := m.visibleSessions()
-	if m.selected >= len(visible) {
-		m.selected = max(0, len(visible)-1)
+	if name == "" {
+		return
 	}
+	if m.hidden == nil {
+		m.hidden = make(map[string]bool)
+	}
+	m.hidden[name] = true
+	m.clampVisibleSelection()
+	m.pushHidden(name, true)
 }
 
 // showSession un-hides a previously hidden session.
 func (m *tuiModel) showSession(name string) {
+	if name == "" {
+		return
+	}
 	delete(m.hidden, name)
+	m.pushHidden(name, false)
+}
+
+// pushHidden sends a visibility change to the local daemon once subscribed.
+func (m *tuiModel) pushHidden(name string, hidden bool) {
+	if !m.subscribed || m.conn == nil {
+		return
+	}
+	m.conn.SetHidden(name, hidden)
+}
+
+// clampVisibleSelection repairs indices that point past the end of the
+// visible-session list after a visibility change.
+func (m *tuiModel) clampVisibleSelection() {
+	visibleLen := len(m.visibleSessions())
+	if m.selected >= visibleLen {
+		m.selected = max(0, visibleLen-1)
+	}
+	if m.listCursor >= visibleLen {
+		m.listCursor = max(0, visibleLen-1)
+		m.listCursorTab = -1
+	}
+	if m.focusCursor >= visibleLen {
+		m.focusCursor = -1
+	}
+}
+
+// applyVisibility replaces the daemon-owned part of the local hidden set
+// with the daemon's authoritative view. Names the daemon never reported
+// (remote-only composites, config hides not pushed yet) are preserved, so a
+// local-only hide is not wiped by another client's visibility update.
+func (m *tuiModel) applyVisibility(names []string) {
+	// Remember what the floating window shows before hiding anything.
+	var floatingName string
+	if ordered := m.orderedSessions(); m.floatingIdx >= 0 && m.floatingIdx < len(ordered) {
+		floatingName = ordered[m.floatingIdx].Name
+	}
+
+	hidden := make(map[string]bool, len(m.hidden)+len(names))
+	for name := range m.hidden {
+		if !m.daemonHidden[name] {
+			hidden[name] = true
+		}
+	}
+	daemonHidden := make(map[string]bool, len(names))
+	for _, name := range names {
+		daemonHidden[name] = true
+		hidden[name] = true
+	}
+	for _, name := range m.pendingHidden {
+		hidden[name] = true
+	}
+	m.hidden = hidden
+	m.daemonHidden = daemonHidden
+
+	if floatingName != "" && m.hidden[floatingName] {
+		m.floatingIdx = -1
+		m.modeStack = nil
+	}
+
+	visibleLen := len(m.visibleSessions())
+	if m.mode == modeFullscreen && m.selected >= visibleLen {
+		m.mode = modeList
+		m.modeStack = nil
+	}
+	m.clampVisibleSelection()
+}
+
+// applyPendingHidden pushes config-specified hides once their sessions
+// exist. Sessions from background remote jobs arrive after the subscribe
+// ACK, so this is retried as snapshots and created events come in.
+func (m *tuiModel) applyPendingHidden() {
+	if !m.subscribed || m.conn == nil || len(m.pendingHidden) == 0 {
+		return
+	}
+	if m.hidden == nil {
+		m.hidden = make(map[string]bool)
+	}
+	remaining := m.pendingHidden[:0]
+	for _, name := range m.pendingHidden {
+		if m.sessionByName(name) == nil {
+			remaining = append(remaining, name)
+			continue
+		}
+		m.hidden[name] = true
+		m.conn.SetHidden(name, true)
+	}
+	m.pendingHidden = remaining
 }
 
 func (m *tuiModel) selectedSession() *tuiSession {

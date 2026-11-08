@@ -39,6 +39,7 @@ type UpgradeSession struct {
 	CreatedAt string       `json:"created_at"`
 	Tabs      []UpgradeTab `json:"tabs"`
 	ActiveTab int          `json:"active_tab"`
+	Hidden    bool         `json:"hidden,omitempty"` // hidden in the UI
 }
 
 // UpgradeTab holds the state of a single tab for hot restart.
@@ -86,6 +87,7 @@ func (s *Server) PrepareUpgrade() (string, error) {
 				Type:      sess.Type,
 				CreatedAt: sess.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 				ActiveTab: sess.ActiveTab,
+				Hidden:    s.hidden[owner][sess.Name],
 			}
 
 			for _, tab := range sess.Tabs {
@@ -250,6 +252,14 @@ func RecoverFromUpgrade(stateFile string) (*Server, error) {
 		}
 
 		srv.addSessionLocked(sess)
+		if us.Hidden {
+			set := srv.hidden[owner]
+			if set == nil {
+				set = make(map[string]bool)
+				srv.hidden[owner] = set
+			}
+			set[name] = true
+		}
 		go srv.watchSession(sess)
 	}
 

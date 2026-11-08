@@ -25,6 +25,7 @@ func TestUpgrade_PersistsTabDir(t *testing.T) {
 
 	srv := NewServer(filepath.Join(dir, "d.sock"))
 	srv.addSessionLocked(sess)
+	srv.hidden[""] = map[string]bool{"upg": true}
 
 	stateFile, err := srv.PrepareUpgrade()
 	if err != nil {
@@ -81,6 +82,9 @@ func TestUpgrade_PersistsTabDir(t *testing.T) {
 	}
 	if !workspace {
 		t.Error("recovered tab workspace = false, want true")
+	}
+	if !srv2.hidden[""]["upg"] {
+		t.Error("recovered session lost its hidden state")
 	}
 
 	// Suppress respawn on both session objects (they share one child

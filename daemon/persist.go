@@ -43,6 +43,7 @@ type persistedSession struct {
 	Owner     string         `json:"owner,omitempty"`
 	CreatedAt string         `json:"created_at,omitempty"`
 	ActiveTab int            `json:"active_tab"`
+	Hidden    bool           `json:"hidden,omitempty"` // hidden in the UI
 	Tabs      []persistedTab `json:"tabs"`
 }
 
@@ -137,6 +138,7 @@ func (s *Server) snapshotState() persistedState {
 				Owner:     sess.Owner,
 				CreatedAt: sess.CreatedAt.Format(time.RFC3339),
 				ActiveTab: sess.ActiveTab,
+				Hidden:    s.hidden[owner][sess.Name],
 			}
 			var tabs []tabRef
 			for _, tab := range sess.Tabs {
@@ -218,13 +220,22 @@ func (s *Server) restoreSessions() {
 		}
 		s.mu.Lock()
 		s.addSessionLocked(sess)
+		if ps.Hidden {
+			set := s.hidden[owner]
+			if set == nil {
+				set = make(map[string]bool)
+				s.hidden[owner] = set
+			}
+			set[ps.Name] = true
+		}
 		s.mu.Unlock()
 		go s.watchSession(sess)
 		restored++
 	}
 	for owner, name := range state.Actives {
 		owner = s.normalizeOwner(owner)
-		if _, ok := s.sessions[ownerKey(owner, name)]; ok {
+		// A hidden session is never the big panel.
+		if _, ok := s.sessions[ownerKey(owner, name)]; ok && !s.hidden[owner][name] {
 			s.actives[owner] = name
 		}
 	}

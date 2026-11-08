@@ -139,10 +139,16 @@ func startTUIWithEndpoints(
 		model.mode = modeFocusBig
 	}
 
-	// Apply hidden sessions and desired order from config.
+	// Apply hidden sessions and desired order from config. Config hides are
+	// also pushed to the daemon once each session exists, so they survive
+	// and become the shared visibility state.
+	hiddenNames := make([]string, 0, len(sc.hidden))
 	for name := range sc.hidden {
 		model.hidden[name] = true
+		hiddenNames = append(hiddenNames, name)
 	}
+	sort.Strings(hiddenNames)
+	model.pendingHidden = hiddenNames
 	if len(sc.order) > 0 {
 		model.desiredOrder = sc.order
 	}

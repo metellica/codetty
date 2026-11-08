@@ -1306,6 +1306,22 @@ func (dc *daemonConn) SetActiveSession(name string) {
 	daemon.WriteFrame(dc.conn, daemon.FrameSetActive, payload)
 }
 
+// SetHidden tells the local daemon to hide or show a session. Visibility is
+// daemon-authoritative per owner namespace, like display order and the
+// big-panel selection, so every attach sees the same hidden set. Peers that
+// don't advertise "hide" are skipped rather than sent an unknown frame.
+func (dc *daemonConn) SetHidden(name string, hidden bool) {
+	payload := daemon.MarshalJSON(daemon.SetHiddenRequest{Session: name, Hidden: hidden})
+	if dc.multi() {
+		if peer := dc.peer(localPeerID); peer == nil || !peer.hasCap("hide") {
+			return
+		}
+		dc.writeToPeer(localPeerID, daemon.FrameSetHidden, payload)
+		return
+	}
+	daemon.WriteFrame(dc.conn, daemon.FrameSetHidden, payload)
+}
+
 func (dc *daemonConn) writePeerFrame(peer *daemonPeer, ft daemon.FrameType, payload []byte) {
 	if peer == nil {
 		return

@@ -195,9 +195,9 @@ func (dc *daemonConn) mapOutput(peerID, session string) (string, bool) {
 func (dc *daemonConn) mergeEvent(peer *daemonPeer, evt daemon.SessionEvent) (out []daemon.SessionEvent, post []func()) {
 	local := peer.id == localPeerID
 	switch evt.Type {
-	case "reordered", "active":
-		// Session order and big-panel selection are owned by the local
-		// daemon; remote daemons only ever host tab containers.
+	case "reordered", "active", "visibility":
+		// Session order, big-panel selection and visibility are owned by
+		// the local daemon; remote daemons only ever host tab containers.
 		if local {
 			return []daemon.SessionEvent{evt}, nil
 		}

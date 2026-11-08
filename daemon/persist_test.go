@@ -46,6 +46,7 @@ func TestServer_PersistRestoresLayoutAfterRestart(t *testing.T) {
 	srv1.SessionByName("", "alpha").SwitchTab(2)
 	srv1.reorderSessionsForSubscriber(testSub(""), ReorderSessionsRequest{Order: []string{"beta", "alpha"}})
 	srv1.setActiveSessionForSubscriber(testSub(""), SetActiveSessionRequest{Session: "alpha"})
+	srv1.setHiddenForSubscriber(testSub(""), SetHiddenRequest{Session: "beta", Hidden: true})
 
 	srv1.saveState()
 	// An OS-initiated shutdown must keep the file even though stopping
@@ -69,6 +70,9 @@ func TestServer_PersistRestoresLayoutAfterRestart(t *testing.T) {
 	}
 	if srv2.actives[""] != "alpha" {
 		t.Fatalf("restored active = %q, want alpha", srv2.actives[""])
+	}
+	if got := hiddenNames(srv2, ""); !reflect.DeepEqual(got, []string{"beta"}) {
+		t.Fatalf("restored hidden = %v, want [beta]", got)
 	}
 
 	alpha := srv2.SessionByName("", "alpha")

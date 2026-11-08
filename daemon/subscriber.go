@@ -202,6 +202,12 @@ func (s *Subscriber) Run(srv *Server) {
 				srv.setActiveSessionForSubscriber(s, req)
 			}
 
+		case FrameSetHidden:
+			var req SetHiddenRequest
+			if json.Unmarshal(payload, &req) == nil {
+				srv.setHiddenForSubscriber(s, req)
+			}
+
 		case FrameDetach:
 			return
 		}
