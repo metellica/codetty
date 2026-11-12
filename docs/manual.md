@@ -177,7 +177,8 @@ codetty kill -s myproject
 ### codetty kill-server
 
 Stops the daemon and all sessions. `--all` also kills sessions owned by
-other hosts.
+other hosts. The saved layout is kept, so the next `codetty` start recreates
+the sessions (see [Persistence across reboots](#persistence-across-reboots)).
 
 ```bash
 codetty kill-server
@@ -946,18 +947,22 @@ The daemon snapshots its layout about once a second to
 `~/.config/codetty/<instance>/sessions-state.json`. Persistence is per
 isolation unit: each [named instance](#named-instances--i----instance) has
 its own file, which also covers the owner namespaces (e.g. remote clients)
-that instance serves. After a reboot (or any daemon stop that is not
-`kill-server`), the next `codetty` start recreates every session and tab
-from the file: names, order, active tab/session, renamed tabs, sizes.
+that instance serves. After a reboot or `kill-server`, the next `codetty`
+start recreates every session and tab from the file: names, order, active tab/session, renamed tabs, sizes.
 
 Only the layout comes back. Each tab starts the default shell in its last
 working directory (the original directory if that one no longer exists);
 running programs, screen contents and environment are not restored.
 
-The file is discarded on `codetty kill-server` and when the last session
-exits, so deliberately closed sessions don't return. A `SIGTERM`/`SIGINT`
-shutdown (what a reboot sends) keeps it. Changes made in the last second
+The file is discarded only when the last session exits, so deliberately
+closed sessions don't return. `codetty kill-server` and a `SIGTERM`/`SIGINT`
+shutdown (what a reboot sends) keep it. Changes made in the last second
 before a crash or power loss may be lost.
+
+Once a day the file is also copied to
+`~/.config/codetty/<instance>/sessions-state.YYYY-MM-DD.json`; the newest 7
+backups are kept. To go back to an earlier layout, stop the daemon, copy a
+backup over `sessions-state.json` and start `codetty` again.
 
 ---
 

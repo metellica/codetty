@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -139,5 +140,78 @@ func TestServer_PersistDropsKilledSessions(t *testing.T) {
 	defer srv2.Stop()
 	if got := srv2.SessionNames(""); !reflect.DeepEqual(got, []string{"keep"}) {
 		t.Fatalf("restored sessions = %v, want [keep]", got)
+	}
+}
+
+func TestServer_KillServerKeepsStateFile(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "sessions-state.json")
+	sockPath := filepath.Join(dir, "a.sock")
+
+	srv := NewServer(sockPath)
+	srv.EnablePersistence(statePath, true)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	addTestSession(t, srv, "", "alpha", "")
+	addTestSession(t, srv, "", "beta", "")
+
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	WriteFrame(conn, FrameRequest, MarshalJSON(Request{Action: ActionKillServer}))
+	ReadFrame(conn)
+	conn.Close()
+	select {
+	case <-srv.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("daemon did not stop after kill-server")
+	}
+
+	srv2 := NewServer(filepath.Join(dir, "b.sock"))
+	srv2.EnablePersistence(statePath, true)
+	srv2.restoreSessions()
+	defer srv2.Stop()
+	if got := srv2.SessionNames(""); !reflect.DeepEqual(got, []string{"alpha", "beta"}) {
+		t.Fatalf("restored sessions = %v, want [alpha beta]", got)
+	}
+}
+
+func TestBackupStateFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sessions-state.json")
+	days := []string{"2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06", "2026-11-07", "2026-11-08", "2026-11-09"}
+	for _, day := range days {
+		if err := os.WriteFile(path, []byte(day), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := backupStateFile(path, day, 7); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A second backup on the same day must not overwrite the first.
+	os.WriteFile(path, []byte("later"), 0o600)
+	backupStateFile(path, "2026-11-09", 7)
+
+	got, _ := filepath.Glob(filepath.Join(dir, "sessions-state.*-*-*.json"))
+	if len(got) != 7 {
+		t.Fatalf("kept %d backups, want 7: %v", len(got), got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sessions-state.2026-11-02.json")); !os.IsNotExist(err) {
+		t.Fatalf("oldest backup should be pruned: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "sessions-state.2026-11-09.json"))
+	if string(data) != "2026-11-09" {
+		t.Fatalf("today's backup = %q, want first-of-day content", data)
+	}
+
+	// A missing state file creates no (empty) backup but still prunes.
+	os.Remove(path)
+	if err := backupStateFile(path, "2026-11-10", 7); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sessions-state.2026-11-10.json")); !os.IsNotExist(err) {
+		t.Fatalf("backup created without a state file: %v", err)
 	}
 }

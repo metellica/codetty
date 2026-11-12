@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"codetty/terminal"
@@ -22,14 +24,21 @@ import (
 //
 // Writes come solely from the periodic loop. A shutdown triggered by the OS
 // (StopPreserving) freezes the file so that the shells dying with the daemon
-// are not recorded as deliberately closed; every other Stop (kill-server,
-// last session exiting) means the user wants nothing back and removes it.
+// are not recorded as deliberately closed. kill-server freezes it the same
+// way before killing the sessions, so its layout can be restored by the next
+// daemon. A plain Stop (last session exiting) means the user wants nothing
+// back and removes it.
+//
+// Once a day the state file is also copied to a dated backup next to it
+// (sessions-state.YYYY-MM-DD.json); only the newest backupKeep are kept.
 
 const (
 	stateVersion = 1
 	// persistInterval is how often the layout is snapshotted; it bounds how
 	// much recent change a crash or power loss can lose.
 	persistInterval = time.Second
+	// backupKeep is how many daily backups of the state file are retained.
+	backupKeep = 7
 )
 
 type persistedState struct {
@@ -69,10 +78,21 @@ func (s *Server) EnablePersistence(path string, restore bool) {
 // as last saved, so the layout is restored on the next start. Use for
 // OS-initiated shutdowns (SIGTERM/SIGINT).
 func (s *Server) StopPreserving() {
+	s.freezeState()
+	s.Stop()
+}
+
+// freezeState saves the current layout one last time and stops all further
+// writes to (and removal of) the state file, so sessions dying afterwards are
+// not recorded as closed.
+func (s *Server) freezeState() {
+	if s.statePath == "" {
+		return
+	}
+	s.saveState()
 	s.persistMu.Lock()
 	s.preserveState = true
 	s.persistMu.Unlock()
-	s.Stop()
 }
 
 func (s *Server) persistLoop() {
@@ -84,9 +104,52 @@ func (s *Server) persistLoop() {
 		case <-s.done:
 			return
 		case <-ticker.C:
+			s.backupStateDaily()
 			s.saveState()
 		}
 	}
+}
+
+// backupStateDaily copies the state file to today's backup the first time it
+// is called each day, then prunes old backups. Runs before saveState so the
+// copy holds the layout as last saved, not one possibly emptied since.
+func (s *Server) backupStateDaily() {
+	day := time.Now().Format("2006-01-02")
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	if s.preserveState || day == s.lastBackupDay {
+		return
+	}
+	s.lastBackupDay = day
+	if err := backupStateFile(s.statePath, day, backupKeep); err != nil {
+		log.Printf("backup state: %v", err)
+	}
+}
+
+// backupStateFile copies path to <path minus .json>.<day>.json unless that
+// backup already exists or there is nothing to back up, then removes all but
+// the newest keep backups.
+func backupStateFile(path, day string, keep int) error {
+	base := strings.TrimSuffix(path, ".json")
+	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+		dst := base + "." + day + ".json"
+		if _, err := os.Stat(dst); os.IsNotExist(err) {
+			if err := writeStateFile(dst, data); err != nil {
+				return err
+			}
+		}
+	}
+	backups, err := filepath.Glob(base + ".????-??-??.json")
+	if err != nil {
+		return err
+	}
+	// Dated names sort chronologically.
+	sort.Strings(backups)
+	for len(backups) > keep {
+		os.Remove(backups[0])
+		backups = backups[1:]
+	}
+	return nil
 }
 
 // saveState writes the current layout when it changed since the last write.

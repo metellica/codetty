@@ -45,6 +45,7 @@ type Server struct {
 	persistMu     sync.Mutex // guards preserveState, lastState and state file writes
 	preserveState bool       // OS-initiated shutdown: keep the state file
 	lastState     []byte
+	lastBackupDay string // day of the last daily state backup, guarded by persistMu
 }
 
 // NewServer creates a new daemon server listening on the given Unix socket path.
@@ -159,8 +160,8 @@ func (s *Server) Stop() {
 	}
 	s.wg.Wait()
 
-	// The persist loop has exited; unless the OS is shutting us down, the
-	// user wants no layout restored.
+	// The persist loop has exited; unless the state was frozen (OS shutdown,
+	// kill-server), the user wants no layout restored.
 	s.persistMu.Lock()
 	if s.statePath != "" && !s.preserveState {
 		os.Remove(s.statePath)
@@ -372,6 +373,7 @@ func (s *Server) handleKill(conn net.Conn, req Request) {
 func (s *Server) handleKillServer(conn net.Conn, req Request) {
 	WriteFrame(conn, FrameResponse, MarshalJSON(Response{OK: true}))
 	if req.Scope == ScopeAll {
+		s.freezeState()
 		go s.Stop()
 		return
 	}
@@ -387,6 +389,11 @@ func (s *Server) handleKillServer(conn net.Conn, req Request) {
 		}
 	}
 	s.mu.Unlock()
+	if others == 0 {
+		// The daemon is about to stop: keep the layout for the next start
+		// instead of recording these sessions as closed.
+		s.freezeState()
+	}
 	for _, sess := range mine {
 		sess.Kill()
 	}
