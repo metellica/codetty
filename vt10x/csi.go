@@ -13,6 +13,11 @@ type csiEscape struct {
 	args []int
 	mode byte
 	priv bool
+	// other is set for the '>', '<' and '=' parameter prefixes (kitty
+	// keyboard protocol, XTVERSION, DA2, ...). These share final bytes with
+	// plain CSI commands (e.g. 'u', 'm', 'q') but mean something else, so the
+	// sequence must not be dispatched as the unprefixed command.
+	other bool
 }
 
 func (c *csiEscape) reset() {
@@ -20,6 +25,7 @@ func (c *csiEscape) reset() {
 	c.args = c.args[:0]
 	c.mode = 0
 	c.priv = false
+	c.other = false
 }
 
 func (c *csiEscape) put(b byte) bool {
@@ -38,8 +44,12 @@ func (c *csiEscape) parse() {
 	}
 	s := string(c.buf)
 	c.args = c.args[:0]
-	if s[0] == '?' {
+	switch s[0] {
+	case '?':
 		c.priv = true
+		s = s[1:]
+	case '>', '<', '=':
+		c.other = true
 		s = s[1:]
 	}
 	s = s[:len(s)-1]
@@ -68,6 +78,9 @@ func (c *csiEscape) maxarg(i, def int) int {
 
 func (t *State) handleCSI() {
 	c := &t.csi
+	if c.other || (c.priv && (c.mode == 's' || c.mode == 'u')) {
+		return
+	}
 	switch c.mode {
 	default:
 		goto unknown
