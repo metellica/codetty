@@ -26,3 +26,14 @@ func TestPrefixedSGRDoesNotResetAttrs(t *testing.T) {
 		t.Errorf("CSI > 4;2 m reset bold attribute")
 	}
 }
+
+// XTQMODKEYS query (CSI ? 4 m, sent by lazygit) must not enable underline.
+func TestPrivateSGRQueryDoesNotUnderline(t *testing.T) {
+	term := New(WithSize(80, 24))
+	term.Write([]byte("\x1b[?4mA"))
+	term.Lock()
+	defer term.Unlock()
+	if term.Cell(0, 0).Mode&attrUnderline != 0 {
+		t.Errorf("CSI ? 4 m enabled underline")
+	}
+}

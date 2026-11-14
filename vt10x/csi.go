@@ -78,7 +78,7 @@ func (c *csiEscape) maxarg(i, def int) int {
 
 func (t *State) handleCSI() {
 	c := &t.csi
-	if c.other || (c.priv && (c.mode == 's' || c.mode == 'u')) {
+	if c.other || (c.priv && (c.mode == 's' || c.mode == 'u' || c.mode == 'm')) {
 		return
 	}
 	switch c.mode {
